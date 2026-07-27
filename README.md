@@ -39,8 +39,4 @@ u(x,y) = \sin(4\pi x) \sin(4\pi y)
 $$
 On a fixed grid of $5 \times 15$ elements, the solver exhibits perfect exponential convergence (spectral accuracy), plunging from a large error at $p=3$ to a hard machine-precision floor of $\sim 10^{-11}$ around $p=13$.
 
-For a deep dive into the mathematics, the Numba thread-contention issues we discovered, and how NumPy achieves Fortran-level speeds by feeding dense $(p+1)\times(p+1)$ matrix multiplications directly into the Apple Accelerate BLAS framework, please read the [SEM Benchmark Report](SEM_BENCHMARK_REPORT.md).68778
-
-6877868778
-
-68778
+For a deep dive into the mathematics, the Numba thread-contention issues we discovered, and how NumPy achieves Fortran-level speeds by feeding dense $(p+1)\times(p+1)$ matrix multiplications directly into the Apple Accelerate BLAS framework, please read the [SEM Benchmark Report](SEM_BENCHMARK_REPORT.md).
