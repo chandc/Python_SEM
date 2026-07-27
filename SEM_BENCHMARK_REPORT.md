@@ -84,4 +84,8 @@ At $p=3$, the mesh completely failed to resolve the waves ($L_\infty \approx 0.0
 ### Framework Performance Rankings
 1. **NumPy & Fortran (Tie - Fastest):** NumPy on the CPU is incredibly fast ($\sim 0.05$s at $p=15$), practically tying the raw compiled Fortran. This occurs because the bulk of the matrix-free computational work lies in the local tensor contractions (matrix multiplications), which NumPy immediately delegates to the highly optimized Apple Accelerate BLAS library written in C/Assembly.
 2. **Apple MLX (Runner-up):** The MLX framework performed exceptionally well ($\sim 0.08$s). By utilizing `@mx.compile`, the entire PCG loop was compiled into a single execution graph, mitigating Python dispatch overhead. While slightly slower than raw BLAS on the CPU for these specific problem sizes, MLX's graph compilation provides massive scalability benefits for larger tensor networks.
-3. **PyTorch CPU (Slowest):** Un-compiled PyTorch executing tight loops on the CPU was the slowest ($\sim 0.15$s). PyTorch incurs high Python dispatch overhead per tensor operation. Without fusing the kernels, PyTorch is inefficient for high-frequency small loops on a CPU. **However, this implementation is invaluable:** by simply flipping the device flag to `cuda`, this exact code can be dropped onto an NVIDIA Blackwell or Hopper GPU to execute natively on dedicated FP64 datacenter hardware for massive scaling.
+3. **PyTorch CPU (Slowest):** Un-compiled PyTorch executing tight loops on the CPU was the slowest ($\sim 0.15$s). PyTorch incurs high Python dispatch overhead per tensor operation. Without fusing the kernels, PyTorch is inefficient for high-frequency small loops on a CPU. **However, this implementation is invaluable:** by simply flipping the device flag to `cuda`, this exact code can be dropped onto an NVIDIA Blackwell or Hopper GPU to execute natively on dedicated FP64 datacenter hardware for massive scaling.68778
+
+6877868778
+
+68778
