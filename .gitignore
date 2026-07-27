@@ -1,0 +1,7 @@
+__pycache__/
+*.so
+*.o
+*.mod
+sem_2d_f90
+matrices_p*.txt
+.venv/
