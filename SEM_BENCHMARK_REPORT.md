@@ -17,18 +17,18 @@ The core of our solver uses the **Preconditioned Conjugate Gradient (PCG)** algo
 To maximize memory bandwidth and performance, the solver is entirely **matrix-free**:
 - We never construct the massive global sparse matrix $A$.
 - The stiffness operator $A x$ is evaluated locally on each element via a highly efficient tensor contraction: 
-  $$
+  $
   v_{local} = M_{1dy} u K_{1dx}^T + K_{1dy} u M_{1dx}^T
-  $$
+  $
 - Global $C^0$ continuity is enforced on the fly using a **Direct Stiffness Summation (DSS)** routine that shares residual boundary values with nearest-neighbor elements.
 - We constructed a **Jacobi (Diagonal) Preconditioner** mathematically by extracting the algebraic diagonal of the local operator and applying the DSS algorithm to it, taming the $\mathcal{O}(p^4)$ condition number scaling of spectral elements without assembling any matrices.
 
 ## 3. Mathematical Formulation
 
 The 2D Poisson equation is given by:
-$$
+$
 -\nabla^2 u(x,y) = f(x,y) \quad \text{on } \Omega
-$$
+$
 Subject to homogeneous Dirichlet boundary conditions $u = 0$ on $\partial\Omega$. 
 
 In the Spectral Element Method (SEM), we decompose the domain into quadrilateral elements $\Omega_e$. Multiplying by a test function $v$ and integrating by parts yields the weak form on each element:
@@ -96,8 +96,4 @@ At $p=3$, the mesh completely failed to resolve the waves ($L_\infty \approx 0.0
 ### Framework Performance Rankings
 1. **NumPy & Fortran (Tie - Fastest):** NumPy on the CPU is incredibly fast ($\sim 0.05$s at $p=15$), practically tying the raw compiled Fortran. This occurs because the bulk of the matrix-free computational work lies in the local tensor contractions (matrix multiplications), which NumPy immediately delegates to the highly optimized Apple Accelerate BLAS library written in C/Assembly.
 2. **Apple MLX (Runner-up):** The MLX framework performed exceptionally well ($\sim 0.08$s). By utilizing `@mx.compile`, the entire PCG loop was compiled into a single execution graph, mitigating Python dispatch overhead. While slightly slower than raw BLAS on the CPU for these specific problem sizes, MLX's graph compilation provides massive scalability benefits for larger tensor networks.
-3. **PyTorch CPU (Slowest):** Un-compiled PyTorch executing tight loops on the CPU was the slowest ($\sim 0.15$s). PyTorch incurs high Python dispatch overhead per tensor operation. Without fusing the kernels, PyTorch is inefficient for high-frequency small loops on a CPU. **However, this implementation is invaluable:** by simply flipping the device flag to `cuda`, this exact code can be dropped onto an NVIDIA Blackwell or Hopper GPU to execute natively on dedicated FP64 datacenter hardware for massive scaling.68778
-
-6877868778
-
-68778
+3. **PyTorch CPU (Slowest):** Un-compiled PyTorch executing tight loops on the CPU was the slowest ($\sim 0.15$s). PyTorch incurs high Python dispatch overhead per tensor operation. Without fusing the kernels, PyTorch is inefficient for high-frequency small loops on a CPU. **However, this implementation is invaluable:** by simply flipping the device flag to `cuda`, this exact code can be dropped onto an NVIDIA Blackwell or Hopper GPU to execute natively on dedicated FP64 datacenter hardware for massive scaling.
