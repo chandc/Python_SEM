@@ -20,9 +20,9 @@ To maximize memory bandwidth and performance, the solver is entirely **matrix-fr
 - We never construct the massive global sparse matrix $A$.
 - The stiffness operator $A x$ is evaluated locally on each element via a highly efficient tensor contraction: 
 
-  $$
-  v_{local} = M_{1dy} u K_{1dx}^T + K_{1dy} u M_{1dx}^T
-  $$
+$$
+v_{local} = M_{1dy} u K_{1dx}^T + K_{1dy} u M_{1dx}^T
+$$
 
 - Global $C^0$ continuity is enforced on the fly using a **Direct Stiffness Summation (DSS)** routine that shares residual boundary values with nearest-neighbor elements.
 - We constructed a **Jacobi (Diagonal) Preconditioner** mathematically by extracting the algebraic diagonal of the local operator and applying the DSS algorithm to it, taming the $\mathcal{O}(p^4)$ condition number scaling of spectral elements without assembling any matrices.
@@ -48,7 +48,7 @@ We map each element to a reference domain $[-1, 1]^2$ and approximate $u$ and $v
 By applying GLL quadrature (where the quadrature nodes coincide with the interpolation nodes), the mass matrix becomes perfectly diagonal. The discrete local operator acting on an element's nodal values $\mathbf{u}_e$ is expressed via the 1D Mass matrix $\mathbf{M}$ and 1D Stiffness matrix $\mathbf{K}$:
 
 $$
-(\mathbf{A}_e \mathbf{u}_e)_{i,j} = \sum_{m,n} \left( M^{(1D)}_{y; j,m} K^{(1D)}_{x; i,n} + K^{(1D)}_{y; j,m} M^{(1D)}_{x; i,n} \right) u_{e; n,m}
+(\mathbf{A}_e \mathbf{u}_e)_{i,j} = \sum_{m,n} \left( M^{1D}_{y; j,m} K^{1D}_{x; i,n} + K^{1D}_{y; j,m} M^{1D}_{x; i,n} \right) u_{e; n,m}
 $$
 
 This can be written compactly as a matrix equation using tensor contractions:
