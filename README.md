@@ -6,7 +6,7 @@ A highly optimized, matrix-free Spectral Element Method (SEM) solver for the 2D 
 
 - **Matrix-Free Tensor Contractions**: By exploiting the tensor-product structure of Gauss-Lobatto-Legendre (GLL) polynomials, the solver avoids constructing the global sparse stiffness matrix entirely. The discrete Laplacian is evaluated locally in $\mathcal{O}(p^3)$ time using highly optimized matrix multiplications.
 - **Direct Stiffness Summation (DSS)**: Global $C^0$ continuity is enforced on the fly by sharing boundary residuals between nearest-neighbor elements.
-- **Jacobi Preconditioned Conjugate Gradient (PCG)**: The condition number of spectral methods scales poorly with the polynomial degree $p$ $\mathcal{O}(p^4)$. We construct a global diagonal preconditioner algebraically and apply it via DSS to drastically reduce the number of iterations required to hit machine precision.
+- **Jacobi Preconditioned Conjugate Gradient (PCG)**: The condition number of spectral methods scales poorly with the polynomial degree $p$, i.e., $\mathcal{O}(p^4)$. We construct a global diagonal preconditioner algebraically and apply it via DSS to drastically reduce the number of iterations required to hit machine precision.
 - **Multi-Backend Benchmarking**: Execute the same solver logic across:
   - **NumPy**: Delegated directly to Apple's Accelerate BLAS for near-compiled performance.
   - **Apple MLX**: Utilizes `@mx.compile` to fuse the entire PCG loop into an optimized graph.
