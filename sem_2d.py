@@ -167,12 +167,12 @@ def run_sem_2d(p, E_x=6, E_y=6):
         Matrix-free application of the Stiffness Matrix operator A * u.
         
         Equation:
-            A_e * u_e = M_{1dy} * u_e * K_{1dx}^T + K_{1dy} * u_e * M_{1dx}^T
+            A_e * u_e = K_{1dx} * u_e * M_{1dy}^T + M_{1dx} * u_e * K_{1dy}^T
             
         This tensor contraction evaluates the 2D discrete Laplacian on the local element
         grid in O(p^3) time instead of O(p^4). The result is then assembled via DSS.
         """
-        v_local = M_1dy @ u @ K_1dx.T + K_1dy @ u @ M_1dx.T
+        v_local = K_1dx @ u @ M_1dy.T + M_1dx @ u @ K_1dy.T
         return dss_np(v_local)
 
     diag_M_x = np.diag(M_1dx)
@@ -241,7 +241,7 @@ def run_sem_2d(p, E_x=6, E_y=6):
         return mx.where(mx.array(mask_boundary), mx.array(0.0, dtype=mx.float64), v_final)
     
     def apply_K_mlx(u):
-        v_local = mx.matmul(mx.matmul(mx_M_1dy, u), mx_K_1dx.T) + mx.matmul(mx.matmul(mx_K_1dy, u), mx_M_1dx.T)
+        v_local = mx.matmul(mx.matmul(mx_M_1dx, u), mx_K_1dy.T) + mx.matmul(mx.matmul(mx_K_1dx, u), mx_M_1dy.T)
         return dss_mlx(v_local)
 
     inv_D_mlx = mx.array(inv_D_np, dtype=mx.float64)
@@ -290,7 +290,7 @@ def run_sem_2d(p, E_x=6, E_y=6):
         return torch.where(pt_mask, torch.tensor(0.0, dtype=torch.float64, device=device), v_final)
     
     def apply_K_pt(u):
-        v_local = torch.matmul(torch.matmul(pt_M_1dy, u), pt_K_1dx.T) + torch.matmul(torch.matmul(pt_K_1dy, u), pt_M_1dx.T)
+        v_local = torch.matmul(torch.matmul(pt_M_1dx, u), pt_K_1dy.T) + torch.matmul(torch.matmul(pt_K_1dx, u), pt_M_1dy.T)
         return dss_pt(v_local)
 
     def cg_solve_pt(b, max_iters):

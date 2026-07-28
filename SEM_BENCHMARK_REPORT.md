@@ -21,7 +21,7 @@ To maximize memory bandwidth and performance, the solver is entirely **matrix-fr
 - The stiffness operator $A x$ is evaluated locally on each element via a highly efficient tensor contraction: 
 
 $$
-v_{local} = M_{1dy} u K_{1dx}^T + K_{1dy} u M_{1dx}^T
+v_{local} = K_{1dx} u M_{1dy}^T + M_{1dx} u K_{1dy}^T
 $$
 
 - Global $C^0$ continuity is enforced on the fly using a **Direct Stiffness Summation (DSS)** routine that shares residual boundary values with nearest-neighbor elements.
@@ -54,7 +54,7 @@ $$
 This can be written compactly as a matrix equation using tensor contractions:
 
 $$
-\mathbf{V}_e = \mathbf{M}_{1Dy} \mathbf{U}_e \mathbf{K}_{1Dx}^T + \mathbf{K}_{1Dy} \mathbf{U}_e \mathbf{M}_{1Dx}^T
+\mathbf{V}_e = \mathbf{K}_{1Dx} \mathbf{U}_e \mathbf{M}_{1Dy}^T + \mathbf{M}_{1Dx} \mathbf{U}_e \mathbf{K}_{1Dy}^T
 $$
 
 where $\mathbf{U}_e$ is a $(p+1) \times (p+1)$ matrix of the local nodal values.
@@ -64,7 +64,7 @@ where $\mathbf{U}_e$ is a $(p+1) \times (p+1)$ matrix of the local nodal values.
 The matrix-free tensor contraction equation above is the core computational kernel of our solver. 
 A naive implementation would loop over the elements and perform nested loops for the matrix multiplications. Earlier in our development, we attempted to use **Numba** (`@njit(parallel=True)`) to parallelize explicit `for` loops across the elements. However, this caused severe thread contention and performance degradation on Apple Silicon because the manual threading was fighting with Apple's highly optimized hardware threads.
 
-The **NumPy Performance Trick** we utilized is to strip away all manual parallelization and rely exclusively on NumPy's `@` operator (matrix multiplication) inside a simple, single-threaded Python loop over the elements. Because $\mathbf{M}$ and $\mathbf{K}$ are contiguous $(p+1) \times (p+1)$ arrays, NumPy bypasses Python completely and delegates the tensor contraction `M_1dy @ u @ K_1dx.T` directly to Apple's **Accelerate BLAS framework**. 
+The **NumPy Performance Trick** we utilized is to strip away all manual parallelization and rely exclusively on NumPy's `@` operator (matrix multiplication) inside a simple, single-threaded Python loop over the elements. Because $\mathbf{M}$ and $\mathbf{K}$ are contiguous $(p+1) \times (p+1)$ arrays, NumPy bypasses Python completely and delegates the tensor contraction `K_1dx @ u @ M_1dy.T` directly to Apple's **Accelerate BLAS framework**. 
 
 Apple's BLAS is written in heavily optimized Assembly and inherently manages its own multi-threading across the M-series Performance (P) and Efficiency (E) cores at the hardware level. By feeding these small, dense matrix multiplications directly to Accelerate BLAS without interference, NumPy executed the $p=15$ global solve in just $\sim 0.05$ seconds, successfully matching the raw speed of compiled Fortran!
 
