@@ -48,7 +48,7 @@ We map each element to a reference domain $[-1, 1]^2$ and approximate $u$ and $v
 By applying GLL quadrature (where the quadrature nodes coincide with the interpolation nodes), the mass matrix becomes perfectly diagonal. The discrete local operator acting on an element's nodal values $\mathbf{u}_e$ is expressed via the 1D Mass matrix $\mathbf{M}$ and 1D Stiffness matrix $\mathbf{K}$:
 
 $$
-(\mathbf{A}_e \mathbf{u}_e)_{i,j} = \sum_{m,n} \left( M^{1D}_{y; j,m} K^{1D}_{x; i,n} + K^{1D}_{y; j,m} M^{1D}_{x; i,n} \right) u_{e; n,m}
+(\mathbf{A}_e \mathbf{u}_e)_{i,j} = \sum_{m,n} ( M^{1D}_{y; j,m} K^{1D}_{x; i,n} + K^{1D}_{y; j,m} M^{1D}_{x; i,n} ) u_{e; n,m}
 $$
 
 This can be written compactly as a matrix equation using tensor contractions:
