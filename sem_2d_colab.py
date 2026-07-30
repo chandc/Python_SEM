@@ -279,9 +279,7 @@ def run_benchmark(p=15, E_x=5, E_y=15, max_iters=2000, tol=1e-11):
                 
             return x, iters
 
-        # Torch Compile requires a Triton compiler on Colab.
-        # It may be useful to test compiled vs uncompiled on CUDA.
-        # But for exact apples-to-apples baseline, we test raw PyTorch.
+        # Standard PyTorch Benchmark
         print(f"Running PyTorch {device_name.upper()} Benchmark...")
         try:
             # Warmup
@@ -298,6 +296,29 @@ def run_benchmark(p=15, E_x=5, E_y=15, max_iters=2000, tol=1e-11):
             err_pt = torch.max(torch.abs(u_pt - pt_u_exact)).item()
             time_pt = t1 - t0
             print(f"  [PyTorch {device_name.upper()}] Iters: {iters_pt:4d} | Time: {time_pt:.5f}s | Max Error: {err_pt:.2e}\n")
+            
+            # If CUDA, also try torch.compile to fuse kernels and remove Python overhead
+            if device_name == 'cuda':
+                print(f"Running PyTorch {device_name.upper()} (Compiled) Benchmark...")
+                # torch.compile requires PyTorch 2.0+
+                if hasattr(torch, 'compile'):
+                    cg_solve_pt_compiled = torch.compile(cg_solve_pt)
+                    # Warmup (compilation happens here, can take time)
+                    sync()
+                    _ = cg_solve_pt_compiled(pt_b)
+                    sync()
+                    
+                    t0 = time.time()
+                    u_pt_c, iters_pt_c = cg_solve_pt_compiled(pt_b)
+                    sync()
+                    t1 = time.time()
+                    
+                    err_pt_c = torch.max(torch.abs(u_pt_c - pt_u_exact)).item()
+                    time_pt_c = t1 - t0
+                    print(f"  [PyTorch {device_name.upper()} Compiled] Iters: {iters_pt_c:4d} | Time: {time_pt_c:.5f}s | Max Error: {err_pt_c:.2e}\n")
+                else:
+                    print("  [PyTorch Compiled] Skipped: torch.compile not available.\n")
+                    
         except Exception as e:
             print(f"  [PyTorch {device_name.upper()}] Failed: {str(e)}\n")
 
