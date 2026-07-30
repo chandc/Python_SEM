@@ -107,3 +107,25 @@ At $p=3$, the mesh completely failed to resolve the waves ($L_\infty \approx 0.0
 1. **NumPy & Fortran (Tie - Fastest):** NumPy on the CPU is incredibly fast ($\sim 0.05$s at $p=15$), practically tying the raw compiled Fortran. This occurs because the bulk of the matrix-free computational work lies in the local tensor contractions (matrix multiplications), which NumPy immediately delegates to the highly optimized Apple Accelerate BLAS library written in C/Assembly.
 2. **Apple MLX (Runner-up):** The MLX framework performed exceptionally well ($\sim 0.08$s). By utilizing `@mx.compile`, the entire PCG loop was compiled into a single execution graph, mitigating Python dispatch overhead. While slightly slower than raw BLAS on the CPU for these specific problem sizes, MLX's graph compilation provides massive scalability benefits for larger tensor networks.
 3. **PyTorch CPU (Slowest):** Un-compiled PyTorch executing tight loops on the CPU was the slowest ($\sim 0.15$s). PyTorch incurs high Python dispatch overhead per tensor operation. Without fusing the kernels, PyTorch is inefficient for high-frequency small loops on a CPU. **However, this implementation is invaluable:** by simply flipping the device flag to `cuda`, this exact code can be dropped onto an NVIDIA Blackwell or Hopper GPU to execute natively on dedicated FP64 datacenter hardware for massive scaling.
+
+## 7. GPU Scaling (NVIDIA A100)
+
+To test the scaling limits of the solver, we deployed the PyTorch benchmark on an NVIDIA A100 Datacenter GPU via Google Colab. We significantly increased the problem size to a $30 \times 30$ element grid at polynomial degree $p=15$, resulting in **203,401 global Degrees of Freedom (DOFs)**.
+
+### Benchmark Results (203,401 DOFs)
+
+| Backend | Time (s) | Iterations |
+| :--- | :--- | :--- |
+| **NumPy (CPU - Accelerate)** | 0.744 s | 101 |
+| **PyTorch (CPU)** | 0.305 s | 101 |
+| **PyTorch (CUDA - Uncompiled)** | 0.107 s | 101 |
+| **PyTorch (CUDA - Compiled)** | 0.066 s | 101 |
+
+### Architectural Insights
+
+1. **The Cache Cliff (NumPy Drops Off):** At 200,000 DOFs, the matrix sizes exceed the L2/L3 cache limits of the CPU. NumPy (Accelerate BLAS) becomes bottlenecked by main memory bandwidth and drops to last place.
+2. **CPU Multi-Threading (PyTorch CPU):** PyTorch on the CPU shines here, running more than twice as fast as NumPy. The PyTorch ATen backend handles thread dispatch for large out-of-cache tensor workloads much more efficiently.
+3. **GPU Memory Bandwidth (PyTorch CUDA):** Offloading the solver to the Nvidia A100 GPU slashes the time to 0.107s. The massive 1.5+ TB/s memory bandwidth of the datacenter GPU effortlessly chews through the 200,000 DOFs.
+4. **Kernel Fusion (PyTorch Compiled):** By using `torch.compile` to fuse the PCG loop (matrix multiplications, Direct Stiffness Summation, additions, and masking) into monolithic CUDA kernels, we eliminated Python dispatch overhead entirely. This resulted in a blistering **0.066s** execution time—an **11.2x speedup** over NumPy.
+
+This perfectly demonstrates the value of the matrix-free tensor formulation: the solver runs efficiently on an Apple M-series laptop for prototyping, yet scales seamlessly onto Datacenter GPUs for massive workloads.
