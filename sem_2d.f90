@@ -241,6 +241,8 @@ program sem_2d
         Z = R * inv_D
         rsnew = sum(R * Z * W_local)
         
+        if (sqrt(rsnew) < 1d-11) exit
+        
         if (rsold < 1d-25) then
             beta = 0.0d0
         else
