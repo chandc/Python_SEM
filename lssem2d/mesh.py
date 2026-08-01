@@ -32,6 +32,10 @@ class Mesh:
         
         self.gidx = -np.ones((nelem, self.nterm, self.nterm), dtype=int)
         
+        # Precomputed gather-scatter sparse matrices
+        self.Q = None
+        self.QT = None
+        
     def setup_derived(self):
         """Compute Jacobians, mapping factors, physical nodes, and quadrature weights."""
         xi = lgl_nodes(self.N)
@@ -78,6 +82,19 @@ class Mesh:
                     
                     self.gidx[e, i, j] = node_dict[key]
                     
+        # Build scipy.sparse gather-scatter matrices Q and QT
+        import scipy.sparse as sp
+        flat_idx = self.gidx.ravel()
+        ndof = flat_idx.max() + 1
+        total_local_nodes = len(flat_idx)
+        
+        row = flat_idx
+        col = np.arange(total_local_nodes)
+        data = np.ones(total_local_nodes, dtype=float)
+        
+        self.Q = sp.csr_matrix((data, (row, col)), shape=(ndof, total_local_nodes))
+        self.QT = self.Q.T.tocsr()
+        
     def global_index(self, e, i, j):
         return self.gidx[e, i, j]
 

@@ -1,41 +1,48 @@
 import numpy as np
 
-def dUdx(U, D, facx):
+def dUdx(U, D, facx, out=None):
     """
     Compute x-derivative dU/dx.
-    U: shape (nelem, n, n)
-    D: 1D differentiation matrix, shape (n, n)
-    facx: metric factor 2/hx, shape (nelem,)
     """
-    # np.tensordot(D, U, axes=([1], [1])) yields (i, e, j). We transpose to (e, i, j)
-    res = np.tensordot(D, U, axes=([1], [1])).transpose(1, 0, 2)
-    return facx[:, None, None] * res
+    if out is None:
+        out = np.matmul(D, U)
+    else:
+        np.matmul(D, U, out=out)
+    out *= facx[:, None, None]
+    return out
 
-def dUdy(U, D, facy):
+def dUdy(U, D, facy, out=None):
     """
     Compute y-derivative dU/dy.
     """
-    # np.tensordot(D, U, axes=([1], [2])) yields (j, e, i). We transpose to (e, i, j)
-    res = np.tensordot(D, U, axes=([1], [2])).transpose(1, 2, 0)
-    return facy[:, None, None] * res
+    if out is None:
+        out = np.matmul(U, D.T)
+    else:
+        np.matmul(U, D.T, out=out)
+    out *= facy[:, None, None]
+    return out
 
-def DxT(S, D, facx):
+def DxT(S, D, facx, out=None):
     """
     Adjoint of x-derivative.
     """
-    # einsum: 'mi,emj->eij' => D^T @ S over m. 
-    # np.tensordot(D, S, axes=([0], [1])) yields (i, e, j). Transpose to (e, i, j)
-    res = np.tensordot(D, S, axes=([0], [1])).transpose(1, 0, 2)
-    return facx[:, None, None] * res
+    if out is None:
+        out = np.matmul(D.T, S)
+    else:
+        np.matmul(D.T, S, out=out)
+    out *= facx[:, None, None]
+    return out
 
-def DyT(S, D, facy):
+def DyT(S, D, facy, out=None):
     """
     Adjoint of y-derivative.
     """
-    # einsum: 'mj,eim->eij' => D^T @ S over m.
-    # np.tensordot(D, S, axes=([0], [2])) yields (j, e, i). Transpose to (e, i, j)
-    res = np.tensordot(D, S, axes=([0], [2])).transpose(1, 2, 0)
-    return facy[:, None, None] * res
+    if out is None:
+        out = np.matmul(S, D)
+    else:
+        np.matmul(S, D, out=out)
+    out *= facy[:, None, None]
+    return out
 
 # Note: Benchmarking einsum vs tensordot on Apple Silicon (M-series Accelerate):
 # N=8, 400 elements, 1000 iterations:

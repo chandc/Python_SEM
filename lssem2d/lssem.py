@@ -15,6 +15,21 @@ class SolverState:
         self.dfv_dx = None
         self.dfv_dy = None
         
+        # Preallocated work arrays for apply_L and apply_LT
+        nelem, n = mesh.nelem, mesh.N + 1
+        self.su = np.zeros((nelem, n, n, 4))
+        self.c = np.zeros((nelem, n, n, 4))
+        self.tmp_x = np.zeros((nelem, n, n))
+        self.tmp_y = np.zeros((nelem, n, n))
+        self.u_x = np.zeros((nelem, n, n))
+        self.u_y = np.zeros((nelem, n, n))
+        self.v_x = np.zeros((nelem, n, n))
+        self.v_y = np.zeros((nelem, n, n))
+        self.p_x = np.zeros((nelem, n, n))
+        self.p_y = np.zeros((nelem, n, n))
+        self.om_x = np.zeros((nelem, n, n))
+        self.om_y = np.zeros((nelem, n, n))
+        
     def update_linearisation(self, fu, fv):
         """Precompute gradients of linearisation velocities fu, fv."""
         self.dfu_dx = dUdx(fu, self.D, self.mesh.facx)
@@ -33,40 +48,37 @@ def apply_L(state, U, fu, fv):
     """
     u, v, p, om = U[..., 0], U[..., 1], U[..., 2], U[..., 3]
     
-    # Compute spatial derivatives
-    u_x = dUdx(u, state.D, state.mesh.facx)
-    u_y = dUdy(u, state.D, state.mesh.facy)
+    # Compute spatial derivatives in-place
+    u_x = dUdx(u, state.D, state.mesh.facx, out=state.u_x)
+    u_y = dUdy(u, state.D, state.mesh.facy, out=state.u_y)
     
-    v_x = dUdx(v, state.D, state.mesh.facx)
-    v_y = dUdy(v, state.D, state.mesh.facy)
+    v_x = dUdx(v, state.D, state.mesh.facx, out=state.v_x)
+    v_y = dUdy(v, state.D, state.mesh.facy, out=state.v_y)
     
-    p_x = dUdx(p, state.D, state.mesh.facx)
-    p_y = dUdy(p, state.D, state.mesh.facy)
+    p_x = dUdx(p, state.D, state.mesh.facx, out=state.p_x)
+    p_y = dUdy(p, state.D, state.mesh.facy, out=state.p_y)
     
-    om_x = dUdx(om, state.D, state.mesh.facx)
-    om_y = dUdy(om, state.D, state.mesh.facy)
+    om_x = dUdx(om, state.D, state.mesh.facx, out=state.om_x)
+    om_y = dUdy(om, state.D, state.mesh.facy, out=state.om_y)
     
-    # Retrieve cached gradients
     dfu_dx, dfu_dy = state.dfu_dx, state.dfu_dy
     dfv_dx, dfv_dy = state.dfv_dx, state.dfv_dy
     
-    # Transient term multiplier
     inv_dt = state.fac1 / state.dt if state.dt != 0 else 0.0
-    
-    # Residuals
-    r1 = inv_dt * u + fu * u_x + fv * u_y + u * dfu_dx + v * dfu_dy + p_x + state.nu * om_y
-    r2 = inv_dt * v + fu * v_x + fv * v_y + u * dfv_dx + v * dfv_dy + p_y - state.nu * om_x
-    r3 = u_x + v_y
-    r4 = om + u_y - v_x
-    
-    # Weight by quadrature weights wq
     wq = state.mesh.wq
     
-    su = np.zeros_like(U)
-    su[..., 0] = r1 * wq
-    su[..., 1] = r2 * wq
-    su[..., 2] = r3 * wq
-    su[..., 3] = r4 * wq
+    su = state.su
+    # r1 = inv_dt * u + fu * u_x + fv * u_y + u * dfu_dx + v * dfu_dy + p_x + state.nu * om_y
+    su[..., 0] = (inv_dt * u + fu * u_x + fv * u_y + u * dfu_dx + v * dfu_dy + p_x + state.nu * om_y) * wq
+    
+    # r2 = inv_dt * v + fu * v_x + fv * v_y + u * dfv_dx + v * dfv_dy + p_y - state.nu * om_x
+    su[..., 1] = (inv_dt * v + fu * v_x + fv * v_y + u * dfv_dx + v * dfv_dy + p_y - state.nu * om_x) * wq
+    
+    # r3 = u_x + v_y
+    su[..., 2] = (u_x + v_y) * wq
+    
+    # r4 = om + u_y - v_x
+    su[..., 3] = (om + u_y - v_x) * wq
     
     return su
 
@@ -84,43 +96,48 @@ def apply_LT(state, su, fu, fv):
     
     inv_dt = state.fac1 / state.dt if state.dt != 0 else 0.0
     
-    c = np.zeros_like(su)
+    c = state.c
+    tmp = state.tmp_x
+    tmp2 = state.tmp_y
     
     # c_1 = (fac1/dt)*su1 + dfu_dx*su1 + dfv_dx*su2 
     #       + Dx^T(su3) + Dx^T(fu*su1) + Dy^T(su4) + Dy^T(fv*su1)
-    c[..., 0] = (
-        inv_dt * su1 
-        + dfu_dx * su1 
-        + dfv_dx * su2 
-        + DxT(su3, state.D, state.mesh.facx) 
-        + DxT(fu * su1, state.D, state.mesh.facx) 
-        + DyT(su4, state.D, state.mesh.facy) 
-        + DyT(fv * su1, state.D, state.mesh.facy)
-    )
+    c[..., 0] = inv_dt * su1 + dfu_dx * su1 + dfv_dx * su2
+    DxT(su3, state.D, state.mesh.facx, out=tmp)
+    c[..., 0] += tmp
+    np.multiply(fu, su1, out=tmp)
+    DxT(tmp, state.D, state.mesh.facx, out=tmp2)
+    c[..., 0] += tmp2
+    DyT(su4, state.D, state.mesh.facy, out=tmp)
+    c[..., 0] += tmp
+    np.multiply(fv, su1, out=tmp)
+    DyT(tmp, state.D, state.mesh.facy, out=tmp2)
+    c[..., 0] += tmp2
     
     # c_2 = (fac1/dt)*su2 + dfu_dy*su1 + dfv_dy*su2 
     #       - Dx^T(su4) + Dx^T(fu*su2) + Dy^T(su3) + Dy^T(fv*su2)
-    c[..., 1] = (
-        inv_dt * su2 
-        + dfu_dy * su1 
-        + dfv_dy * su2 
-        - DxT(su4, state.D, state.mesh.facx) 
-        + DxT(fu * su2, state.D, state.mesh.facx) 
-        + DyT(su3, state.D, state.mesh.facy) 
-        + DyT(fv * su2, state.D, state.mesh.facy)
-    )
+    c[..., 1] = inv_dt * su2 + dfu_dy * su1 + dfv_dy * su2
+    DxT(su4, state.D, state.mesh.facx, out=tmp)
+    c[..., 1] -= tmp
+    np.multiply(fu, su2, out=tmp)
+    DxT(tmp, state.D, state.mesh.facx, out=tmp2)
+    c[..., 1] += tmp2
+    DyT(su3, state.D, state.mesh.facy, out=tmp)
+    c[..., 1] += tmp
+    np.multiply(fv, su2, out=tmp)
+    DyT(tmp, state.D, state.mesh.facy, out=tmp2)
+    c[..., 1] += tmp2
     
     # c_3 = Dx^T(su1) + Dy^T(su2)
-    c[..., 2] = (
-        DxT(su1, state.D, state.mesh.facx) 
-        + DyT(su2, state.D, state.mesh.facy)
-    )
+    DxT(su1, state.D, state.mesh.facx, out=c[..., 2])
+    DyT(su2, state.D, state.mesh.facy, out=tmp)
+    c[..., 2] += tmp
     
     # c_4 = su4 - nu*Dx^T(su2) + nu*Dy^T(su1)
-    c[..., 3] = (
-        su4 
-        - state.nu * DxT(su2, state.D, state.mesh.facx) 
-        + state.nu * DyT(su1, state.D, state.mesh.facy)
-    )
+    c[..., 3] = su4
+    DxT(su2, state.D, state.mesh.facx, out=tmp)
+    c[..., 3] -= state.nu * tmp
+    DyT(su1, state.D, state.mesh.facy, out=tmp)
+    c[..., 3] += state.nu * tmp
     
     return c

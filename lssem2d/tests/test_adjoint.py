@@ -68,7 +68,7 @@ def test_symmetry_and_positivity(N):
     state.update_linearisation(fu, fv)
     
     def A(U):
-        return apply_LT(state, apply_L(state, U, fu, fv), fu, fv)
+        return apply_LT(state, apply_L(state, U, fu, fv), fu, fv).copy()
         
     U = np.random.randn(mesh.nelem, N + 1, N + 1, 4)
     V = np.random.randn(mesh.nelem, N + 1, N + 1, 4)
