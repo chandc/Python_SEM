@@ -5,19 +5,31 @@ from lssem2d.lssem import SolverState
 from lssem2d.solver import step_bdf
 import time
 
-def solve_cavity():
-    Re = 100.0
-    nu = 1.0 / Re
-    N = 8
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from lssem2d.config import Config
+
+def test_cavity():
+    cfg = Config("cavity.toml")
     
-    # 4x4 elements on [0, 1] x [0, 1]
+    Re = cfg.get("simulation", "Re", 100.0)
+    nu = 1.0 / Re
+    N = cfg.get("mesh", "N", 8)
+    el_x = cfg.get("mesh", "elements_x", 4)
+    el_y = cfg.get("mesh", "elements_y", 4)
+    L_x = cfg.get("mesh", "L_x", 1.0)
+    L_y = cfg.get("mesh", "L_y", 1.0)
+    
+    # el_x by el_y elements on [0, L_x] x [0, L_y]
     # Boundaries: W=1, E=1, S=1, N=2 (lid)
-    mesh = build_channel(1.0, 1.0, 4, 4, N, bcs=(1, 1, 1, 2))
+    mesh = build_channel(L_x, L_y, el_x, el_y, N, bcs=(1, 1, 1, 2))
     
     D = diff_matrix(N)
     
-    # Large dt for pseudo-steady solve
-    state = SolverState(mesh, D, nu=nu, dt=1e6, fac1=1.0)
+    dt = cfg.get("simulation", "dt", 1e6)
+    state = SolverState(mesh, D, nu=nu, dt=dt, fac1=1.0)
     
     U_0 = np.zeros((mesh.nelem, N+1, N+1, 4))
     
@@ -28,14 +40,21 @@ def solve_cavity():
     # but let's try a single step with 15 Newton iterations.
     U_history = [U_0]
     
-    for step in range(5):
-        print(f"Pseudo-step {step}")
-        U_new = step_bdf(state, U_history, time=0.0, max_newton=10, newton_tol=1e-5, pin_p=True)
-        # Check change
-        diff = np.max(np.abs(U_new - U_history[0]))
-        print(f"  Change: {diff:.2e}")
-        U_history = [U_new]
+    max_steps = cfg.get("simulation", "max_steps", 5)
+    max_newton = cfg.get("solver", "max_newton", 10)
+    newton_tol = cfg.get("solver", "newton_tol", 1e-5)
+    newton_factor = cfg.get("solver", "newton_factor", 0.1)
+    verbose = cfg.get("solver", "verbose", True)
+    
+    for step in range(max_steps):
+        print(f"Time step {step}")
+        U_new = step_bdf(state, U_history, time=0.0, max_newton=max_newton, newton_tol=newton_tol, newton_factor=newton_factor, pin_p=True, verbose=verbose)
+        # Check change against previous state
+        diff = np.max(np.abs(U_history[0] - U_history[1]))
+        print(f"  -> Step diff (steady state convergence): {diff:.2e}")
+            
         if diff < 1e-5:
+            print("Reached steady state!")
             break
             
     print(f"Time: {time.time()-t0:.2f}s")
@@ -60,15 +79,39 @@ def solve_cavity():
     y_pts = np.array(y_pts)[idx]
     u_pts = np.array(u_pts)[idx]
     
-    # Ghia Re=100
+    # Ghia data (y is the same for all Re)
     ghia_y = np.array([1.0, 0.9766, 0.9688, 0.9609, 0.9531, 0.8516, 0.7344, 0.6172, 0.5000, 0.4531, 0.2813, 0.1719, 0.1016, 0.0703, 0.0625, 0.0547, 0.0000])
-    ghia_u = np.array([1.0, 0.8412, 0.7887, 0.7372, 0.6872, 0.2315, 0.0033, -0.1364, -0.2058, -0.2109, -0.1566, -0.1015, -0.0643, -0.0478, -0.0419, -0.0372, 0.0])
+    ghia_u_100 = np.array([1.0, 0.8412, 0.7887, 0.7372, 0.6872, 0.2315, 0.0033, -0.1364, -0.2058, -0.2109, -0.1566, -0.1015, -0.0643, -0.0478, -0.0419, -0.0372, 0.0])
+    ghia_u_1000 = np.array([1.0, 0.6593, 0.5749, 0.5112, 0.4660, 0.3330, 0.1872, 0.0570, -0.0608, -0.1065, -0.2781, -0.3829, -0.2973, -0.2222, -0.2020, -0.1811, 0.0])
+    ghia_u_10000 = np.array([1.0, 0.4722, 0.4778, 0.4801, 0.4789, 0.3476, 0.1569, -0.0019, -0.1118, -0.1605, -0.3429, -0.4600, -0.4077, -0.3016, -0.2521, -0.2065, 0.0])
+    
+    Re = cfg.get("simulation", "Re", 100.0)
+    if Re == 100.0:
+        ghia_u = ghia_u_100
+    elif Re == 1000.0:
+        ghia_u = ghia_u_1000
+    elif Re == 10000.0:
+        ghia_u = ghia_u_10000
+    else:
+        # Fallback if Re is something else
+        ghia_u = ghia_u_100
+        print(f"Warning: No exact Ghia data for Re={Re}, defaulting to Re=100")
     
     # Interpolate our result to Ghia y points
     u_interp = np.interp(ghia_y, y_pts, u_pts)
     
     err = np.max(np.abs(u_interp - ghia_u))
-    print(f"Max error against Ghia: {err:.4f}")
+    np.savez("cavity_re1000_data.npz", 
+             U_steady=U_history[0], 
+             xnod=mesh.xnod, 
+             ynod=mesh.ynod, 
+             u_pts=u_pts, 
+             y_pts=y_pts, 
+             ghia_u=ghia_u, 
+             ghia_y=ghia_y, 
+             Re=Re)
+    print("Simulation data saved to cavity_re1000_data.npz")
+
     
 if __name__ == "__main__":
-    solve_cavity()
+    test_cavity()

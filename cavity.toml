@@ -1,0 +1,17 @@
+[simulation]
+Re = 1000.0
+dt = 0.1
+max_steps = 1000
+
+[mesh]
+N = 8
+elements_x = 4
+elements_y = 4
+L_x = 1.0
+L_y = 1.0
+
+[solver]
+max_newton = 3
+newton_tol = 1e-5
+newton_factor = 0.1
+verbose = false

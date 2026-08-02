@@ -59,7 +59,11 @@ def apply_mask(mesh, U, pin_p=False):
             U_masked[e, :, -1, 3] = 0.0
             
     if pin_p:
-        U_masked[0, 0, 0, 2] = 0.0
+        if isinstance(pin_p, tuple):
+            e_p, i_p, j_p = pin_p
+            U_masked[e_p, i_p, j_p, 2] = 0.0
+        else:
+            U_masked[0, 0, 0, 2] = 0.0
         
     return U_masked
 
@@ -170,10 +174,11 @@ def apply_bc(mesh, U, time=0.0, custom_inlet=None, custom_lid=None, exact_soluti
                 U[e, :, -1, 1] = 0.0; U[e, :, -1, 3] = 0.0
             
     if pin_p:
+        e_p, i_p, j_p = pin_p if isinstance(pin_p, tuple) else (0, 0, 0)
         if exact_solution:
-            _, _, p_ex, _ = exact_solution(mesh.xnod[0, 0], mesh.ynod[0, 0], time)
-            U[0, 0, 0, 2] = p_ex
+            _, _, p_ex, _ = exact_solution(mesh.xnod[e_p, i_p], mesh.ynod[e_p, j_p], time)
+            U[e_p, i_p, j_p, 2] = p_ex
         else:
-            U[0, 0, 0, 2] = 0.0
+            U[e_p, i_p, j_p, 2] = 0.0
             
     return U

@@ -29,13 +29,45 @@ class SolverState:
         self.p_y = np.zeros((nelem, n, n))
         self.om_x = np.zeros((nelem, n, n))
         self.om_y = np.zeros((nelem, n, n))
-        
+        self.U_t = np.empty((nelem, 4, n, n))
     def update_linearisation(self, fu, fv):
         """Precompute gradients of linearisation velocities fu, fv."""
         self.dfu_dx = dUdx(fu, self.D, self.mesh.facx)
         self.dfu_dy = dUdy(fu, self.D, self.mesh.facy)
         self.dfv_dx = dUdx(fv, self.D, self.mesh.facx)
         self.dfv_dy = dUdy(fv, self.D, self.mesh.facy)
+        
+    def get_global_mask(self, pin_p=False):
+        if hasattr(self, '_cached_mask_pin') and self._cached_mask_pin == pin_p:
+            return self._global_mask
+            
+        mask_local = np.ones((self.mesh.nelem, self.mesh.N + 1, self.mesh.N + 1, 4))
+        for e in range(self.mesh.nelem):
+            bc_W = self.mesh.bc[e, 0]
+            if bc_W in (1, 2, 3): mask_local[e, 0, :, 0:2] = 0.0
+            elif bc_W == 5: mask_local[e, 0, :, 1] = 0.0; mask_local[e, 0, :, 3] = 0.0
+            
+            bc_E = self.mesh.bc[e, 1]
+            if bc_E in (1, 2, 3): mask_local[e, -1, :, 0:2] = 0.0
+            elif bc_E == 5: mask_local[e, -1, :, 1] = 0.0; mask_local[e, -1, :, 3] = 0.0
+            
+            bc_S = self.mesh.bc[e, 2]
+            if bc_S in (1, 2, 3): mask_local[e, :, 0, 0:2] = 0.0
+            elif bc_S == 5: mask_local[e, :, 0, 1] = 0.0; mask_local[e, :, 0, 3] = 0.0
+            
+            bc_N = self.mesh.bc[e, 3]
+            if bc_N in (1, 2, 3): mask_local[e, :, -1, 0:2] = 0.0
+            elif bc_N == 5: mask_local[e, :, -1, 1] = 0.0; mask_local[e, :, -1, 3] = 0.0
+            
+        if pin_p:
+            e_p, i_p, j_p = pin_p if isinstance(pin_p, tuple) else (0, 0, 0)
+            mask_local[e_p, i_p, j_p, 2] = 0.0
+            
+        from .assembly import gather_scatter
+        mask_gs = gather_scatter(self.mesh, mask_local)
+        self._global_mask = (mask_gs > 0.99).astype(float)
+        self._cached_mask_pin = pin_p
+        return self._global_mask
 
 def apply_L(state, U, fu, fv):
     """

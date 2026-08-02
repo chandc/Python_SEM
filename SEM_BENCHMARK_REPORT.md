@@ -2,6 +2,16 @@
 
 This report documents our findings from developing and benchmarking a highly optimized, matrix-free Spectral Element Method (SEM) solver for the 2D Poisson equation on Apple Silicon.
 
+> **⚠️ Partially superseded (2026-08-02).** The Fortran timings in §5, and the
+> NumPy-vs-Fortran conclusions in §4 and §6, were produced with a Fortran build in which
+> `-framework Accelerate` was linked but **inert** (gfortran needs `-fexternal-blas` to
+> route `MATMUL` to BLAS). The "NumPy ties compiled Fortran" claim is an artifact of that
+> build; correctly built, Fortran is ~1.3× faster at `p=15`. §4's statement that NumPy
+> dispatches to *Accelerate* is also incorrect — this NumPy is built on **OpenBLAS**.
+> See **[FORTRAN_VS_NUMPY_BENCHMARK.md](./FORTRAN_VS_NUMPY_BENCHMARK.md)** for corrected
+> measurements. Sections 1–3 (problem, architecture, formulation) and §7 (GPU scaling)
+> are unaffected.
+
 ## 1. The Test Problem
 
 To rigorously test both the accuracy and performance of the solver, we used a highly oscillatory exact solution:

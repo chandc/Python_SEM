@@ -182,8 +182,7 @@ def test_lid_driven_cavity():
     from lssem2d.solver import step_bdf
     for step in range(5):
         U_new = step_bdf(state, U_history, time=0.0, max_newton=10, newton_tol=1e-5, pin_p=True)
-        diff = np.max(np.abs(U_new - U_history[0]))
-        U_history = [U_new]
+        diff = np.max(np.abs(U_history[0] - U_history[1]))
         if diff < 1e-5:
             break
             

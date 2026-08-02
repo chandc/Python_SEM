@@ -34,10 +34,9 @@ def solve_bfs():
         return 4.0 * y * (1.0 - y)
         
     for step in range(200):
-        U_new = step_bdf(state, U_history, time=step*0.1, max_newton=5, newton_tol=1e-4, pin_p=True, custom_inlet=custom_inlet)
-        diff = np.max(np.abs(U_new - U_history[0]))
+        U_new = step_bdf(state, U_history, time=step*0.1, max_newton=5, newton_tol=1e-4, pin_p=(11, 6, 6), custom_inlet=custom_inlet)
+        diff = np.max(np.abs(U_history[0] - U_history[1]))
         print(f"Step {step}, Change: {diff:.2e}")
-        U_history = [U_new]
         if diff < 1e-4:
             break
             

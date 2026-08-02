@@ -8,42 +8,99 @@ from lssem2d.solver import step_bdf
 import time
 
 def solve_and_plot_bfs():
-    # Re=389 (Armaly geometry). Average inlet velocity = 2/3 (if u_max = 1)
-    nu = 1.0 / 100.0
-    N = 6
+    from lssem2d.config import Config
+    cfg = Config("bfs.toml")
+    Re = cfg.get("simulation", "Re", 389.0)
+    nu = 1.0 / Re
+    N = cfg.get("mesh", "N", 6)
+    dt = cfg.get("simulation", "dt", 0.1)
     
     mesh = build_bfs(N)
     D = diff_matrix(N)
     
-    state = SolverState(mesh, D, nu=nu, dt=0.5, fac1=1.0)
-    U_0 = np.zeros((mesh.nelem, N+1, N+1, 4))
-    U_history = [U_0]
+    state = SolverState(mesh, D, nu=nu, dt=dt, fac1=1.0)
+    from lssem2d.io import save_restart, load_restart, get_latest_restart
+    
+    restart_prefix = "bfs_restart_"
+    restart_dir = "."
+    start_step = 0
+    current_time = 0.0
+    
+    latest_restart = get_latest_restart(restart_dir, restart_prefix)
+    
+    if latest_restart:
+        print(f"Loading latest restart file: {latest_restart}")
+        U_history, current_time, start_step = load_restart(latest_restart)
+    else:
+        U_0 = np.zeros((mesh.nelem, N+1, N+1, 4))
+        U_history = [U_0]
     
     def custom_inlet(x, y, t):
         # parabolic profile, max 1.0 at y=0.5. y in [0, 1]
         return 4.0 * y * (1.0 - y)
         
-    print("Running BFS simulation...")
+    print(f"Running BFS simulation from step {start_step}...")
     t0 = time.time()
-    for step in range(100):
+    
+    target_steps = cfg.get("simulation", "max_steps", 10000)
+    save_interval = cfg.get("simulation", "save_interval", 50)
+    
+    max_newton = cfg.get("solver", "max_newton", 5)
+    newton_tol = cfg.get("solver", "newton_tol", 1e-4)
+    
+    for step in range(start_step + 1, target_steps + 1):
         # We use large newton_tol for initial steps, but let's just use 1e-4
-        U_new = step_bdf(state, U_history, time=step*0.5, max_newton=3, newton_tol=1e-3, pin_p=True, custom_inlet=custom_inlet)
-        diff = np.max(np.abs(U_new - U_history[0]))
-        if step % 10 == 0:
-            print(f"Step {step}, Change: {diff:.2e}")
-        U_history = [U_new, U_history[0]] if len(U_history) == 1 else [U_new, U_history[0]]
+        current_time = step * dt
+        U_new = step_bdf(state, U_history, time=current_time, max_newton=max_newton, newton_tol=newton_tol, custom_inlet=custom_inlet)
+        diff = np.max(np.abs(U_history[0] - U_history[1]))
+        print(f"Step {step}, Change: {diff:.2e}")
+        
+        if step % save_interval == 0:
+            restart_file = f"{restart_prefix}{step:06d}.npz"
+            print(f"Saving restart file: {restart_file}")
+            save_restart(restart_file, U_history, current_time, step)
+            
         if diff < 1e-5:
             print(f"Converged at step {step}")
             break
+            
     print(f"Simulation took {time.time() - t0:.2f}s")
+    
+    # Measure mass conservation defect
+    from lssem2d.operators import dUdx, dUdy
+    U_final = U_history[0]
+    u_final, v_final = U_final[..., 0], U_final[..., 1]
+    u_x = dUdx(u_final, state.D, state.mesh.facx)
+    v_y = dUdy(v_final, state.D, state.mesh.facy)
+    div_u = u_x + v_y
+    defect_max = np.max(np.abs(div_u))
+    defect_l2 = np.sqrt(np.sum(div_u**2 * state.mesh.wq))
+    print(f"FINAL MASS CONSERVATION DEFECT (L_inf): {defect_max:.4e}")
+    print(f"FINAL MASS CONSERVATION DEFECT (L2):    {defect_l2:.4e}")
+    
+    restart_file = f"{restart_prefix}{step:06d}.npz"
+    print(f"Saving final restart file: {restart_file}")
+    save_restart(restart_file, U_history, current_time, step)
     
     U_final = U_history[0]
     
     # Extract flattened coordinates and data for unstructured plotting
-    x_flat = mesh.xnod.ravel()
-    y_flat = mesh.ynod.ravel()
-    u_flat = U_final[..., 0].ravel()
-    v_flat = U_final[..., 1].ravel()
+    x_pts = []
+    y_pts = []
+    u_pts = []
+    v_pts = []
+    for e in range(mesh.nelem):
+        for i in range(N+1):
+            for j in range(N+1):
+                x_pts.append(mesh.xnod[e, i])
+                y_pts.append(mesh.ynod[e, j])
+                u_pts.append(U_final[e, i, j, 0])
+                v_pts.append(U_final[e, i, j, 1])
+                
+    x_flat = np.array(x_pts)
+    y_flat = np.array(y_pts)
+    u_flat = np.nan_to_num(np.array(u_pts), nan=0.0, posinf=1e10, neginf=-1e10)
+    v_flat = np.nan_to_num(np.array(v_pts), nan=0.0, posinf=1e10, neginf=-1e10)
     
     output_dir = "/Users/danielchan/.gemini/antigravity-ide/brain/a68b6e7f-0de8-419b-a49c-533acf66a29f"
     
@@ -70,15 +127,12 @@ def solve_and_plot_bfs():
     V_interp = griddata((x_flat, y_flat), v_flat, (X, Y), method='linear', fill_value=0.0)
     
     plt.figure(figsize=(12, 4))
-    # Plot velocity magnitude as background
-    mag = np.sqrt(U_interp**2 + V_interp**2)
-    plt.contourf(X, Y, mag, levels=50, cmap='viridis', alpha=0.5)
     
     # Add streamlines
     plt.streamplot(X, Y, U_interp, V_interp, color='k', linewidth=0.5, density=2.0)
     
     # Mask out the step region manually (x < 0, y < 0)
-    # plt.fill_between([-10, 0], [-1, -1], [0, 0], color='white', zorder=10) # if needed, but mesh is only fluid
+    plt.fill_between([-10, 0], [-1, -1], [0, 0], color='white', zorder=10)
     
     plt.title('BFS: Streamlines')
     plt.xlabel('x')

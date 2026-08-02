@@ -38,7 +38,16 @@ def run_fortran_sweep():
     
     # Compile
     print("Compiling Fortran solver...", flush=True)
-    subprocess.run(["gfortran", "-O3", "sem_2d.f90", "-o", "sem_2d_f90", "-framework", "Accelerate"], check=True)
+    # -fexternal-blas routes MATMUL to Accelerate's DGEMM; without it the
+    # "-framework Accelerate" link is inert and gfortran uses its own internal
+    # matmul, which costs ~3.6x at p=15 (514 -> 144 ms at E=30x30).
+    # matmul-limit=6 sets the crossover: DGEMM for (p+1)x(p+1) blocks >= 6x6
+    # (p >= 5), where it starts to pay; below that the call overhead dominates
+    # and the internal path is faster.
+    # -mcpu=native is machine-specific - drop it if this binary must be portable.
+    subprocess.run(["gfortran", "-O3", "-mcpu=native", "-funroll-loops",
+                    "-fexternal-blas", "-fblas-matmul-limit=6",
+                    "sem_2d.f90", "-o", "sem_2d_f90", "-framework", "Accelerate"], check=True)
     
     results = []
     
