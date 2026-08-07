@@ -1,5 +1,6 @@
 import numpy as np
 from .operators import dUdx, dUdy, DxT, DyT
+from . import backend
 
 class SolverState:
     """Holds mesh, operator matrices, and cached linearisation data for the LSSEM solver."""
@@ -91,10 +92,12 @@ class SolverState:
         self._cached_mask_pin = pin_p
         return self._global_mask
 
-def apply_L(state, U, fu, fv):
+def _apply_L_numpy(state, U, fu, fv):
     """
-    Apply the VVP operator L.
+    Apply the VVP operator L.  NumPy reference implementation.
     Returns the four weighted equation residuals su[e, i, j, k].
+
+    tests/test_backend_parity.py validates the numba kernels against this.
     """
     u, v, p, om = state.u_c, state.v_c, state.p_c, state.om_c
     np.copyto(u, U[..., 0])
@@ -144,9 +147,9 @@ def apply_L(state, U, fu, fv):
     
     return su
 
-def apply_LT(state, su, fu, fv):
+def _apply_LT_numpy(state, su, fu, fv):
     """
-    Apply the transpose VVP operator L^T.
+    Apply the transpose VVP operator L^T.  NumPy reference implementation.
     """
     su1, su2, su3, su4 = state.su0_c, state.su1_c, state.su2_c, state.su3_c
     
@@ -210,5 +213,38 @@ def apply_LT(state, su, fu, fv):
     np.copyto(c[..., 1], c1)
     np.copyto(c[..., 2], c2)
     np.copyto(c[..., 3], c3)
-    
+
     return c
+
+
+# ---------------------------------------------------------------------------
+#  Backend dispatch
+#
+#  The public names apply_L / apply_LT are kept in place so every existing call
+#  site and test exercises whichever backend is active without modification.
+#  Resolution happens once per backend switch, not per call.
+# ---------------------------------------------------------------------------
+_IMPL_L = None
+_IMPL_LT = None
+
+
+def _bind_backend(name):
+    global _IMPL_L, _IMPL_LT
+    if name == 'numba':
+        from .kernels_numba import apply_L as _L, apply_LT as _LT
+    else:
+        _L, _LT = _apply_L_numpy, _apply_LT_numpy
+    _IMPL_L, _IMPL_LT = _L, _LT
+
+
+backend.register(_bind_backend)
+
+
+def apply_L(state, U, fu, fv):
+    """Apply the VVP operator L using the active backend (see lssem2d.backend)."""
+    return _IMPL_L(state, U, fu, fv)
+
+
+def apply_LT(state, su, fu, fv):
+    """Apply the transpose VVP operator L^T using the active backend."""
+    return _IMPL_LT(state, su, fu, fv)

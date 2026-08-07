@@ -1,5 +1,19 @@
 # Proposal: fused numba kernels for the VVP operator
 
+> **STATUS UPDATE (2026-08-07): IMPLEMENTED, with changes.** The numba backend
+> now exists as an **option**, not a replacement — NumPy remains the default.
+> See `NUMBA_BACKEND.md` for the delivered design and measurements.
+>
+> Two things in this document are superseded and must not be copied verbatim:
+>
+> 1. **The kernel source in §4a uses the pre-fix least-squares row weighting**
+>    (`idt = fac1/dt` applied to `u`, instead of `fac1*u + dt*(...)`). That is the
+>    weighting bug that made the BFS diverge before t=23. The delivered kernels in
+>    `lssem2d/kernels_numba.py` carry `f1` and `dtl` separately and scale the two
+>    momentum components of `su` on read in `_kernel_LT`.
+> 2. **§5a's "no fallback path" was rejected.** A dispatch layer (`lssem2d/backend.py`)
+>    was built instead, so §5b (the stranded anaconda interpreter) no longer applies.
+
 **Status: PROPOSAL — not implemented.** Nothing in `lssem2d/` has been changed.
 The kernels below were written and verified in a scratch area; the full source is
 reproduced here so the work survives independently of that scratch directory.
