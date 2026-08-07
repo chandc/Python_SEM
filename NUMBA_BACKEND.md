@@ -46,22 +46,82 @@ unexplained 3x slowdown, which is precisely what corrupts a benchmark. Use
 ## 2. Measured speedup
 
 Apple M3 Max, Python 3.12.7, NumPy 2.4.6 (Accelerate), numba 0.66.0.
-Per operator application, microseconds:
+Best-of-5, microseconds per operator application.
+Reproduce with `scratch/bench_numba_scaling.py` + `scratch/plot_numba_scaling.py`.
 
-| mesh | DOF | | `apply_L` | `apply_LT` | `apply_A` |
-|---|---|---|---|---|---|
-| 6x6 order 7 | 9,216 | numpy | 79.0 | 125.3 | 227.9 |
-| | | numba | 21.6 | 29.6 | 70.5 |
-| | | **speedup** | **3.65x** | **4.24x** | **3.23x** |
-| 6x6 order 8 | 11,664 | **speedup** | 4.40x | 3.91x | **3.38x** |
-| 8x8 order 10 | 30,976 | **speedup** | 2.75x | 2.71x | **2.41x** |
-| 8x8 order 12 | 43,264 | **speedup** | 2.31x | 1.96x | **1.92x** |
+![numba speed-up vs resolution](figs/numba_scaling.png)
 
-**The speedup declines with resolution** — 3.23x at 9k DOF down to 1.92x at 43k
-— because NumPy's BLAS becomes progressively more efficient on larger blocks
-while the fused kernel's advantage (avoiding call overhead on tiny blocks) is
-largest when the blocks are small. The proposal measured only the 9k mesh and so
-reported the best case.
+### Polynomial order is what matters, not problem size
+
+Resolution moves two independent ways in a spectral element method, and **they do
+not have the same effect**:
+
+| sweep | range | `apply_A` speed-up |
+|---|---|---|
+| **p-refinement** (36 elements fixed) | p=3 -> p=16 | **5.42x -> 1.53x** |
+| **h-refinement** (order 8 fixed) | 4 -> 196 elements | **5.50x -> 2.60x** |
+
+At essentially the same problem size (~32k DOF), `p=14` on 36 elements gives
+**1.56x** while `p=8` on 100 elements gives **2.90x** — nearly 2x apart. The two
+curves do not collapse onto one another, so **a speed-up quoted "at N DOF" is
+meaningless without stating the polynomial order.**
+
+The mechanism is the one the fused kernel was built around. Its advantage comes
+from avoiding BLAS call overhead on tiny (n x n) blocks and eliminating
+temporaries. p-refinement grows the blocks, so Accelerate's matmul becomes
+efficient and the gap closes toward parity. h-refinement adds more blocks of the
+*same* size, so the per-block advantage persists — the h-curve flattens out
+around 2.6-2.8x rather than heading for 1x.
+
+### p-refinement, 36 elements fixed
+
+| p | DOF | numpy `apply_A` | numba `apply_A` | `apply_L` | `apply_LT` | `apply_A` |
+|---|---|---|---|---|---|---|
+| 3 | 2,304 | 98.9 | 18.3 | 9.20x | 9.85x | **5.42x** |
+| 4 | 3,600 | 129.2 | 26.6 | 7.49x | 8.44x | **4.86x** |
+| 5 | 5,184 | 141.3 | 37.8 | 5.41x | 5.18x | **3.74x** |
+| 6 | 7,056 | 191.8 | 52.1 | 4.90x | 4.87x | **3.68x** |
+| 7 | 9,216 | 226.2 | 70.0 | 3.88x | 4.35x | **3.23x** |
+| 8 | 11,664 | 309.8 | 92.1 | 4.48x | 3.83x | **3.36x** |
+| 10 | 17,424 | 411.4 | 150.8 | 3.32x | 3.07x | **2.73x** |
+| 12 | 24,336 | 511.5 | 233.7 | 2.50x | 2.33x | **2.19x** |
+| 14 | 32,400 | 544.1 | 348.7 | 1.76x | 1.65x | **1.56x** |
+| 16 | 41,616 | 744.7 | 487.6 | 1.68x | 1.55x | **1.53x** |
+
+### h-refinement, order 8 fixed
+
+| elements | DOF | numpy `apply_A` | numba `apply_A` | `apply_L` | `apply_LT` | `apply_A` |
+|---|---|---|---|---|---|---|
+| 4 | 1,296 | 94.5 | 17.2 | 8.50x | 8.95x | **5.50x** |
+| 9 | 2,916 | 131.3 | 29.1 | 6.35x | 6.26x | **4.51x** |
+| 16 | 5,184 | 177.5 | 46.7 | 4.92x | 4.96x | **3.80x** |
+| 36 | 11,664 | 315.0 | 93.4 | 4.26x | 3.86x | **3.37x** |
+| 64 | 20,736 | 484.5 | 159.9 | 3.77x | 3.47x | **3.03x** |
+| 100 | 32,400 | 704.0 | 243.2 | 3.60x | 3.25x | **2.90x** |
+| 144 | 46,656 | 977.6 | 346.4 | 3.30x | 3.18x | **2.82x** |
+| 196 | 63,504 | 1214.9 | 468.0 | 3.11x | 2.96x | **2.60x** |
+
+### Why `apply_A` gains less than its own components
+
+At low order the kernels hit 9-10x individually while the full matvec caps at
+~5.4x, because `gather_scatter` and the mask stay on the NumPy path — about 9% of
+`apply_A`, explicitly out of scope in the proposal (§6 there). Once the kernels
+are 10x faster, those unfused parts become the bottleneck. **If more speed is
+wanted at low order, fusing `gather_scatter` is the remaining lever, not the
+kernels.** At p>=14 the situation reverses: the kernels themselves are only
+~1.7x, so there is little left to win anywhere.
+
+### Where the production cases land
+
+| case | resolution | expected `apply_A` speed-up |
+|---|---|---|
+| cavity (this study) | 4x4-8x8, p=8-12 | ~3.4x -> 2.2x |
+| Chan BFS | 72 elem, order 10 | ~2.7x |
+
+> An earlier version of this section reported speed-up against DOF alone
+> (3.23x at 9k falling to 1.92x at 43k). That mixed p- and h-refinement into one
+> axis and so attributed to *size* an effect that is really driven by *order*.
+> The paired sweeps above supersede it.
 
 End-to-end, cavity Re=1000, 4x4 order 8, dt=1.0, run to `max|dU| < 1e-8`:
 
@@ -76,12 +136,18 @@ trajectory is the `fastmath` reordering, see §3.
 
 ### Interaction with the preconditioner
 
-These are NumPy-matvec-relative numbers. Because numba makes the matvec ~2-3x
-cheaper, it shifts the Jacobi/p-MG crossover in
-[PRECONDITIONER_AND_DT_STUDY.md](./PRECONDITIONER_AND_DT_STUDY.md) toward
-**larger** meshes: preconditioners that trade extra matvecs for fewer iterations
-get relatively more expensive. Re-measure the crossover before relying on it
-under numba.
+The preconditioner comparison in
+[PRECONDITIONER_AND_DT_STUDY.md](./PRECONDITIONER_AND_DT_STUDY.md) was measured
+against the NumPy matvec. Making the matvec cheaper shifts the Jacobi/p-MG
+crossover toward **larger** meshes, because preconditioners that trade extra
+matvecs for fewer iterations become relatively more expensive.
+
+The size of that shift is itself order-dependent, per the sweeps above: the
+cavity study spans p=8 to p=12, where numba gives 3.4x down to 2.2x. So the
+shift is not uniform across the resolutions in that study — the coarse meshes
+speed up more than the fine ones, which *compounds* the effect (Jacobi already
+won on the coarse meshes). **The crossover has not been re-measured under numba;
+do not assume the ~50k DOF figure carries over.**
 
 ---
 

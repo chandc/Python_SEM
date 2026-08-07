@@ -165,9 +165,13 @@ never wins.
 - BFS-like (outflow, soft modes): **p-MG regardless of size** — it won at 3,168 DOF.
 - **Chebyshev alone is not recommended** on either problem; it only earns its
   keep as the smoother inside the V-cycle.
-- These are NumPy-matvec numbers. The fused kernels in
-  `NUMBA_INTEGRATION_PROPOSAL.md` would cut matvec cost ~3.5x, pushing the
-  crossover to *larger* meshes and favouring Jacobi further.
+- These are NumPy-matvec numbers. The numba backend (now implemented — see
+  [NUMBA_BACKEND.md](./NUMBA_BACKEND.md)) cuts matvec cost by a factor that
+  depends strongly on polynomial order: **~3.4x at p=8, ~2.7x at p=10, ~2.2x at
+  p=12**, and only ~1.5x by p=16. Cheaper matvecs push the crossover to *larger*
+  meshes and favour Jacobi further, since preconditioners that trade extra
+  matvecs for fewer iterations become relatively more expensive. The crossover
+  above has **not** been re-measured under numba.
 
 ---
 
