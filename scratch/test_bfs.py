@@ -15,36 +15,44 @@ def solve_bfs():
     
     # Wait, usually for BFS, the characteristic velocity is U_max and length is h.
     # So Re = U_max * h / nu. So nu = 1.0 / 389.0 is standard.
-    nu = 1.0 / 389.0
-    N = 6
+    from lssem2d.config import Config
+    cfg = Config("bfs.toml")
+    Re = cfg.get("simulation", "Re", 389.0)
+    nu = 1.0 / Re
+    N = cfg.get("mesh", "N", 6)
+    dt = cfg.get("simulation", "dt", 0.1)
+    max_steps = cfg.get("simulation", "max_steps", 10000)
+    max_newton = cfg.get("solver", "max_newton", 5)
+    newton_tol = cfg.get("solver", "newton_tol", 1e-4)
+    cgsfac = cfg.get("solver", "cgsfac", 0.0)
     
     mesh = build_bfs(N)
     D = diff_matrix(N)
     from lssem2d.lgl import lgl_weights
     wq = lgl_weights(N)
     
-    # Pseudo-transient continuation (dt=0.1)
-    state = SolverState(mesh, D, nu=nu, dt=0.1, fac1=1.0)
+    # Pseudo-transient continuation
+    state = SolverState(mesh, D, nu=nu, dt=dt, fac1=1.0)
     
     U_0 = np.zeros((mesh.nelem, N+1, N+1, 4))
     U_history = [U_0]
     
     def custom_inlet(x, y, t):
-        # parabolic profile, max 1.0 at y=0.5. y in [0, 1]
-        return 4.0 * y * (1.0 - y)
+        eta = (y - 0.5) / 0.5
+        return 6.0 * eta * (1.0 - eta)
         
-    for step in range(200):
-        U_new = step_bdf(state, U_history, time=step*0.1, max_newton=5, newton_tol=1e-4, pin_p=(11, 6, 6), custom_inlet=custom_inlet)
+    for step in range(max_steps):
+        U_new = step_bdf(state, U_history, time=step*dt, max_newton=max_newton, newton_tol=newton_tol, custom_inlet=custom_inlet, cgsfac=cgsfac)
         diff = np.max(np.abs(U_history[0] - U_history[1]))
         print(f"Step {step}, Change: {diff:.2e}")
         if diff < 1e-4:
             break
             
-    # Now find reattachment on bottom wall (y=-1, which is j=0 in the bottom elements)
-    # The bottom elements are e in [2 + 10, 2 + 20) = [12, 21].
+    # Now find reattachment on bottom wall (y=0, which is j=0 in the bottom elements)
+    # The bottom elements are e in [22, 42)
     wall_x = []
     wall_tau = []
-    for e in range(12, 22):
+    for e in range(22, 42):
         # calculate du/dy at y=-1 (j=0)
         # using the differentiation matrix D
         # u(y) = sum D_{0, m} u_m
@@ -52,9 +60,9 @@ def solve_bfs():
             x = mesh.xnod[e, i]
             # y-derivative at j=0
             # map derivative: du/dy = du/deta * (2/H)
-            # H of the element is 1.0
+            # H of the element is 0.5
             du_deta = np.dot(D[0, :], U_history[0][e, i, :, 0])
-            du_dy = du_deta * 2.0
+            du_dy = du_deta * 4.0
             wall_x.append(x)
             wall_tau.append(du_dy)
             

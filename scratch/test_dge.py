@@ -51,7 +51,7 @@ def main():
     
     # 2. Test New DGE Implementation
     t0 = time.time()
-    M_inv_new = compute_jacobi(state, fu, fv, extra_shape=False)
+    M_inv_new = compute_jacobi(state, fu, fv)
     t1 = time.time()
     new_time = t1 - t0
     

@@ -6,8 +6,6 @@ least-squares spectral element solver, vectorised with NumPy.
 **Reference specification:** `DOCUMENTATION.md` (equations, algorithm, transpose
 construction). Every prompt below assumes the agent has read it.
 
-Use sem_2d_oo.py as the reference implementation.
-
 ---
 
 ## How to use this set
@@ -233,11 +231,50 @@ Efficient NumPy approach (no loops over faces):
     minlength=n_global) per component, or a precomputed scipy.sparse Q matrix
     (Q^T then Q). Benchmark; document the choice.
 
+WHY THIS IS NOT A ONE-OFF — READ CAREFULLY.
+
+The element-local operator returns INCOMPLETE residuals. A node on a shared face is
+touched by every element that owns a copy of it, and each element computes only its own
+contribution. The value is meaningless until the contributions from all neighbouring
+elements are summed. Assembly is therefore not post-processing — it is PART OF THE
+OPERATOR.
+
+    A(v)  =  assemble( mask * apply_LT( apply_L( mask * v ) ) )
+             ^^^^^^^^ inside the operator, on EVERY application
+
+Concretely: the exchange of incomplete residuals with nearest-neighbour elements must
+happen on EVERY matrix-vector product inside the Krylov solver, and on the preconditioner
+diagonal — not once per Newton step, not once per time step. In the Fortran reference
+every `call lhs` / `call lhs_fast` is immediately followed by `call collect`
+(solver_pmg2.f90 lines 315/330, 418/433, 598/611, 1059/1072, 1746/1758). Mirror that
+discipline exactly.
+
+If you skip it inside the Krylov loop you are solving with a BLOCK-DIAGONAL,
+element-decoupled operator. The iteration will still converge — to a field that is
+discontinuous across element interfaces and satisfies nothing. This is another silent
+failure.
+
+(In a distributed-memory port this exchange is the nearest-neighbour halo communication.
+In shared-memory NumPy it is the gather-scatter, but the completeness requirement is
+identical, and it is the step that would dominate MPI cost.)
+
+NORM SUBTLETY. After assembly, every copy of a shared node holds the same summed value,
+so a naive sum over the element-local array DOUBLE-COUNTS interface nodes (x2 on a face,
+x4 at a cross point). Choose one convention and use it everywhere:
+  * either accumulate norms and inner products on the UNIQUE global vector, or
+  * accept the multiplicity-weighted norm (what the Fortran does) and be consistent.
+Mixing the two makes convergence tests mean different things in different places.
+
 ACCEPTANCE GATE:
   a) Assembling a field that is already continuous multiplies interface values by their
      multiplicity (2 on a face, 4 at a cross point) — verify the multiplicity map.
   b) Assembly is self-adjoint: <assemble(A), B> == <A, assemble(B)>.
   c) A constant field remains constant after assemble-then-divide-by-multiplicity.
+  d) INTERFACE CONTINUITY: solve a Poisson-like sub-problem on a 2x2 element mesh with
+     assembly inside the operator, and confirm the solution is continuous across
+     interfaces to 1e-12. Then deliberately REMOVE the assembly from inside A(v), re-run,
+     and confirm the test FAILS with a visible interface jump. Keep that as a regression
+     test so the discipline cannot silently regress.
 ```
 
 ---
@@ -297,8 +334,15 @@ Time loop (DOCUMENTATION §9):
         shift history
 
 Matrix-free BiCGSTAB with a Jacobi preconditioner:
-    A(v)     = assemble(mask * apply_LT(apply_L(mask*v)))
+
+    A(v)     = assemble( mask * apply_LT( apply_L( mask * v ) ) )
     M_inv(v) = v / diag,  diag from the column norms sum_i (dR_i/dU_k)^2  (DOCUMENTATION §7.3)
+               ^ the diagonal must ALSO be assembled before use
+
+*** The `assemble` inside A(v) is mandatory on EVERY matrix-vector product. ***
+The element-local operator produces incomplete residuals at shared nodes; the
+nearest-neighbour exchange completes them. Omit it inside the Krylov loop and you invert
+a block-diagonal operator and converge to a discontinuous field. See Stage 6.
 
 INEXACT NEWTON (cgsfac): ask the linear solve only for a cgsfac-fold residual reduction,
 not for tol. cgsfac=0.1 is a good default. This is not an optimisation — with tight
@@ -387,6 +431,7 @@ These come from debugging the Fortran original. Each cost real time; each is sil
 | **Judging solutions by max\|Δ\|/range** | 425% "disagreement" between solutions that agree to 2% | report rms, plus a physical scalar (reattachment length); corner singularities dominate pointwise maxima |
 | **Over-solving the linear system** | divergence to NaN at high iteration caps on near-singular systems | cap iterations; use the inexact-Newton forcing term |
 | **Tight inner solves on a cold start** | Newton diverges within ~4 steps | cgsfac ~ 0.1 through the transient |
+| **Assembly omitted inside the Krylov loop** | converges to a field with jumps at element interfaces | assemble on every mat-vec; Stage 6 gate (d) fails deliberately without it |
 | **Testing on a degenerate case** | two correct codes "disagree" by 80% | validate on a well-posed case (channel, Kovasznay, long-domain BFS), never on a truncated outflow |
 
 ---

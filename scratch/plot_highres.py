@@ -10,18 +10,19 @@ import time
 def solve_and_plot_bfs():
     from lssem2d.config import Config
     cfg = Config("bfs.toml")
+    cfg.max_steps = 200
     Re = cfg.get("simulation", "Re", 389.0)
     nu = 1.0 / Re
     N = cfg.get("mesh", "N", 6)
     dt = cfg.get("simulation", "dt", 0.1)
     
-    mesh = build_bfs(N)
+    mesh = build_bfs(N, E_in_x=4, E_out_x=40, E_y=2)
     D = diff_matrix(N)
     
     state = SolverState(mesh, D, nu=nu, dt=dt, fac1=1.0)
     from lssem2d.io import save_restart, load_restart, get_latest_restart
     
-    restart_prefix = "bfs_restart_"
+    restart_prefix = "bfs_highres_"
     restart_dir = "."
     start_step = 0
     current_time = 0.0

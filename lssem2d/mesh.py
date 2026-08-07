@@ -66,22 +66,68 @@ class Mesh:
         
         node_dict = {}
         current_id = 0
-        
+
+        # Merge coincident nodes with a genuine TOLERANCE, not a rounding grid.
+        #
+        # round(x, k) defines fixed buckets, so two points 1e-10 apart still land in
+        # different buckets whenever they straddle a bucket boundary -- no choice of k
+        # fixes that.  Meshes read from a file hit this constantly: coordinates stored
+        # with ~10 significant digits and rebuilt as x0 + hx/2*(xi+1) differ by ~1e-10
+        # between the two elements sharing an edge, and the mesh ends up SILENTLY
+        # disconnected (flow cannot cross the interface).
+        #
+        # Instead bin to integer cells of size TOL and probe the 3x3 neighbourhood:
+        # any two points within TOL are then guaranteed to be found, regardless of
+        # where the cell boundaries fall.  TOL sits far above the reconstruction error
+        # (~1e-10) and far below the smallest LGL spacing (O(h/p^2), ~1e-3 here).
+        TOL = 1.0e-8
+
         for e in range(self.nelem):
             for i in range(self.nterm):
                 for j in range(self.nterm):
                     x = self.xnod[e, i]
                     y = self.ynod[e, j]
-                    
-                    # Rounding to avoid floating point issues (1e-10 is safe for domain sizes ~O(1))
-                    key = (round(x, 10), round(y, 10))
-                    
-                    if key not in node_dict:
-                        node_dict[key] = current_id
+
+                    cx = int(np.floor(x / TOL))
+                    cy = int(np.floor(y / TOL))
+                    gid = None
+                    for dx in (-1, 0, 1):
+                        for dy in (-1, 0, 1):
+                            hit = node_dict.get((cx + dx, cy + dy))
+                            if hit is not None:
+                                gid = hit
+                                break
+                        if gid is not None:
+                            break
+                    if gid is None:
+                        gid = current_id
                         current_id += 1
-                    
-                    self.gidx[e, i, j] = node_dict[key]
-                    
+                    node_dict[(cx, cy)] = gid
+
+                    self.gidx[e, i, j] = gid
+
+        # Guard: every neighbour pair must share its entire edge after hashing.
+        n = self.nterm
+        unmerged = 0
+        for e in range(self.nelem):
+            for d in range(4):
+                j2 = self.neighbour[e, d]
+                if j2 < 0:
+                    continue
+                if d in (0, 1):
+                    a = [self.gidx[e, 0 if d == 0 else -1, k] for k in range(n)]
+                    b = [self.gidx[j2, -1 if d == 0 else 0, k] for k in range(n)]
+                else:
+                    a = [self.gidx[e, k, 0 if d == 2 else -1] for k in range(n)]
+                    b = [self.gidx[j2, k, -1 if d == 2 else 0] for k in range(n)]
+                if a != b:
+                    unmerged += 1
+        if unmerged:
+            raise ValueError(
+                f"compute_global_indices: {unmerged} neighbour edges were not merged "
+                f"(snap tolerance 1e-{SNAP} too tight for this mesh's coordinate "
+                f"precision). The mesh would be silently disconnected.")
+
         # Build scipy.sparse gather-scatter matrices Q and QT
         import scipy.sparse as sp
         flat_idx = self.gidx.ravel()
@@ -151,7 +197,7 @@ def build_channel(L_x, L_y, E_x, E_y, N, bcs=(0, 0, 1, 1)):
     mesh.compute_global_indices()
     return mesh
 
-def build_bfs(N):
+def build_bfs(N, E_in_x=2, E_out_x=20, E_y=1):
     """
     Backward-facing step with an upstream inlet channel.
     Let's build a standard geometry:
@@ -162,29 +208,22 @@ def build_bfs(N):
     # 2 elements for inlet, 6 elements for expansion
     L_in = 2.0
     L_out = 20.0
-    H = 1.0
+    H_in = 0.5
+    H_step = 0.5
     
     # We will just construct this manually block by block.
-    # Block 1 (Inlet): [-2, 0] x [0, 1] (2x1 elements)
-    # Block 2 (Step/Outlet top): [0, 20] x [0, 1] (10x1 elements)
-    # Block 3 (Step/Outlet bot): [0, 20] x [-1, 0] (10x1 elements)
-    E_in_x = 2
-    E_out_x = 10
-    E_y = 1
+    # Block 1 (Inlet): [-2, 0] x [0.5, 1.0] (2x1 elements)
+    # Block 2 (Outlet Top): [0, 20] x [0.5, 1.0] (10x1 elements)
+    # Block 3 (Outlet Bot): [0, 20] x [0, 0.5] (10x1 elements)
     
     nelem = E_in_x * E_y + E_out_x * E_y + E_out_x * E_y
     mesh = Mesh(nelem, N)
     
     hx_in = L_in / E_in_x
-    hy_in = H / E_y
+    hy_in = H_in / E_y
     
     hx_out = L_out / E_out_x
-    hy_out = H / E_y
-    
-    # Needs full manual construction; just placing elements and coordinate hash
-    # will handle connectivity! We only need neighbours for `neighbour` array consistency.
-    # A generic unstructured quadrilateral mesher from block data is better, 
-    # but since tests only need a basic BFS, we'll keep it simple.
+    hy_out = H_step / E_y
     
     e = 0
     # Inlet
@@ -192,7 +231,7 @@ def build_bfs(N):
     for ex in range(E_in_x):
         for ey in range(E_y):
             mesh.x0[e] = -L_in + ex * hx_in
-            mesh.y0[e] = ey * hy_in
+            mesh.y0[e] = H_step + ey * hy_in
             mesh.hx[e] = hx_in
             mesh.hy[e] = hy_in
             elem_inlet[ex, ey] = e
@@ -203,9 +242,9 @@ def build_bfs(N):
     for ex in range(E_out_x):
         for ey in range(E_y):
             mesh.x0[e] = ex * hx_out
-            mesh.y0[e] = ey * hy_out
+            mesh.y0[e] = H_step + ey * hy_in
             mesh.hx[e] = hx_out
-            mesh.hy[e] = hy_out
+            mesh.hy[e] = hy_in
             elem_out_top[ex, ey] = e
             e += 1
             
@@ -214,7 +253,7 @@ def build_bfs(N):
     for ex in range(E_out_x):
         for ey in range(E_y):
             mesh.x0[e] = ex * hx_out
-            mesh.y0[e] = -H + ey * hy_out
+            mesh.y0[e] = ey * hy_out
             mesh.hx[e] = hx_out
             mesh.hy[e] = hy_out
             elem_out_bot[ex, ey] = e

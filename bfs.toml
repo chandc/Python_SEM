@@ -1,7 +1,7 @@
 [simulation]
 Re = 389.0
 dt = 0.1
-max_steps = 10000
+max_steps = 2000
 save_interval = 50
 
 [mesh]
@@ -10,5 +10,7 @@ N = 6
 [solver]
 max_newton = 5
 newton_tol = 1e-4
-newton_factor = 0.1
+cgsfac = 1e-3
+newton_factor = 1e-3
+cg_max_iter = 40000
 verbose = false

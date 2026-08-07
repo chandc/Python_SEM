@@ -38,14 +38,21 @@ def test_wq_sum():
     
     assert abs(total_area - expected_area) < 1e-12
     
-    # Check BFS as well
-    # Inlet: 2 * 1 = 2
-    # Outlet top: 6 * 1 = 6
-    # Outlet bot: 6 * 1 = 6
-    # Total = 14
+    # Check BFS as well.
+    # build_bfs: L_in=2, L_out=20, H_in=H_step=0.5
+    #   Inlet      [-2, 0] x [0.5, 1.0] =  2 * 0.5 =  1
+    #   Outlet top [0, 20] x [0.5, 1.0] = 20 * 0.5 = 10
+    #   Outlet bot [0, 20] x [0.0, 0.5] = 20 * 0.5 = 10
+    #   Total = 21
     mesh_bfs = build_bfs(N=3)
     total_area_bfs = np.sum(mesh_bfs.wq)
-    assert abs(total_area_bfs - 14.0) < 1e-12
+    assert abs(total_area_bfs - 21.0) < 1e-12
+
+    # The invariant behind that number: per element, the quadrature weights must
+    # integrate to the element area.  Derived from the mesh, so unlike the total
+    # above it cannot go stale if the geometry is retuned.
+    elem_area = np.sum(mesh_bfs.wq, axis=(1, 2))
+    np.testing.assert_allclose(elem_area, mesh_bfs.hx * mesh_bfs.hy, atol=1e-14)
 
 def test_neighbour_consistency():
     # c) Neighbour/BC arrays are self-consistent: if neighbour[e,E]=f then neighbour[f,W]=e.

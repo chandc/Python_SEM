@@ -45,10 +45,11 @@ def test_cavity():
     newton_tol = cfg.get("solver", "newton_tol", 1e-5)
     newton_factor = cfg.get("solver", "newton_factor", 0.1)
     verbose = cfg.get("solver", "verbose", True)
+    cgsfac = cfg.get("solver", "cgsfac", 0.0)
     
     for step in range(max_steps):
         print(f"Time step {step}")
-        U_new = step_bdf(state, U_history, time=0.0, max_newton=max_newton, newton_tol=newton_tol, newton_factor=newton_factor, pin_p=True, verbose=verbose)
+        U_new = step_bdf(state, U_history, time=0.0, max_newton=max_newton, newton_tol=newton_tol, newton_factor=newton_factor, pin_p=True, verbose=verbose, cgsfac=cgsfac)
         # Check change against previous state
         diff = np.max(np.abs(U_history[0] - U_history[1]))
         print(f"  -> Step diff (steady state convergence): {diff:.2e}")

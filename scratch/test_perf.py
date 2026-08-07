@@ -22,7 +22,7 @@ def test_cavity():
     
     t0 = time.time()
     for step in range(20):
-        U_new = step_bdf(state, U_history, time=0.0, max_newton=3, newton_tol=1e-5, newton_factor=0.1, pin_p=True, verbose=False)
+        U_new = step_bdf(state, U_history, time=0.0, max_newton=3, newton_tol=1e-5, newton_factor=0.1, pin_p=True, verbose=False, cgsfac=0.3)
         diff = np.max(np.abs(U_history[0] - U_history[1]))
     
     t1 = time.time()

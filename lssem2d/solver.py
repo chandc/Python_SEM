@@ -50,7 +50,7 @@ def compute_jacobi_old(state, fu, fv, pin_p=False):
     
     return M_inv
 
-def compute_jacobi(state, fu, fv, pin_p=False, extra_shape=False):
+def compute_jacobi(state, fu, fv, pin_p=False):
     """
     Computes the exact diagonal of the assembled VVP operator A by applying 
     the local element operator L to unit vectors.
@@ -78,15 +78,21 @@ def compute_jacobi(state, fu, fv, pin_p=False, extra_shape=False):
     ux, uy = e_(state.dfu_dx), e_(state.dfu_dy)
     vx, vy = e_(state.dfv_dx), e_(state.dfv_dy)
 
+    # Rows 1-2 (momentum) carry the dt weighting applied in lssem.apply_L, so every
+    # a_mk = dR_m/dU_k for m in {1,2} is scaled by dt.  Rows 3-4 (continuity, vorticity)
+    # are unweighted.  Keeping these consistent with apply_L is mandatory: scaling the
+    # operator without scaling this diagonal destroys the preconditioner.
+    dtl = state.dt if state.dt != 0 else 1.0
     conv = uo * Px + vo * Py
-    base = (P if extra_shape else 0.0)
-    a11 = invdt * P + (base + conv + ux * P)
-    a22 = invdt * P + (base + conv + vy * P)
-    a12 = P * uy
-    a21 = P * vx
-    a13, a14 = Px,  nu * Py
-    a23, a24 = Py, -nu * Px
-    a31, a32 = Px,  Py
+    a11 = (invdt * P + (conv + ux * P)) * dtl
+    a22 = (invdt * P + (conv + vy * P)) * dtl
+    a12 = P * uy * dtl
+    a21 = P * vx * dtl
+    a13, a14 = Px * dtl,  nu * Py * dtl
+    a23, a24 = Py * dtl, -nu * Px * dtl
+    
+    a31, a32 = Px, Py
+    
     a41, a42, a44 = Py, -Px, P
 
     w = m.wq[:, None, None, :, :]
@@ -105,13 +111,18 @@ def compute_jacobi(state, fu, fv, pin_p=False, extra_shape=False):
     
     return M_inv
 
-def pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=False, max_iter=5000, tol=1e-6, cgsfac=0.0):
+def pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=False, max_iter=5000, tol=1e-6, cgsfac=0.0, precond=None):
     """
     Matrix-free right-preconditioned Conjugate Gradient solver for A * dU = b.
     A(v) = assemble(mask * apply_LT(apply_L(mask * v)))
     Uses a multiplicity-weighted inner product to guarantee symmetry.
     Absolute convergence test, matching the Fortran: ||r|| < tol.
+
+    precond: optional callable z = precond(r).  Defaults to the diagonal
+    (Jacobi) preconditioner z = M_inv * r.  See lssem2d.precond for the
+    Chebyshev and p-multigrid alternatives.
     """
+    _M = precond if precond is not None else (lambda _r: M_inv * _r)
     b_norm = np.sqrt(np.sum(b * b * multiplicity_weight))
     if b_norm < tol:                       # already converged - nothing to do
         return np.zeros_like(b), 0
@@ -120,7 +131,7 @@ def pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=False, max_ite
 
     x = np.zeros_like(b)
     r = b.copy()
-    z = M_inv * r
+    z = _M(r)
     p = z.copy()
     
     rho_prev = np.sum(r * z * multiplicity_weight)
@@ -146,12 +157,12 @@ def pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=False, max_ite
                 return x, i + 1
             # Drift detected! Restart search direction with true residual
             r = true_r
-            z = M_inv * r                                    # restart cleanly
+            z = _M(r)                                        # restart cleanly
             p = z.copy()
             rho_prev = np.sum(r * z * multiplicity_weight)
             continue
         
-        z = M_inv * r
+        z = _M(r)
         rho = np.sum(r * z * multiplicity_weight)
         if abs(rho_prev) < 1e-20:
             return x, i + 1
@@ -163,7 +174,7 @@ def pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=False, max_ite
     print(f"Warning: PCG did not converge after {max_iter} iterations. Relative residual: {np.sqrt(np.sum(r*r*multiplicity_weight))/b_norm:.2e}")
     return x, max_iter
 
-def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000):
+def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0):
     """
     Performs one Newton sub-iteration.
     U: current guess for the new time step, shape (nelem, n, n, 4)
@@ -190,7 +201,7 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
     # which computes fu*u_x + u*dfu_dx. By passing fu=u/2, fv=v/2, we get exactly the true residual!
     state.update_linearisation(U[..., 0] / 2.0, U[..., 1] / 2.0)
     # 2. Compute Exact Diagonal of A (Jacobi Preconditioner)
-    M_inv = compute_jacobi(state, U[..., 0] / 2.0, U[..., 1] / 2.0, pin_p=pin_p, extra_shape=False)
+    M_inv = compute_jacobi(state, U[..., 0] / 2.0, U[..., 1] / 2.0, pin_p=pin_p)
     su_nl = apply_L(state, U, U[..., 0] / 2.0, U[..., 1] / 2.0) - su_history
     if f_known is not None:
         wq = state.mesh.wq[..., None]
@@ -207,14 +218,14 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
     b = -c_gs * mask_global
     
     # 3. Solve A * dU = b
-    dU, cg_iters = pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=pin_p, max_iter=cg_max_iter)
+    dU, cg_iters = pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=pin_p, max_iter=cg_max_iter, cgsfac=cgsfac)
     
     # 4. Update U
     U_new = U + dU
     
     return U_new, dU, cg_iters
 
-def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_factor=0.1, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, verbose=False):
+def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_factor=0.1, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, verbose=False):
     """
     Advances one time step using BDF1 or BDF2.
     U_history: list of previous states [U_n, U_{n-1}]. 
@@ -231,11 +242,13 @@ def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_f
         state.fac1 = 1.5
         alpha = [2.0, -0.5]
         
-    # Build historical source term (only applies to u and v momentum equations)
+    # Build historical source term (only applies to u and v momentum equations).
+    # No 1/dt: apply_L now emits momentum rows as fac1*u + dt*(...), so the history
+    # term must carry the same dt weighting or the residual mixes two scalings.
     su_history = np.zeros_like(U_history[0])
     for m in range(len(alpha)):
-        su_history[..., 0] += (alpha[m] / dt) * U_history[m][..., 0] * state.mesh.wq
-        su_history[..., 1] += (alpha[m] / dt) * U_history[m][..., 1] * state.mesh.wq
+        su_history[..., 0] += alpha[m] * U_history[m][..., 0] * state.mesh.wq
+        su_history[..., 1] += alpha[m] * U_history[m][..., 1] * state.mesh.wq
         
     # Compute and cache multiplicity weights for the PCG solver inner product
     if not hasattr(state, 'multiplicity_weight'):
@@ -255,7 +268,7 @@ def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_f
     du_norm_0 = None
     
     for i in range(max_newton):
-        U, dU, cg_iters = newton_step(state, U, su_history, state.M_inv, state.multiplicity_weight, time=time, f_known=f_known, custom_inlet=custom_inlet, custom_lid=custom_lid, exact_solution=exact_solution, pin_p=pin_p, cg_max_iter=cg_max_iter)
+        U, dU, cg_iters = newton_step(state, U, su_history, state.M_inv, state.multiplicity_weight, time=time, f_known=f_known, custom_inlet=custom_inlet, custom_lid=custom_lid, exact_solution=exact_solution, pin_p=pin_p, cg_max_iter=cg_max_iter, cgsfac=cgsfac)
         
         du_norm = np.max(np.abs(dU))
         if du_norm_0 is None:

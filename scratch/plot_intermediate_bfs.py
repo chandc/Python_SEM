@@ -49,10 +49,12 @@ def plot_intermediate():
     U_interp = griddata((x_flat, y_flat), u_flat, (X, Y), method='linear', fill_value=0.0)
     V_interp = griddata((x_flat, y_flat), v_flat, (X, Y), method='linear', fill_value=0.0)
     
-    plt.figure(figsize=(12, 4))
-    plt.streamplot(X, Y, U_interp, V_interp, color='k', linewidth=0.5, density=2.0)
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.streamplot(X, Y, U_interp, V_interp, color='k', linewidth=0.5, density=4.0, arrowstyle='-')
+    ax.set_xlim(0, 8)
+    ax.set_ylim(0, 1.0)
     
-    plt.fill_between([-10, 0], [-1, -1], [0, 0], color='white', zorder=10)
+    plt.fill_between([-10, 0], [0, 0], [0.5, 0.5], color='white', zorder=10)
     
     plt.title(f'BFS: Streamlines (Step {start_step})')
     plt.xlabel('x')

@@ -11,7 +11,8 @@ L_x = 1.0
 L_y = 1.0
 
 [solver]
-max_newton = 3
+max_newton = 20
 newton_tol = 1e-5
 newton_factor = 0.1
-verbose = false
+verbose = true
+cgsfac = 0.1
