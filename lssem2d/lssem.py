@@ -9,21 +9,50 @@ def ls_coeffs(state):
     vorticity rows are unweighted, so **a_flux is the least-squares weight of
     momentum against the constraints**.
 
-      legacy    (w_mom is None):  a_mass = fac1,     a_flux = dt,  hist = 1
-      decoupled (w_mom set):      a_mass = fac1/dt,  a_flux = w,   hist = 1/dt
+    The momentum row carries TWO independent weights:
 
-    In the decoupled form **w_mom multiplies ONLY the spatial operator N(u)**.
-    The time-derivative terms keep their natural 1/dt and are never touched by
-    w_mom.  The row is
+        w_mass * [fac1*u - sum_m alpha_m u^{n-m}] / dt   +   w_mom * N(u)
 
-        (1/dt)*[fac1*u - sum(alpha_m u^{n-m})]  +  w_mom * N(u)
+    giving
 
-    At steady state the bracket vanishes identically (BDF: fac1 = sum alpha), so
-    the momentum residual is exactly `w_mom * N(u)` while the continuity and
-    vorticity rows carry weight 1.  **The least-squares weight of momentum
-    against the constraints is therefore w_mom, with no dt in it** -- which is
-    the whole point: in the legacy form that weight is dt, so the time step and
-    the equation weighting cannot be chosen independently.
+      both None (legacy):  a_mass = fac1,            a_flux = dt,     hist = 1
+      w_mom only:          a_mass = fac1/dt,         a_flux = w_mom,  hist = 1/dt
+      both set:            a_mass = w_mass*fac1/dt,  a_flux = w_mom,  hist = w_mass/dt
+
+    w_mass scales the mass and history terms TOGETHER, so they still cancel
+    identically at steady state (BDF gives fac1 = sum alpha_m) and the steady
+    momentum residual is exactly `w_mom * N(u)` regardless of w_mass.  The
+    continuity and vorticity rows carry weight 1, so the steady functional is
+
+        J = int[ w_mom^2 (N_1^2 + N_2^2) + (div u)^2 + (om + u_y - v_x)^2 ]
+
+    WHAT THE TWO PARAMETERS MEAN
+      w_mom             NUMERICAL.  The least-squares weight of momentum against
+                        the constraints -- which equation the solver may violate.
+                        No physical content.
+      w_mass / w_mom    PHYSICAL.  A rescaling of time:  dt_eff = dt*w_mom/w_mass.
+                        Divide the row by w_mom and the bracket appears over
+                        dt*w_mom/w_mass, which is the step the scheme actually
+                        takes.
+
+    So w_mass alone has no physical meaning; it is half of a time rescaling.
+    **For time-accurate runs set w_mass = w_mom** (then dt_eff = dt).  For
+    steady-state runs the group cancels, the converged answer does not depend on
+    w_mass at all, and w_mass/w_mom is a pseudo-time step chosen for convergence
+    rather than accuracy -- larger w_mass means a smaller pseudo-step, more
+    diagonal dominance in the velocity block, slower but more stable.
+
+    Two parameters are needed because (a_mass, a_flux) has two degrees of freedom
+    and each single-parameter form reaches only a line through that plane:
+    w_mom alone pins a_mass = fac1/dt to the time step; scaling the whole row (an
+    earlier, wrong version of this function) pins the ratio a_mass/a_flux and so
+    factors out entirely.
+
+    Note w_mass = dt, w_mom = 1 gives (fac1, 1, 1), which IS legacy at dt=1
+    whatever the nominal dt says -- the scheme then takes unit steps.  That is
+    the configuration measured to reproduce the analytic Poiseuille solution, but
+    the nominal dt becomes decorative, so do not read it as "dt=0.5 with dt=1
+    accuracy".
 
     Why the weighting matters at all: pressure appears ONLY in the momentum
     rows, so the pressure block of L^T L scales as a_flux^2.  When a_flux is
@@ -45,24 +74,36 @@ def ls_coeffs(state):
     """
     dtl = state.dt if state.dt != 0 else 1.0     # dt == 0 => pure steady form
     f1 = state.fac1 if state.dt != 0 else 0.0
-    w = getattr(state, 'w_mom', None)
-    if w is None:
-        return f1, dtl, 1.0
-    return f1/dtl, float(w), 1.0/dtl
+    w_f = getattr(state, 'w_mom', None)
+    w_m = getattr(state, 'w_mass', None)
+    if w_f is None and w_m is None:
+        return f1, dtl, 1.0                      # legacy, untouched
+    if w_f is None:
+        w_f = 1.0
+    if w_m is None:
+        w_m = 1.0
+    # s computed as w_m/dtl and then multiplied into f1, NOT (w_m*f1)/dtl: when
+    # w_mass == dt the ratio is exactly 1.0 and a_mass comes back bit-identical
+    # to fac1.  The other grouping round-trips through a division and loses an ulp.
+    s = float(w_m)/dtl
+    return f1*s, float(w_f), s
 
 
 class SolverState:
     """Holds mesh, operator matrices, and cached linearisation data for the LSSEM solver."""
-    def __init__(self, mesh, D, nu, dt, fac1=1.0, w_mom=None):
+    def __init__(self, mesh, D, nu, dt, fac1=1.0, w_mom=None, w_mass=None):
         self.mesh = mesh
         self.D = D
         self.nu = nu
         self.dt = dt
         self.fac1 = fac1
-        # Least-squares weight of the momentum rows against the constraints.
-        # None => legacy (weight = dt).  1.0 => no penalty, the balanced choice.
-        # See ls_coeffs() for why this is worth decoupling from dt.
+        # Momentum-row weights; see ls_coeffs() for the full contract.
+        #   w_mom   weight on N(u)  -- the LS weight vs the constraints
+        #   w_mass  weight on the time-derivative group (mass AND history)
+        # Both None => legacy behaviour, unchanged.  w_mass/w_mom rescales time:
+        # dt_eff = dt*w_mom/w_mass, so set w_mass = w_mom for time-accurate runs.
         self.w_mom = w_mom
+        self.w_mass = w_mass
         
         self.dfu_dx = None
         self.dfu_dy = None

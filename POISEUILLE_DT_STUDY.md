@@ -3,12 +3,12 @@
 Study date: 2026-08-08. Companion to
 [PRECONDITIONER_AND_DT_STUDY.md](./PRECONDITIONER_AND_DT_STUDY.md), which found
 the BFS steady state to be dt-dependent. This one isolates *why*, on a case with
-a known exact solution, and led to the `w_mom` parameter that decouples the
-least-squares weight from the time step.
+a known exact solution, and led to the `w_mom` / `w_mass` parameters that
+decouple the least-squares weight from the time step.
 
 Reproduce: `scratch/poiseuille_dt.py` (dt sweep), `scratch/plot_poiseuille.py`
 (figure), `scratch/poiseuille_pout.py` (outlet pressure), `scratch/poiseuille_new.py`
-(`w_mom` under the corrected semantics).
+(`w_mom`), `scratch/wmass_run.py` (the two-parameter sweep).
 
 ---
 
@@ -32,13 +32,18 @@ Reproduce: `scratch/poiseuille_dt.py` (dt sweep), `scratch/plot_poiseuille.py`
    every mesh, order, Reynolds number and geometry tested, including both BFS
    grids. It is not a tuned constant.
 
-5. **This is a design flaw, not a tuning knob**, so `w_mom` was added: it
-   multiplies ONLY the spatial operator `N(U)`, leaving the `1/dt` time-derivative
-   terms untouched, so the steady momentum weight is `w_mom` rather than `dt`.
-   Verified against the analytic solution at dt=1 (dp = 1.199994 vs 1.2). It does
-   NOT rescue an arbitrary dt: `a_mass = fac1/dt` stays pinned by the time step,
-   so full decoupling would need a second parameter on the mass term. Default is
-   legacy.
+5. **This is a design flaw, not a tuning knob**, so two weights were added.
+   `w_mom` multiplies only the spatial operator `N(U)`; `w_mass` multiplies the
+   time-derivative group. Together they set the momentum weight and the effective
+   time step independently (`dt_eff = dt·w_mom/w_mass`). Default is legacy.
+
+6. **The decoupling does not rescue small dt, and the sweep says why.** At fixed
+   `dt_eff` a higher momentum weight is more accurate but destabilises the
+   iteration: `dt_eff=0.5` with weight 1 fails to converge (Δp = 15.2) where
+   legacy at the same `dt_eff` and weight 0.5 converges in 60 steps. Legacy's
+   coupling `weight = dt` is a *stable* pairing, not an arbitrary one. And
+   `w_mass = dt, w_mom = 1` turns out to be legacy-at-dt=1 in disguise — the
+   nominal dt becomes decorative.
 
 ---
 
@@ -278,29 +283,76 @@ nothing changes unless asked.
 
 The outlet pressure varies only in the sixth decimal about a mean of −1.199988.
 
-### What it does NOT do — and why
+### `w_mass` — the second weight
 
-**`w_mom` cannot recover the analytic answer at an arbitrary dt.** The
-configuration that produces it is `(a_mass, a_flux) = (1.5, 1.0)`, and under
-these semantics `a_mass = fac1/dt` is **pinned by the time step**:
+`w_mom` alone pins `a_mass = fac1/dt` to the time step, so it reaches only a line
+in the `(a_mass, a_flux)` plane. `w_mass` supplies the missing degree of freedom
+by weighting the time-derivative group:
 
-| | a_mass | a_flux | reaches (1.5, 1.0)? |
-|---|---|---|---|
-| legacy dt=0.5 | 1.5 ✓ | 0.5 ✗ | no |
-| `w_mom`=1 dt=0.5 | 3.0 ✗ | 1.0 ✓ | no |
-| `w_mom`=1 dt=1.0 | 1.5 ✓ | 1.0 ✓ | **yes** |
+```python
+SolverState(mesh, D, nu, dt, fac1, w_mom=1.0, w_mass=0.5)
+```
 
-Each form gets one of the two right at dt=0.5; neither gets both. Measured at
-dt=0.5, `w_mom`=1: the run **does not converge** — the rate `|dU|/dt` sits at
-~31 after 60 steps, unchanged from step 0, with `max|u|` oscillating between 1.5
-and 6.2, while legacy at the same dt reaches machine zero by step 59. The
-coefficients there are exactly `2x` the legacy row (`1/dt = 2`), and weighting
-momentum twice as hard against the constraints destabilises the outer iteration.
+```
+w_mass * [fac1*u - sum_m alpha_m u^{n-m}] / dt   +   w_mom * N(U)
+```
 
-So at dt=1.0 the parameter reproduces what legacy already did, and away from
-dt=1 it does not rescue the weighting. **Fully decoupling would require a second
-parameter on the mass term**, so that `(a_mass, a_flux)` can be set
-independently at any dt. That is not implemented.
+It multiplies the mass and history terms **together**, so they still cancel
+identically at steady state and the steady residual remains exactly
+`w_mom * N(U)` — `w_mass` cannot corrupt the converged answer, only the path
+taken and the conditioning.
+
+| | nature | meaning |
+|---|---|---|
+| `w_mom` | numerical | least-squares weight of momentum against the constraints |
+| `w_mass / w_mom` | physical | a time rescaling: **`dt_eff = dt · w_mom / w_mass`** |
+
+`w_mass` alone has no physical meaning — it is half of a time rescaling. **Set
+`w_mass = w_mom` for time-accurate runs** (then `dt_eff = dt`). For steady-state
+work the group cancels, so `w_mass/w_mom` acts as a pseudo-time step chosen for
+convergence rather than accuracy: larger `w_mass` gives a smaller pseudo-step and
+more diagonal dominance in the velocity block — slower but more stable.
+
+Gates, all passing: `w_mom` absent from `a_mass`/`a_hist`; `a_mass` independent
+of `w_mom`; steady cancellation exactly `0.000e+00` for arbitrary `w_mass`;
+legacy untouched; `w_mass = w_mom = dt` bit-identical to legacy; `w_mass = dt,
+w_mom = 1` bit-identical to legacy-at-dt=1 at every nominal dt; numba parity
+1.1e-16 – 1.7e-16; self-adjointness 2.2e-16 – 7.8e-16; `dt_eff` matches
+`a_flux·fac1/a_mass` exactly; 47 tests on both backends.
+
+### What the two-parameter space actually shows
+
+| config | a_mass | a_flux | **dt_eff** | steps | converged | prof err | Δp |
+|---|---|---|---|---|---|---|---|
+| legacy dt=1.0 | 1.5 | 1.0 | 1.0 | 279 | yes | 5.255e-04 | 1.19999 |
+| dt=0.5, `w_mass`=0.5, `w_mom`=1 | 1.5 | 1.0 | 1.0 | 279 | yes | 5.255e-04 | 1.19999 |
+| dt=0.1, `w_mass`=0.1, `w_mom`=1 | 1.5 | 1.0 | 1.0 | 279 | yes | 5.255e-04 | 1.19999 |
+| dt=0.5, `w_mass`=1.0, `w_mom`=1 | 3.0 | 1.0 | **0.5** | 600 | **no** | 7.78e-01 | **15.22** |
+| legacy dt=0.5 | 1.5 | 0.5 | **0.5** | 60 | yes | 9.67e-02 | 1.23704 |
+
+Three conclusions, none of them the convenient one.
+
+**Smaller dt does not buy stability here.** Every converged run has
+`dt_eff = 1.0`; the one that failed has the *smaller* effective step.
+
+**It is the weight, not the step, that destabilises.** The last two rows share
+`dt_eff = 0.5` and differ only in momentum weight, 1.0 against 0.5. The
+higher-weight row is exactly `2x` the legacy row and does not converge; the
+legacy row settles in 60 steps. So at fixed `dt_eff`, raising the momentum weight
+improves accuracy but destabilises the iteration — and legacy's coupling
+`weight = dt` turns out to be a *stable* pairing, not merely an arbitrary one.
+
+**`w_mass = dt, w_mom = 1` is legacy-at-dt=1 in disguise.** Rows 1–3 are
+identical to every digit and take the same 279 steps, at nominal dt of 1.0, 0.5
+and 0.1 — verified bit-identical at the operator level for `apply_L`, `apply_LT`
+and `compute_jacobi`. The nominal dt becomes decorative. This does **not** give a
+small time step with dt=1 accuracy; it silently takes unit steps.
+
+**Practical upshot:** the useful corner of the two-parameter space is
+`dt_eff ≈ 1` with `weight ≈ 1`, and the simplest route there is `dt = 1`. The
+parameters let you express the alternatives and show why they do not help, which
+beats leaving it a matter of argument — but they are not a way to run at small dt
+and keep dt=1 accuracy.
 
 ### An earlier version of this parameter was wrong
 
