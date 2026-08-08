@@ -6,8 +6,9 @@ the BFS steady state to be dt-dependent. This one isolates *why*, on a case with
 a known exact solution, and led to the `w_mom` parameter that decouples the
 least-squares weight from the time step.
 
-Reproduce: `scratch/poiseuille_dt.py`, `scratch/plot_poiseuille.py`,
-`scratch/poiseuille_wmom.py`.
+Reproduce: `scratch/poiseuille_dt.py` (dt sweep), `scratch/plot_poiseuille.py`
+(figure), `scratch/poiseuille_pout.py` (outlet pressure), `scratch/poiseuille_new.py`
+(`w_mom` under the corrected semantics).
 
 ---
 
@@ -31,9 +32,13 @@ Reproduce: `scratch/poiseuille_dt.py`, `scratch/plot_poiseuille.py`,
    every mesh, order, Reynolds number and geometry tested, including both BFS
    grids. It is not a tuned constant.
 
-5. **This is a design flaw, not a tuning knob**, so `w_mom` was added to
-   decouple the weight from dt. `w_mom=1` is the balanced choice; the default
-   preserves the legacy behaviour exactly.
+5. **This is a design flaw, not a tuning knob**, so `w_mom` was added: it
+   multiplies ONLY the spatial operator `N(U)`, leaving the `1/dt` time-derivative
+   terms untouched, so the steady momentum weight is `w_mom` rather than `dt`.
+   Verified against the analytic solution at dt=1 (dp = 1.199994 vs 1.2). It does
+   NOT rescue an arbitrary dt: `a_mass = fac1/dt` stays pinned by the time step,
+   so full decoupling would need a second parameter on the mass term. Default is
+   legacy.
 
 ---
 
@@ -200,51 +205,118 @@ wrong velocity.
 ## 4. The `w_mom` parameter
 
 Because dt is doing two unrelated jobs — temporal resolution and equation
-weighting — one number cannot optimise both. `SolverState` now takes `w_mom`:
+weighting — one number cannot optimise both. `SolverState` takes `w_mom`:
 
 ```python
-SolverState(mesh, D, nu, dt, fac1, w_mom=1.0)   # momentum weighted 1, independent of dt
+SolverState(mesh, D, nu, dt, fac1, w_mom=1.0)
 ```
 
-The coefficients live in one place, `lssem.ls_coeffs()`, used by `apply_L`,
+### What it does to the equations
+
+The momentum PDE discretised in time is
+
+```
+(fac1*u - sum_m alpha_m u^{n-m}) / dt  +  N(U) = 0
+```
+
+with `N(U) = u.grad(u) + grad(p) + nu*curl(omega)`. Making this a least-squares
+row requires choosing a scale, and that choice is not neutral because the other
+three rows are fixed at weight 1.
+
+```
+legacy   :  fac1*u - sum alpha_m u^{n-m}          +  [dt] * N(U)
+w_mom set:  (fac1/dt)*u - (1/dt) sum alpha_m u^{n-m}  +  [w] * N(U)
+```
+
+**`w_mom` multiplies ONLY `N(U)`.** It does not appear in the mass term, the
+history term, or either constraint row. The time-derivative terms keep their
+natural `1/dt`.
+
+| | a_mass | a_flux | a_hist |
+|---|---|---|---|
+| legacy | `fac1` | `dt` | 1 |
+| `w_mom` set | `fac1/dt` | `w_mom` | `1/dt` |
+
+Because BDF gives `fac1 = sum alpha_m`, the mass and history terms cancel
+identically at steady state (measured: exactly `0.000e+00`). So the functional
+being minimised at steady state is
+
+```
+J = integral[ w^2 (N_1^2 + N_2^2) + (div u)^2 + (omega + u_y - v_x)^2 ]
+```
+
+against legacy's identical expression with **`dt^2`** in place of `w^2`. That
+single substitution is the whole change: the momentum weight becomes `w`, with
+no dt in it.
+
+The coefficients live in one place, `lssem.ls_coeffs()`, consumed by `apply_L`,
 `apply_LT`, `compute_jacobi`, `step_bdf`'s history term, and both numba wrappers
-— the five places that must agree or the mass terms stop cancelling at steady
-state.
+— the five sites that must agree or the mass terms stop cancelling and the
+solver silently converges to a modified equation. **Default is legacy**, so
+nothing changes unless asked.
 
-```
-legacy    (w_mom is None):  a_mass = fac1,           a_flux = dt
-decoupled (w_mom set):      a_mass = w_mom*fac1/dt,  a_flux = w_mom
-```
-
-`a_flux` is the least-squares weight. **Default is legacy**, so nothing changes
-unless asked, and `w_mom = dt` reproduces legacy **bit-identically** (verified at
-dt = 0.05, 0.1, 0.5, 1, 2, 5 for `apply_L`, `apply_LT` and `compute_jacobi`).
-
-> Implementation note: `a_mass` is computed as `f1*(w/dtl)`, not `(w*f1)/dtl`.
-> The second grouping round-trips through a division and loses an ulp, breaking
-> the bit-identical guarantee at dt=0.1.
-
-Suite: 47 passed under both the numpy and numba backends after the change.
-
-### Verification status
-
-Verified (`scratch/` gates, all passing):
+### Verification
 
 | gate | result |
 |---|---|
-| `w_mom = dt` reproduces legacy bit-identically, dt ∈ {0.05,0.1,0.5,1,2,5} | pass, for `apply_L`, `apply_LT` and `compute_jacobi` |
-| `a_flux` independent of dt when `w_mom` is set | pass (1.0 at every dt) |
-| legacy `a_flux` does depend on dt | confirmed (0.05 → 5.0) |
-| numba backend agrees with numpy for a decoupled weight | 1.3e-16 / 1.0e-16 |
+| A — `w` absent from `a_mass` and `a_hist` | exact at every (dt, w) |
+| B — `a_mass` independent of `w` at fixed dt | 15.0 at dt=0.1, 1.5 at dt=1.0 |
+| C — steady mass term cancels, residual = `w*N(U)` | exactly `0.000e+00` |
+| D — legacy path untouched | `(fac1, dt, 1)` at every dt |
+| E — dt=1.0, `w_mom`=1.0 reproduces legacy | **bit-identical**, all three operators |
+| F — numba matches numpy | 1.0e-16 – 2.2e-16 |
+| G — `apply_LT` still the exact transpose | 1.7e-16 – 4.2e-16 |
 | full suite, both backends | 47 passed |
 
-**NOT yet verified — the physics claim.** The point of the parameter is that with
-`w_mom` fixed, the *converged steady state* should no longer depend on dt. That
-sweep (`scratch/poiseuille_wmom.py`) had not completed when this was written:
-`w_mom=1` at small dt gives a mass coefficient `fac1/dt = 30`, a much stiffer
-solve than the legacy form, and the dt=0.05 case was still running after ~90
-minutes. **Do not assume the decoupling removes the dt sensitivity until that
-table exists.** The implementation is verified; the claimed benefit is not.
+**Confirmed against the analytic solution** (dt=1.0, `w_mom`=1.0, Jacobi):
+
+| quantity | computed | exact | error |
+|---|---|---|---|
+| pressure drop over L=10 | **1.199994** | 1.200000 | 5.3e-06 |
+| outlet pressure spread | 1.50e-03 | 0 | 0.12% of dp |
+| velocity profile | 5.26e-04 | 0 | 5.3e-04 |
+
+The outlet pressure varies only in the sixth decimal about a mean of −1.199988.
+
+### What it does NOT do — and why
+
+**`w_mom` cannot recover the analytic answer at an arbitrary dt.** The
+configuration that produces it is `(a_mass, a_flux) = (1.5, 1.0)`, and under
+these semantics `a_mass = fac1/dt` is **pinned by the time step**:
+
+| | a_mass | a_flux | reaches (1.5, 1.0)? |
+|---|---|---|---|
+| legacy dt=0.5 | 1.5 ✓ | 0.5 ✗ | no |
+| `w_mom`=1 dt=0.5 | 3.0 ✗ | 1.0 ✓ | no |
+| `w_mom`=1 dt=1.0 | 1.5 ✓ | 1.0 ✓ | **yes** |
+
+Each form gets one of the two right at dt=0.5; neither gets both. Measured at
+dt=0.5, `w_mom`=1: the run **does not converge** — the rate `|dU|/dt` sits at
+~31 after 60 steps, unchanged from step 0, with `max|u|` oscillating between 1.5
+and 6.2, while legacy at the same dt reaches machine zero by step 59. The
+coefficients there are exactly `2x` the legacy row (`1/dt = 2`), and weighting
+momentum twice as hard against the constraints destabilises the outer iteration.
+
+So at dt=1.0 the parameter reproduces what legacy already did, and away from
+dt=1 it does not rescue the weighting. **Fully decoupling would require a second
+parameter on the mass term**, so that `(a_mass, a_flux)` can be set
+independently at any dt. That is not implemented.
+
+### An earlier version of this parameter was wrong
+
+The first implementation used `a_mass = w*fac1/dt`, `a_hist = w/dt` — scaling
+the mass and history terms by `w` as well. That makes `w` factor out of the
+entire row:
+
+```
+a_mass*u + a_flux*N - a_hist*sum(alpha u_old)  =  (w/dt) * [legacy row]
+```
+
+so `w` could only rescale the row and could never change the balance between the
+time-derivative term and `N(U)`. Sweeps run under those semantics (dt=0.1,
+`w_mom` 0.5–0.7) showed no weight beating legacy, but that finding says nothing
+about the corrected form and has been removed rather than reinterpreted. The one
+data point that survives is `w_mom = 1`, where the two forms coincide.
 
 ---
 

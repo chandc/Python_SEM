@@ -9,39 +9,46 @@ def ls_coeffs(state):
     vorticity rows are unweighted, so **a_flux is the least-squares weight of
     momentum against the constraints**.
 
-      legacy   (w_mom is None):  a_mass = fac1,           a_flux = dt
-      decoupled (w_mom set):     a_mass = w_mom*fac1/dt,  a_flux = w_mom
+      legacy    (w_mom is None):  a_mass = fac1,     a_flux = dt,  hist = 1
+      decoupled (w_mom set):      a_mass = fac1/dt,  a_flux = w,   hist = 1/dt
 
-    Why this exists: in the legacy form the weight IS the time step, so dt does
-    two unrelated jobs -- setting temporal resolution and deciding which equation
-    the solver is allowed to violate.  They cannot both be optimised with one
-    number.  Pressure appears only in the momentum rows, so the pressure block of
-    L^T L scales as a_flux^2; at small dt it is under-weighted, L^T L develops a
-    near-null space in p, and the exact solution stops being the unique
-    minimiser.  Measured on Poiseuille: dt=0.05 gives 98% velocity error on a
-    problem whose exact solution is representable, while dt=1 gives 5e-4.
-    The equal-weight point is a_flux = 1, and it is a_flux = 1 for every mesh,
-    order, Reynolds number and geometry tested (the ratio collapses to a_flux^2
-    once the gradient terms dominate the mass term, i.e. once resolved).
+    In the decoupled form **w_mom multiplies ONLY the spatial operator N(u)**.
+    The time-derivative terms keep their natural 1/dt and are never touched by
+    w_mom.  The row is
 
-    Setting w_mom = dt reproduces the legacy behaviour exactly, bit for bit.
+        (1/dt)*[fac1*u - sum(alpha_m u^{n-m})]  +  w_mom * N(u)
 
-    Returns (a_mass, a_flux, hist_scale).  hist_scale multiplies the BDF history
-    term so it continues to match a_mass -- if these two disagree the mass terms
-    no longer cancel at steady state and the solver converges to the wrong
-    equation.
+    At steady state the bracket vanishes identically (BDF: fac1 = sum alpha), so
+    the momentum residual is exactly `w_mom * N(u)` while the continuity and
+    vorticity rows carry weight 1.  **The least-squares weight of momentum
+    against the constraints is therefore w_mom, with no dt in it** -- which is
+    the whole point: in the legacy form that weight is dt, so the time step and
+    the equation weighting cannot be chosen independently.
+
+    Why the weighting matters at all: pressure appears ONLY in the momentum
+    rows, so the pressure block of L^T L scales as a_flux^2.  When a_flux is
+    small the pressure is under-weighted, L^T L develops a near-null space in p,
+    and the exact solution stops being the UNIQUE minimiser.  Measured on
+    Poiseuille, whose exact solution is exactly representable: legacy at dt=0.05
+    (hence a_flux=0.05) gives 98% velocity error and an outlet pressure varying
+    by 4.3x the total streamwise pressure drop, while a_flux=1 gives 5e-4 and a
+    flat outlet pressure.
+
+    An earlier version of this function multiplied the mass and history terms by
+    w_mom as well (a_mass = w*fac1/dt, hist = w/dt).  That made w_mom factor out
+    of the entire row, so it could only rescale the row and never change the
+    balance between the time-derivative term and N(u).  It is fixed here.
+
+    Returns (a_mass, a_flux, hist_scale).  a_mass and hist_scale must stay in
+    step -- if they disagree the mass terms no longer cancel at steady state and
+    the solver silently converges to a modified equation.
     """
     dtl = state.dt if state.dt != 0 else 1.0     # dt == 0 => pure steady form
     f1 = state.fac1 if state.dt != 0 else 0.0
     w = getattr(state, 'w_mom', None)
     if w is None:
         return f1, dtl, 1.0
-    w = float(w)
-    # Reassociated as f1*(w/dtl), NOT (w*f1)/dtl: when w == dt the ratio is
-    # exactly 1.0 and a_mass comes back bit-identical to the legacy f1.  The
-    # other grouping round-trips through a division and loses an ulp.
-    s = w/dtl
-    return f1*s, w, s
+    return f1/dtl, float(w), 1.0/dtl
 
 
 class SolverState:
