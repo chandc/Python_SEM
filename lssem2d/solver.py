@@ -82,14 +82,15 @@ def compute_jacobi(state, fu, fv, pin_p=False):
     # a_mk = dR_m/dU_k for m in {1,2} is scaled by dt.  Rows 3-4 (continuity, vorticity)
     # are unweighted.  Keeping these consistent with apply_L is mandatory: scaling the
     # operator without scaling this diagonal destroys the preconditioner.
-    dtl = state.dt if state.dt != 0 else 1.0
+    from .lssem import ls_coeffs
+    a_mass, a_flux, _ = ls_coeffs(state)
     conv = uo * Px + vo * Py
-    a11 = (invdt * P + (conv + ux * P)) * dtl
-    a22 = (invdt * P + (conv + vy * P)) * dtl
-    a12 = P * uy * dtl
-    a21 = P * vx * dtl
-    a13, a14 = Px * dtl,  nu * Py * dtl
-    a23, a24 = Py * dtl, -nu * Px * dtl
+    a11 = a_mass * P + a_flux * (conv + ux * P)
+    a22 = a_mass * P + a_flux * (conv + vy * P)
+    a12 = P * uy * a_flux
+    a21 = P * vx * a_flux
+    a13, a14 = Px * a_flux,  nu * Py * a_flux
+    a23, a24 = Py * a_flux, -nu * Px * a_flux
     
     a31, a32 = Px, Py
     
@@ -245,10 +246,16 @@ def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_f
     # Build historical source term (only applies to u and v momentum equations).
     # No 1/dt: apply_L now emits momentum rows as fac1*u + dt*(...), so the history
     # term must carry the same dt weighting or the residual mixes two scalings.
+    # hist_scale keeps the history term matching a_mass in apply_L.  If they
+    # disagree the mass terms stop cancelling at steady state and the solver
+    # converges to a modified equation (this is exactly how dt=0 through this
+    # routine ends up solving N(u) = 1.5u).
+    from .lssem import ls_coeffs
+    _, _, hist_scale = ls_coeffs(state)
     su_history = np.zeros_like(U_history[0])
     for m in range(len(alpha)):
-        su_history[..., 0] += alpha[m] * U_history[m][..., 0] * state.mesh.wq
-        su_history[..., 1] += alpha[m] * U_history[m][..., 1] * state.mesh.wq
+        su_history[..., 0] += hist_scale * alpha[m] * U_history[m][..., 0] * state.mesh.wq
+        su_history[..., 1] += hist_scale * alpha[m] * U_history[m][..., 1] * state.mesh.wq
         
     # Compute and cache multiplicity weights for the PCG solver inner product
     if not hasattr(state, 'multiplicity_weight'):

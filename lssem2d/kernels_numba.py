@@ -145,26 +145,32 @@ def _bufs(state):
 
 
 def apply_L(state, U, fu, fv):
-    """Fused numba apply_L.  Signature identical to the NumPy reference."""
+    """Fused numba apply_L.  Signature identical to the NumPy reference.
+
+    The kernel's `f1`/`dtl` arguments are exactly (a_mass, a_flux), so the
+    least-squares weight decoupling needs no kernel change -- only these
+    coefficients, taken from the one shared definition in lssem.ls_coeffs.
+    """
+    from .lssem import ls_coeffs
     _bufs(state)
     m = state.mesh
-    dtl = state.dt if state.dt != 0 else 1.0     # dt == 0 => steady form
-    f1 = state.fac1 if state.dt != 0 else 0.0
+    a_mass, a_flux, _ = ls_coeffs(state)
     _kernel_L(_C(U), state._nb_D, m.facx, m.facy, m.wq, _C(fu), _C(fv),
               _C(state.dfu_dx), _C(state.dfu_dy), _C(state.dfv_dx), _C(state.dfv_dy),
-              state.nu, f1, dtl, state._nb_su)
+              state.nu, a_mass, a_flux, state._nb_su)
     return state._nb_su
 
 
 def apply_LT(state, su, fu, fv):
     """Fused numba apply_LT.  Signature identical to the NumPy reference."""
+    from .lssem import ls_coeffs
     _bufs(state)
     m = state.mesh
-    dtl = state.dt if state.dt != 0 else 1.0
-    idt = state.fac1 / state.dt if state.dt != 0 else 0.0
+    a_mass, a_flux, _ = ls_coeffs(state)
+    idt = a_mass / a_flux if a_flux != 0.0 else 0.0
     _kernel_LT(_C(su), state._nb_D, m.facx, m.facy, _C(fu), _C(fv),
                _C(state.dfu_dx), _C(state.dfu_dy), _C(state.dfv_dx), _C(state.dfv_dy),
-               state.nu, idt, dtl, state._nb_c)
+               state.nu, idt, a_flux, state._nb_c)
     return state._nb_c
 
 

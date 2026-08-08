@@ -2,14 +2,60 @@ import numpy as np
 from .operators import dUdx, dUdy, DxT, DyT
 from . import backend
 
+def ls_coeffs(state):
+    """Least-squares row coefficients for the two momentum equations.
+
+    The momentum rows are   a_mass*u + a_flux*N(u)   and the continuity and
+    vorticity rows are unweighted, so **a_flux is the least-squares weight of
+    momentum against the constraints**.
+
+      legacy   (w_mom is None):  a_mass = fac1,           a_flux = dt
+      decoupled (w_mom set):     a_mass = w_mom*fac1/dt,  a_flux = w_mom
+
+    Why this exists: in the legacy form the weight IS the time step, so dt does
+    two unrelated jobs -- setting temporal resolution and deciding which equation
+    the solver is allowed to violate.  They cannot both be optimised with one
+    number.  Pressure appears only in the momentum rows, so the pressure block of
+    L^T L scales as a_flux^2; at small dt it is under-weighted, L^T L develops a
+    near-null space in p, and the exact solution stops being the unique
+    minimiser.  Measured on Poiseuille: dt=0.05 gives 98% velocity error on a
+    problem whose exact solution is representable, while dt=1 gives 5e-4.
+    The equal-weight point is a_flux = 1, and it is a_flux = 1 for every mesh,
+    order, Reynolds number and geometry tested (the ratio collapses to a_flux^2
+    once the gradient terms dominate the mass term, i.e. once resolved).
+
+    Setting w_mom = dt reproduces the legacy behaviour exactly, bit for bit.
+
+    Returns (a_mass, a_flux, hist_scale).  hist_scale multiplies the BDF history
+    term so it continues to match a_mass -- if these two disagree the mass terms
+    no longer cancel at steady state and the solver converges to the wrong
+    equation.
+    """
+    dtl = state.dt if state.dt != 0 else 1.0     # dt == 0 => pure steady form
+    f1 = state.fac1 if state.dt != 0 else 0.0
+    w = getattr(state, 'w_mom', None)
+    if w is None:
+        return f1, dtl, 1.0
+    w = float(w)
+    # Reassociated as f1*(w/dtl), NOT (w*f1)/dtl: when w == dt the ratio is
+    # exactly 1.0 and a_mass comes back bit-identical to the legacy f1.  The
+    # other grouping round-trips through a division and loses an ulp.
+    s = w/dtl
+    return f1*s, w, s
+
+
 class SolverState:
     """Holds mesh, operator matrices, and cached linearisation data for the LSSEM solver."""
-    def __init__(self, mesh, D, nu, dt, fac1=1.0):
+    def __init__(self, mesh, D, nu, dt, fac1=1.0, w_mom=None):
         self.mesh = mesh
         self.D = D
         self.nu = nu
         self.dt = dt
         self.fac1 = fac1
+        # Least-squares weight of the momentum rows against the constraints.
+        # None => legacy (weight = dt).  1.0 => no penalty, the balanced choice.
+        # See ls_coeffs() for why this is worth decoupling from dt.
+        self.w_mom = w_mom
         
         self.dfu_dx = None
         self.dfu_dy = None
@@ -127,14 +173,13 @@ def _apply_L_numpy(state, U, fu, fv):
     # momentum by 1/dt relative to continuity and the vorticity definition and leaves
     # continuity under-enforced.  Harmless when the residual is ~0 (cavity, Poiseuille);
     # it diverges on under-resolved cases such as the BFS.  See lssem_baseline.f90 rhs().
-    dtl = state.dt if state.dt != 0 else 1.0          # dt==0 => steady form
-    f1 = state.fac1 if state.dt != 0 else 0.0
+    a_mass, a_flux, _ = ls_coeffs(state)
     wq = state.mesh.wq
 
     su0, su1, su2, su3 = state.su0_c, state.su1_c, state.su2_c, state.su3_c
 
-    su0[...] = (f1 * u + dtl * (fu * u_x + fv * u_y + u * dfu_dx + v * dfu_dy + p_x + state.nu * om_y)) * wq
-    su1[...] = (f1 * v + dtl * (fu * v_x + fv * v_y + u * dfv_dx + v * dfv_dy + p_y - state.nu * om_x)) * wq
+    su0[...] = (a_mass * u + a_flux * (fu * u_x + fv * u_y + u * dfu_dx + v * dfu_dy + p_x + state.nu * om_y)) * wq
+    su1[...] = (a_mass * v + a_flux * (fu * v_x + fv * v_y + u * dfv_dx + v * dfv_dy + p_y - state.nu * om_x)) * wq
     
     su2[...] = (u_x + v_y) * wq
     su3[...] = (om + u_y - v_x) * wq
@@ -160,17 +205,17 @@ def _apply_LT_numpy(state, su, fu, fv):
     np.copyto(su4, su[..., 3])
 
     # Exact transpose of the row-weighted apply_L.  Row m of the new operator is
-    # R_new = S R_old with S = diag(dt, dt, 1, 1), so L_new^T = L_old^T . S:
+    # R_new = S R_old with S = diag(a_flux, a_flux, 1, 1), so L_new^T = L_old^T . S:
     # pre-scale the two momentum components and the rest of this routine is unchanged.
-    # (The inv_dt below then correctly becomes fac1, since inv_dt * dt = fac1.)
-    dtl = state.dt if state.dt != 0 else 1.0
-    su1 *= dtl
-    su2 *= dtl
-    
+    # inv_dt below is a_mass/a_flux, so inv_dt * a_flux = a_mass as required.
+    a_mass, a_flux, _ = ls_coeffs(state)
+    su1 *= a_flux
+    su2 *= a_flux
+
     dfu_dx, dfu_dy = state.dfu_dx, state.dfu_dy
     dfv_dx, dfv_dy = state.dfv_dx, state.dfv_dy
-    
-    inv_dt = state.fac1 / state.dt if state.dt != 0 else 0.0
+
+    inv_dt = a_mass / a_flux if a_flux != 0.0 else 0.0
     
     c0, c1, c2, c3 = state.c0_c, state.c1_c, state.c2_c, state.c3_c
     tmp = state.tmp_x

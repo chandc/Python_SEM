@@ -253,8 +253,36 @@ approaches. Small dt under-weights momentum and lets the constraints dominate.
 
 Monotone in dt. Chan's published bubble corresponds to **dt ~ 2-5**.
 
-**For steady-state work, prefer LARGE dt.** Small dt is not "more accurate"; it
-is a differently- and worse-weighted minimisation.
+### dt is a trade-off knob, not a quality dial
+
+An earlier version of this document concluded "for steady-state work, prefer
+LARGE dt". **That was one-sided and is corrected here.** Large dt weights
+momentum more heavily, which is why the separation bubble improves — but by the
+same `dt^2` mechanism it weights continuity and the vorticity definition *less*,
+and mass conservation degrades badly:
+
+| dt | rms div | max\|div\| | Qout/Qin | mass lost |
+|---|---|---|---|---|
+| 0.05 | 2.73e-03 | 0.169 | 0.9995 | 0.05% |
+| 0.1 | 6.70e-03 | 0.486 | 0.9986 | 0.14% |
+| 0.5 | 4.83e-02 | 3.384 | 0.9925 | 0.75% |
+| 1.0 | 8.16e-02 | 5.581 | 0.9789 | 2.1% |
+| 2.0 | 1.12e-01 | 7.493 | 0.9825 | 1.8% |
+| 5.0 | 1.37e-01 | 8.901 | 0.9762 | 2.4% |
+
+Divergence error grows **~50x** and mass loss goes from 0.05% to 2.4% across the
+same range over which the bubble improves. There is no free lunch: `dt` moves
+error between the momentum equations and the constraints.
+
+**Choose dt by which error matters for the quantity of interest.** If that is a
+separation or reattachment length, larger dt is favourable. If it is mass
+conservation, pressure drop, or anything that integrates the velocity field,
+smaller dt is. dt ~ 0.1-0.5 keeps both errors modest (0.14-0.75% mass, bubble
+within ~10% of the large-dt limit) and is the reasonable default.
+
+Note this also means **the good agreement with Chan's published bubble at
+dt ~ 2-5 is bought at 1.8-2.4% mass loss** and should not be read as the
+formulation being most accurate there.
 
 Note the primary reattachment moves only 8.135 -> 8.250 across a 100x dt range —
 **nearly dt-immune**. That is exactly why this hid: the headline validation
