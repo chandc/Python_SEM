@@ -6,6 +6,12 @@ earlier dt sweeps could not: **when dt changes the answer, is that the momentum
 weighting or the time step?** Legacy couples them (`weight = dt`), so every
 previous sweep moved both at once.
 
+> **Caveat (2026-08-08):** these runs used the default absolute CG tolerance
+> `tol = 1e-6`. The bubble and weighting effects here are far too large to be
+> tolerance artifacts, but the mass-conservation differences (~0.5-1%) sit in
+> the band where that floor can bind and have NOT been re-checked. See
+> [CG_TOLERANCE_FLOOR.md](./CG_TOLERANCE_FLOOR.md).
+
 Reproduce: `scratch/bfs_wsweep.py` (BFS 2-D sweep), `scratch/cavity_dt.py`
 (cavity sensitivity), raw results in `scratch/bfs_wsweep.json`.
 

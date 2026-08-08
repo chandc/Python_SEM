@@ -6,6 +6,13 @@ the BFS steady state to be dt-dependent. This one isolates *why*, on a case with
 a known exact solution, and led to the `w_mom` / `w_mass` parameters that
 decouple the least-squares weight from the time step.
 
+> **Caveat (2026-08-08):** every run here used the default absolute CG
+> tolerance `tol = 1e-6`. Errors in the 1e-4 to 1e-3 band may be
+> tolerance-limited rather than discretisation-limited — see
+> [CG_TOLERANCE_FLOOR.md](./CG_TOLERANCE_FLOOR.md). The large effects (the
+> 1875x dt spread, the dt=0.05 catastrophe) are unaffected; the dt=1 figure
+> improves from 5.26e-04 to 1.72e-04 when the floor is lowered.
+
 Follow-up: [WEIGHT_VS_TIMESTEP_STUDY.md](./WEIGHT_VS_TIMESTEP_STUDY.md) uses
 these parameters to separate the weighting from the time step on the BFS, and
 shows the lid-driven cavity is ~300x less sensitive than Poiseuille.
