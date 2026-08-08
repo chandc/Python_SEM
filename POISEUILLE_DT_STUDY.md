@@ -6,6 +6,10 @@ the BFS steady state to be dt-dependent. This one isolates *why*, on a case with
 a known exact solution, and led to the `w_mom` / `w_mass` parameters that
 decouple the least-squares weight from the time step.
 
+Follow-up: [WEIGHT_VS_TIMESTEP_STUDY.md](./WEIGHT_VS_TIMESTEP_STUDY.md) uses
+these parameters to separate the weighting from the time step on the BFS, and
+shows the lid-driven cavity is ~300x less sensitive than Poiseuille.
+
 Reproduce: `scratch/poiseuille_dt.py` (dt sweep), `scratch/plot_poiseuille.py`
 (figure), `scratch/poiseuille_pout.py` (outlet pressure), `scratch/poiseuille_new.py`
 (`w_mom`), `scratch/wmass_run.py` (the two-parameter sweep).

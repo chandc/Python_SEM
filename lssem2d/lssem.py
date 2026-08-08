@@ -219,8 +219,16 @@ def _apply_L_numpy(state, U, fu, fv):
     # are  fac1*u + dt*(...),  NOT  (fac1/dt)*u + (...).  The two are the same equation
     # but differ by a factor dt as LEAST-SQUARES rows, so the (fac1/dt) form over-weights
     # momentum by 1/dt relative to continuity and the vorticity definition and leaves
-    # continuity under-enforced.  Harmless when the residual is ~0 (cavity, Poiseuille);
-    # it diverges on under-resolved cases such as the BFS.  See lssem_baseline.f90 rhs().
+    # continuity under-enforced.  See lssem_baseline.f90 rhs().
+    #
+    # An earlier version of this comment said the error was "harmless when the
+    # residual is ~0 (cavity, Poiseuille)".  That is true for the CAVITY, which is
+    # lid-driven -- the forcing is a velocity BC, so a poorly weighted pressure
+    # degrades p without wrecking u (measured: 5.9x accuracy spread over dt).  It
+    # is badly WRONG for Poiseuille, which is pressure-driven: the weighting there
+    # corrupts the driving force and gives 98% velocity error at dt=0.05, on a
+    # problem whose exact solution is exactly representable (1875x spread over dt).
+    # See POISEUILLE_DT_STUDY.md and WEIGHT_VS_TIMESTEP_STUDY.md.
     a_mass, a_flux, _ = ls_coeffs(state)
     wq = state.mesh.wq
 

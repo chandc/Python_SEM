@@ -274,6 +274,14 @@ Divergence error grows **~50x** and mass loss goes from 0.05% to 2.4% across the
 same range over which the bubble improves. There is no free lunch: `dt` moves
 error between the momentum equations and the constraints.
 
+> **Update (2026-08-08):** the `w_mom`/`w_mass` parameters now let the momentum
+> weight be separated from the time step, and doing so shows the two effects
+> OPPOSE each other on the BFS — weight shrinks the separation bubble, time step
+> grows it, and the weight dominates. See
+> [WEIGHT_VS_TIMESTEP_STUDY.md](./WEIGHT_VS_TIMESTEP_STUDY.md). The attribution
+> below (bubble responds to momentum weighting) is confirmed and, if anything,
+> understated.
+
 **Choose dt by which error matters for the quantity of interest.** If that is a
 separation or reattachment length, larger dt is favourable. If it is mass
 conservation, pressure drop, or anything that integrates the velocity field,
