@@ -5,6 +5,7 @@ __pycache__/
 sem_2d_f90
 matrices_p*.txt
 .venv/
+.venv.old-py39/
 
 # numba compiled-kernel cache (per fastmath flavour)
 __nbcache__/

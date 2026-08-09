@@ -1,0 +1,18 @@
+# Recreate the environment with uv:
+#     uv venv --python 3.12
+#     uv pip install -r requirements.txt
+#
+# Core solver + studies
+numpy
+scipy
+matplotlib
+numba                 # optional backend, see NUMBA_BACKEND.md (LSSEM_BACKEND=numba)
+pandas
+sympy
+tomli                 # .toml case files (bfs.toml, cavity.toml)
+pytest
+
+# Apple-silicon experiments in the standalone sem_1d/2d/3d scripts.
+# torch is also imported there but deliberately NOT pinned here -- install it
+# separately if you need those scripts; it is not required by lssem2d.
+mlx
