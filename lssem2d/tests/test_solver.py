@@ -9,7 +9,7 @@ from lssem2d.mesh import build_channel
 from lssem2d.lgl import diff_matrix
 from lssem2d.lssem import SolverState
 from lssem2d.bc import apply_mask
-from lssem2d.solver import apply_A, cg_solve
+from lssem2d.solver import apply_A, pcg_solve
 
 def test_cg_solve():
     # a) test_cg_solve: manufacture a positive-definite RHS, solve it, check A*x == b.
@@ -44,7 +44,16 @@ def test_cg_solve():
     b = apply_mask(mesh, b)
     
     # Solve for x
-    x_num, iters = cg_solve(state, b, fu, fv, tol=1e-10, max_iter=2000)
+    # pcg_solve needs the two things step_bdf normally caches on the state: the
+    # Jacobi preconditioner and the multiplicity weights for its inner product.
+    # Unpreconditioned CG does NOT converge on L^T L here (4.5e-05 relative
+    # residual after 2000 iterations), so the preconditioner is not optional.
+    from lssem2d.solver import compute_jacobi
+    mult = gather_scatter(mesh, np.ones_like(b))
+    multiplicity_weight = 1.0 / np.where(mult < 1e-10, 1.0, mult)
+    M_inv = compute_jacobi(state, fu, fv)
+    x_num, iters = pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight,
+                             tol=1e-10, max_iter=2000)
     
     # Check that A*x == b (the residual was driven to zero)
     # Note: CG solves it iteratively, so we check if the tolerance was met.

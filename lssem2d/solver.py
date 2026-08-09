@@ -175,7 +175,25 @@ def pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=False, max_ite
     print(f"Warning: PCG did not converge after {max_iter} iterations. Relative residual: {np.sqrt(np.sum(r*r*multiplicity_weight))/b_norm:.2e}")
     return x, max_iter
 
-def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0):
+def _ls_merit(state, U, su_history, f_known=None):
+    """The least-squares functional int(R^2) that Newton is minimising.
+
+    Used as the line-search merit.  apply_L emits wq*R, and su_history is
+    wq-weighted too, so the residual is (apply_L - su_history)/wq and the
+    functional is sum(r^2/wq).  Costs one apply_L per evaluation -- cheap next
+    to the CG solve it protects.
+    """
+    f = np.ascontiguousarray(U[..., 0] / 2.0)
+    g = np.ascontiguousarray(U[..., 1] / 2.0)
+    state.update_linearisation(f, g)
+    r = apply_L(state, U, f, g) - su_history
+    wq = state.mesh.wq[..., None]
+    if f_known is not None:
+        r = r - f_known * wq
+    return float(np.sum(r * r / wq))
+
+
+def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, line_search=False, max_backtrack=25, ls_memory=10):
     """
     Performs one Newton sub-iteration.
     U: current guess for the new time step, shape (nelem, n, n, 4)
@@ -220,13 +238,55 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
     
     # 3. Solve A * dU = b
     dU, cg_iters = pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=pin_p, max_iter=cg_max_iter, cgsfac=cgsfac)
-    
-    # 4. Update U
-    U_new = U + dU
-    
+
+    # 4. Update U, optionally with a backtracking line search.
+    #
+    # Without globalisation this is an undamped Newton step, and an ACCURATE
+    # linear solve can then diverge where an inexact one converges: the
+    # inexactness effectively shortens the step and acts as accidental damping.
+    # Measured on the BFS steady form (w_mass=0): cgsfac=1e-3/tol=1e-6 converges
+    # in 11-13 iterations, while cgsfac=1e-8/tol=1e-10 blows up at iteration 2
+    # (max|u| 1.51 -> 40.05).  The line search removes that dependence on solver
+    # sloppiness.
+    #
+    # dU is zero at masked (Dirichlet) dofs because b carries mask_global and
+    # apply_A preserves it, so U + alpha*dU keeps the boundary values for any
+    # alpha and the merit may be evaluated directly on the trial state.
+    state._last_alpha = 1.0
+    if line_search:
+        # NON-MONOTONE (Grippo-Lampariello-Lucidi) acceptance: compare against
+        # the WORST merit of the last `ls_memory` iterations, not the immediately
+        # previous one.  Newton's path on this system is legitimately
+        # non-monotone -- measured on the BFS steady form, |dU| runs
+        # 0.80 -> 2.31 -> 0.088 -> 0.77 -> 0.033 -> 0.0087 -> 0, converging in 11
+        # iterations THROUGH a spike at iteration 6.  Strict Armijo rejects that
+        # spike, backtracks to alpha=0.125, and then plateaus for eight
+        # iterations before stalling with alpha ~ 3e-08.  Allowing the occasional
+        # increase keeps the step that actually reaches the root while still
+        # catching genuine blow-up (undamped, the tight-tolerance case goes
+        # max|u| 1.51 -> 40.05 in one step).
+        #
+        # ls_memory = 1 reduces exactly to monotone Armijo.
+        J0 = _ls_merit(state, U, su_history, f_known)
+        hist = getattr(state, '_ls_hist', None)
+        if hist is None:
+            hist = state._ls_hist = []
+        hist.append(J0)
+        del hist[:-max(1, int(ls_memory))]
+        J_ref = max(hist)
+        alpha = 1.0
+        for _ in range(max_backtrack):
+            if _ls_merit(state, U + alpha*dU, su_history, f_known) <= (1.0 - 1e-4*alpha)*J_ref:
+                break
+            alpha *= 0.5
+        state._last_alpha = alpha
+        U_new = U + alpha*dU
+    else:
+        U_new = U + dU
+
     return U_new, dU, cg_iters
 
-def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_factor=0.1, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, verbose=False):
+def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_factor=0.1, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, verbose=False, line_search=False, ls_memory=10):
     """
     Advances one time step using BDF1 or BDF2.
     U_history: list of previous states [U_n, U_{n-1}]. 
@@ -275,7 +335,7 @@ def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_f
     du_norm_0 = None
     
     for i in range(max_newton):
-        U, dU, cg_iters = newton_step(state, U, su_history, state.M_inv, state.multiplicity_weight, time=time, f_known=f_known, custom_inlet=custom_inlet, custom_lid=custom_lid, exact_solution=exact_solution, pin_p=pin_p, cg_max_iter=cg_max_iter, cgsfac=cgsfac)
+        U, dU, cg_iters = newton_step(state, U, su_history, state.M_inv, state.multiplicity_weight, time=time, f_known=f_known, custom_inlet=custom_inlet, custom_lid=custom_lid, exact_solution=exact_solution, pin_p=pin_p, cg_max_iter=cg_max_iter, cgsfac=cgsfac, line_search=line_search, ls_memory=ls_memory)
         
         du_norm = np.max(np.abs(dU))
         if du_norm_0 is None:
