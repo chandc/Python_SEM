@@ -21,9 +21,9 @@ numba_only = pytest.mark.skipif(not backend.available('numba'),
                                 reason="numba not installed")
 
 
-def _make_case(N, EX, EY, dt, seed=0):
+def _make_case(N, EX, EY, dt, seed=0, dtau=None):
     mesh = build_channel(1.0, 1.0, EX, EY, N, bcs=(1, 1, 1, 2))
-    st = SolverState(mesh, diff_matrix(N), nu=1.0/389.0, dt=dt, fac1=1.5)
+    st = SolverState(mesh, diff_matrix(N), nu=1.0/389.0, dt=dt, fac1=1.5, dtau=dtau)
     rng = np.random.default_rng(seed)
     shp = (mesh.nelem, N+1, N+1)
     U = rng.standard_normal(shp + (4,))
@@ -53,6 +53,29 @@ def test_numba_matches_numpy(N, EX, EY, dt):
 
     assert _rel(su_ref, su_nb) < 1e-13, f"apply_L mismatch at dt={dt}"
     assert _rel(c_ref, c_nb) < 1e-13, f"apply_LT mismatch at dt={dt}"
+
+
+@numba_only
+@pytest.mark.parametrize("dtau", [1.0, 0.1])
+@pytest.mark.parametrize("dt", [0.5, 0.0])
+def test_numba_matches_numpy_with_pseudo_time(dt, dtau):
+    """The pseudo-time term must reach the fused kernels too.
+
+    It enters as an addition to the mass coefficient in both apply_L and
+    apply_LT, so a wrapper that forgot it would leave the kernels solving the
+    unaugmented operator while the NumPy path solved the augmented one.
+    """
+    st, U, fu, fv = _make_case(8, 4, 4, dt, dtau=dtau)
+
+    su_ref = _apply_L_numpy(st, U, fu, fv).copy()
+    c_ref = _apply_LT_numpy(st, su_ref, fu, fv).copy()
+
+    from lssem2d import kernels_numba as K
+    su_nb = K.apply_L(st, U, fu, fv).copy()
+    c_nb = K.apply_LT(st, su_ref, fu, fv).copy()
+
+    assert _rel(su_ref, su_nb) < 1e-13, f"apply_L mismatch, dt={dt} dtau={dtau}"
+    assert _rel(c_ref, c_nb) < 1e-13, f"apply_LT mismatch, dt={dt} dtau={dtau}"
 
 
 @numba_only

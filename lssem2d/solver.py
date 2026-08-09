@@ -1,5 +1,5 @@
 import numpy as np
-from .lssem import apply_L, apply_LT
+from .lssem import apply_L, apply_LT, ls_pseudo
 from .assembly import gather_scatter
 from .bc import apply_mask, apply_bc
 
@@ -82,8 +82,11 @@ def compute_jacobi(state, fu, fv, pin_p=False):
     # a_mk = dR_m/dU_k for m in {1,2} is scaled by dt.  Rows 3-4 (continuity, vorticity)
     # are unweighted.  Keeping these consistent with apply_L is mandatory: scaling the
     # operator without scaling this diagonal destroys the preconditioner.
-    from .lssem import ls_coeffs
+    from .lssem import ls_coeffs, ls_pseudo
     a_mass, a_flux, _ = ls_coeffs(state)
+    # Must track apply_L exactly, pseudo-time included, or the preconditioner is
+    # no longer the diagonal of the operator actually being solved.
+    a_mass = a_mass + ls_pseudo(state)
     conv = uo * Px + vo * Py
     a11 = a_mass * P + a_flux * (conv + ux * P)
     a22 = a_mass * P + a_flux * (conv + vy * P)
@@ -175,6 +178,28 @@ def pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=False, max_ite
     print(f"Warning: PCG did not converge after {max_iter} iterations. Relative residual: {np.sqrt(np.sum(r*r*multiplicity_weight))/b_norm:.2e}")
     return x, max_iter
 
+def _drop_pseudo(state, r, U):
+    """Remove the pseudo-time term from a RESIDUAL, in place.
+
+    apply_L carries (a_mass + kappa)*u unconditionally, because it is also the
+    operator applied to the increment inside apply_A, where the kappa*dU term is
+    the whole point.  But the pseudo-time reference is the CURRENT iterate, so
+    the Fortran's dt*(fu - u) contribution to the residual is identically zero:
+    reference/tj_channel_1996.f:293-302 assigns u and fu from the same array
+    before calling rhs().  Subtracting kappa*U here reproduces that exactly.
+
+    Without this the residual would carry a spurious kappa*U, the fixed point
+    would move for the wrong reason, and dtau would change the answer at leading
+    order instead of by O(kappa*R).  No-op when dtau is None.
+    """
+    a_p = ls_pseudo(state)
+    if a_p == 0.0:
+        return
+    wq = state.mesh.wq
+    r[..., 0] -= a_p * U[..., 0] * wq
+    r[..., 1] -= a_p * U[..., 1] * wq
+
+
 def _ls_merit(state, U, su_history, f_known=None):
     """The least-squares functional int(R^2) that Newton is minimising.
 
@@ -187,6 +212,7 @@ def _ls_merit(state, U, su_history, f_known=None):
     g = np.ascontiguousarray(U[..., 1] / 2.0)
     state.update_linearisation(f, g)
     r = apply_L(state, U, f, g) - su_history
+    _drop_pseudo(state, r, U)          # the merit must stay the TRUE functional
     wq = state.mesh.wq[..., None]
     if f_known is not None:
         r = r - f_known * wq
@@ -222,6 +248,7 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
     # 2. Compute Exact Diagonal of A (Jacobi Preconditioner)
     M_inv = compute_jacobi(state, U[..., 0] / 2.0, U[..., 1] / 2.0, pin_p=pin_p)
     su_nl = apply_L(state, U, U[..., 0] / 2.0, U[..., 1] / 2.0) - su_history
+    _drop_pseudo(state, su_nl, U)
     if f_known is not None:
         wq = state.mesh.wq[..., None]
         su_nl -= f_known * wq

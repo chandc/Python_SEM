@@ -89,9 +89,56 @@ def ls_coeffs(state):
     return f1*s, float(w_f), s
 
 
+def ls_pseudo(state):
+    """Pseudo-time coefficient kappa for the momentum rows.  0.0 when disabled.
+
+    The 1996 F77 source (reference/tj_channel_1996.f) carries a pseudo-time
+    derivative that both lssem_baseline.f90 and this port dropped:
+
+        su(ij,1) = fac1*u*facem + dt*( u + fu*dudx + ... )*facem     <- the bare u
+        c1(ij,ne) = (dt+fac1)*su(ij,1) + ...                         <- its transpose
+
+    Chan (1996) p.2 gives the operator with 1/dtau on the momentum diagonals and
+    u0/dtau on the right-hand side: "dt is the physical time step whereas dtau is
+    the pseudo-time step".  The row is multiplied through by dt, so (dt/dtau)*u
+    against the code's dt*u fixes dtau = 1 there.  In our coefficients that is
+
+        kappa = a_flux / dtau
+
+    so the momentum row becomes  (a_mass + kappa)*u + a_flux*N(u)  and the
+    transpose collocation coefficient becomes (a_mass + kappa)/a_flux -- exactly
+    the Fortran's (dt+fac1).  `dtau = None` gives kappa = 0 and the dtau -> inf
+    limit, which is what every result before 2026-08-09 used.
+
+    IT IS NOT w_mass.  Both add a multiple of the identity to the momentum rows,
+    but w_mass pairs with the previous TIME LEVEL (via hist_scale), so raising it
+    moves the converged steady state.  kappa pairs with the previous SUB-ITERATE,
+    which the caller cancels out of the residual, so it modifies the Jacobian and
+    leaves the equations being solved alone.
+
+    It does NOT leave the answer exactly invariant.  Each sub-iteration minimises
+    ||L_k u - (f + kappa u0)||^2 about u0, and at the fixed point u = u0 the
+    stationarity condition is
+
+        L^T R + kappa E^T R = 0        rather than        L^T R = 0
+
+    so the converged state is perturbed by O(kappa * R).  Where the residual is
+    driven to zero (Poiseuille reaches J = 5.94e-27) the two coincide and the
+    term is free; where it is not (the BFS sits at J ~ 3.7e-05) the perturbation
+    is proportional to the discretisation residual and vanishes under refinement.
+    Consistent, SUPG-like -- but it has to be measured, not assumed.  See
+    PSEUDO_TIME_DESIGN.md sections 3 and 6.
+    """
+    dtau = getattr(state, 'dtau', None)
+    if dtau is None:
+        return 0.0
+    _, a_flux, _ = ls_coeffs(state)
+    return a_flux / float(dtau)
+
+
 class SolverState:
     """Holds mesh, operator matrices, and cached linearisation data for the LSSEM solver."""
-    def __init__(self, mesh, D, nu, dt, fac1=1.0, w_mom=None, w_mass=None):
+    def __init__(self, mesh, D, nu, dt, fac1=1.0, w_mom=None, w_mass=None, dtau=None):
         self.mesh = mesh
         self.D = D
         self.nu = nu
@@ -104,6 +151,10 @@ class SolverState:
         # dt_eff = dt*w_mom/w_mass, so set w_mass = w_mom for time-accurate runs.
         self.w_mom = w_mom
         self.w_mass = w_mass
+        # Pseudo-time step from Chan (1996); see ls_pseudo() for the contract.
+        # None => the dtau -> inf limit, i.e. no pseudo-time term (the default,
+        # and what the F90 baseline does).  dtau = 1 reproduces the 1996 F77 code.
+        self.dtau = dtau
         
         self.dfu_dx = None
         self.dfu_dy = None
@@ -230,6 +281,12 @@ def _apply_L_numpy(state, U, fu, fv):
     # problem whose exact solution is exactly representable (1875x spread over dt).
     # See POISEUILLE_DT_STUDY.md and WEIGHT_VS_TIMESTEP_STUDY.md.
     a_mass, a_flux, _ = ls_coeffs(state)
+    # Pseudo-time (Chan 1996) folds straight into the mass coefficient: the row is
+    # (a_mass + kappa)*u + a_flux*N(u).  kappa = 0 unless state.dtau is set, so
+    # this is bit-identical to the previous behaviour by default.  The caller must
+    # cancel kappa*u out of the RESIDUAL (solver.newton_step does); here it is
+    # unconditional because apply_L is also the operator applied to the increment.
+    a_mass = a_mass + ls_pseudo(state)
     wq = state.mesh.wq
 
     su0, su1, su2, su3 = state.su0_c, state.su1_c, state.su2_c, state.su3_c
@@ -265,6 +322,7 @@ def _apply_LT_numpy(state, su, fu, fv):
     # pre-scale the two momentum components and the rest of this routine is unchanged.
     # inv_dt below is a_mass/a_flux, so inv_dt * a_flux = a_mass as required.
     a_mass, a_flux, _ = ls_coeffs(state)
+    a_mass = a_mass + ls_pseudo(state)      # matches the Fortran's (dt+fac1)
     su1 *= a_flux
     su2 *= a_flux
 

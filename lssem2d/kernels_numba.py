@@ -151,10 +151,11 @@ def apply_L(state, U, fu, fv):
     least-squares weight decoupling needs no kernel change -- only these
     coefficients, taken from the one shared definition in lssem.ls_coeffs.
     """
-    from .lssem import ls_coeffs
+    from .lssem import ls_coeffs, ls_pseudo
     _bufs(state)
     m = state.mesh
     a_mass, a_flux, _ = ls_coeffs(state)
+    a_mass += ls_pseudo(state)          # pseudo-time folds into the mass coefficient
     _kernel_L(_C(U), state._nb_D, m.facx, m.facy, m.wq, _C(fu), _C(fv),
               _C(state.dfu_dx), _C(state.dfu_dy), _C(state.dfv_dx), _C(state.dfv_dy),
               state.nu, a_mass, a_flux, state._nb_su)
@@ -163,10 +164,11 @@ def apply_L(state, U, fu, fv):
 
 def apply_LT(state, su, fu, fv):
     """Fused numba apply_LT.  Signature identical to the NumPy reference."""
-    from .lssem import ls_coeffs
+    from .lssem import ls_coeffs, ls_pseudo
     _bufs(state)
     m = state.mesh
     a_mass, a_flux, _ = ls_coeffs(state)
+    a_mass += ls_pseudo(state)
     idt = a_mass / a_flux if a_flux != 0.0 else 0.0
     _kernel_LT(_C(su), state._nb_D, m.facx, m.facy, _C(fu), _C(fv),
                _C(state.dfu_dx), _C(state.dfu_dy), _C(state.dfv_dx), _C(state.dfv_dy),
