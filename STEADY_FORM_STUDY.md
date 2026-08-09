@@ -10,7 +10,8 @@ step attached, and exposes two solver issues that the mass term had been hiding.
 Reproduce: `scratch/bfs_steady.py` (preconditioner/tolerance matrix),
 `scratch/ls_diag2.py` (line-search comparison), `scratch/bfs_wmom_sweep.py`
 (long-domain `w_mom` sweep), `scratch/bfs_wmom_short.py` (short domain),
-`scratch/dt_tight.py` (tight-tolerance re-check of the Poiseuille headline).
+`scratch/dt_tight.py` (tight-tolerance re-check of the Poiseuille headline),
+`scratch/bfs_short_tight.py` and `scratch/bfs_nopin2.py` (§7).
 
 ---
 
@@ -43,7 +44,17 @@ Reproduce: `scratch/bfs_steady.py` (preconditioner/tolerance matrix),
    `a_flux = 2.0`. Removing the mass term removes the instability.
 
 6. **The Poiseuille dt headline survives a tight-tolerance re-check and was
-   understated** — 1875× loose becomes **212,061×** tight (§5).
+   understated** — 1875× loose becomes **212,061×** tight (§6).
+
+7. **The pressure pin never sets a pressure level.** It is a mask on the
+   *increment* (`δp = 0` at one node), so the level is inherited from the
+   initial condition. Removing the pin entirely costs **one** extra CG
+   iteration and changes nothing — CG on a consistent singular system is
+   well-behaved (§7).
+
+8. **Tightening the solve erases the `w_mom` distinction.** Two weights 15×
+   apart in `J` converge to the same outflow-dominated state. The knob in item 4
+   only exists at loose tolerance (§7).
 
 ---
 
@@ -293,14 +304,43 @@ geometries unchanged.
 The legacy start has one clean primary bubble reattaching at `x_r/h = 4.08`.
 Every steady-form panel replaces it with a recirculation filling the lower
 channel to the exit plus a **second counter-rotating cell** near the outflow
-(two vortex centres are visible at `w_mom` 0.1–0.7). The three largest `w_mom`
-values never converge, yet all nine fields look nearly identical — Newton is
-wandering among near-degenerate states rather than failing to descend.
+(two vortex centres are visible at `w_mom` 0.1–0.7).
 
-This is the multi-valued behaviour recorded previously for this domain, now
-reproduced in the steady form. **Conclusion: use the short domain only for cost
-comparisons, never to tune `w_mom` or to judge flow structure.** The long-domain
-sweep in §4 is the one to read.
+**Conclusion: use the short domain only for cost comparisons, never to judge
+flow structure.** The long-domain sweep in §4 is the one to read.
+
+> ### Correction (2026-08-09): the caps at `w_mom` ≥ 1.0 are a GLOBALISATION
+> ### failure, not evidence about the weights
+>
+> This section originally read the three capped runs as "Newton wandering among
+> near-degenerate states" and cited them as multi-valuedness. That was wrong for
+> `w_mom = 1.0`, and is unverified for 1.5 and 2.0.
+>
+> Re-run from a different converged start (the no-pin `w_mom = 0.1` field,
+> `scratch/bfs_w1_ls.py`), `w_mom = 1.0` reaches the **same** state from both
+> starts, with and without the pin — `Qout/Qin` 0.9909, `rms div` 1.03e-01,
+> `max|u|` 2.325, `x_r/h` ≈ 3.42, exit rev 27.3%, agreeing to 3-4 digits. So it
+> is **single-valued at this weight**, not degenerate. It merely stalls, with
+> `max|dU|` oscillating around 1–2 instead of decaying.
+>
+> Turning on the non-monotone line search **converges it in 53 iterations**
+> using *fewer* resources than the runs that failed:
+>
+> | | status | iters | CG | wall | J end |
+> |---|---|---|---|---|---|
+> | no pin | cap | 60 | 41,319 | 279 s | 1.122e-03 |
+> | with pin | cap | 60 | 40,897 | 274 s | 1.123e-03 |
+> | **no pin + line search** | **conv** | **53** | **33,980** | **231 s** | 1.122e-03 |
+>
+> The first eight steps are bit-identical to the undamped run (`alpha = 1`
+> throughout the early phase, so the line search is free); damping engages only
+> once the iteration starts oscillating.
+>
+> **`w_mom` = 1.5 and 2.0 have NOT been re-checked** and their "cap" entries in
+> the table above must not be read as evidence about those weights until they
+> are. The multi-valuedness claim for this domain still stands on the separate
+> evidence in §7 (two different converged states at `w_mom = 0.1`), but not on
+> these caps.
 
 ---
 
@@ -336,17 +376,117 @@ regression: it failed to reach steady state within 9000 steps.)
 
 ---
 
-## 7. Practical guidance
+## 7. Tolerance and the pressure pin on the short domain
+
+Reproduce: `scratch/bfs_short_tight.py`, `scratch/bfs_nopin2.py`,
+`scratch/plot_short_tight.py`.
+
+Restarting a **converged** short-domain field and tightening the solve, p-MG
+throughout. Caps are 30 Newton iterations and 900 s per run.
+
+| `w_mom` | cgsfac / tol | iters | CG | J start → end | Qout/Qin | rms div | max\|u\| | p spread |
+|---|---|---|---|---|---|---|---|---|
+| 0.1 | 1e-3 / 1e-6 | 3 | **0** | 3.693e-05 → 3.693e-05 | 0.9997 | 4.26e-03 | 2.264 | 2.706 |
+| 0.1 | 1e-5 / 1e-8 | 23 | 130,617 | 3.693e-05 → **4.015e-04** | 0.9997 | 4.26e-03 | 2.685 | 4.351 |
+| 0.1 | 1e-8 / 1e-10 | 16 | 131,328 | 3.693e-05 → **8.044e-04** | 0.9997 | 4.26e-03 | 2.672 | 4.025 |
+| 0.5 | 1e-3 / 1e-6 | 3 | **0** | 5.390e-04 → 5.390e-04 | 0.9956 | 5.58e-02 | 2.497 | 3.881 |
+| 0.5 | 1e-5 / 1e-8 | 30 | 49,978 | 5.390e-04 → 8.301e-04 | 0.9956 | 5.58e-02 | 2.648 | 4.441 |
+| 0.5 | 1e-8 / 1e-10 | 30 | 66,827 | 5.390e-04 → 8.211e-04 | 0.9956 | 5.58e-02 | 2.638 | 4.447 |
+| 0.1 | 1e-8 / 1e-10 **+ line search** | 16 | 130,563 | 3.693e-05 → **3.692e-05** | 0.9997 | 4.26e-03 | **2.265** | 3.239 |
+
+![tightening the solve on a converged short-domain field](figs/short_tight_streamlines.png)
+
+### Tightening makes the functional WORSE, and the damage is all outflow
+
+`J` rises by up to 22× while Newton is supposedly minimising it, and `max|dU|`
+grows monotonically (2.67 → 3.52 → 4.03 → 5.80 → 6.13 → 6.89 → 7.13) rather
+than blowing up in one step as it did on the long domain — wandering, not
+divergence. Meanwhile **`Qout/Qin` and `rms div` are bit-identical across every
+row**: 0.9997 / 4.26e-03 at `w_mom = 0.1` and 0.9956 / 5.58e-02 at 0.5. Every
+bit of the added residual is momentum-side. The figure localises it: the
+interior recirculation barely moves, while the outlet pressure develops a deep
+trough at y ≈ 0.35–0.40 — the height where the shear layer meets the outflow
+plane — going from −2.5 to −4.3.
+
+### Tightening erases the `w_mom` distinction
+
+The two weights start a factor of 15 apart in `J` and converge to the same
+place: `J ≈ 8.1e-04`, `max|u| ≈ 2.65`, `x_r/h ≈ 3.25`, exit spread ≈ 4.0–4.45.
+**The monotone knob of §4 stops existing once the solve is tight.** The
+degradation is milder at the higher weight (1.5× against 22×), consistent with
+the mechanism: weighting momentum up makes the outflow modes less soft relative
+to the constraints, leaving less unconstrained space to wander into.
+
+The non-monotone line search is the only thing that holds the loose answer at
+tight tolerance (`J` 3.692e-05, `max|u|` 2.265). On the short domain it works;
+on the long domain (§3) it only converted divergence into a stall.
+
+### The pressure pin does not set a pressure level
+
+The constant-pressure mode is exactly null — adding 5 to `p` everywhere changes
+`J` by a relative **1.3e-14**. Iterating the shifted field back **with the pin
+on leaves the shift in place** (`p` at the pin node stays 5.0).
+
+[lssem.py:180](./lssem2d/lssem.py) is `mask_local[e_p, i_p, j_p, 2] = 0.0` — the
+pin is a mask on the **increment**. It forces `δp = 0` at that node, which
+removes the null direction and makes `LᵀL` nonsingular; it never assigns a
+value. **The pressure level is inherited from the initial condition and the pin
+only stops it moving.** Every "pinned" result in this project has whatever level
+its IC had; `p = 0` at the pin node is a property of the initial field.
+
+### Removing the pin entirely changes nothing
+
+A first attempt was a **null result and must not be cited**: restarted from its
+own converged field, the loose stopping test found `‖b‖` already under threshold
+and PCG returned after **zero** iterations, so the pin could not have had an
+effect either way. Identical numbers proved nothing because no solve ran.
+
+Forcing real work (start from the `w_mom = 0.5` field, solve at `w_mom = 0.1`):
+
+| | status | iters | CG | J | Qout/Qin | max\|u\| | x_r/h | p spread |
+|---|---|---|---|---|---|---|---|---|
+| with pin | conv | 4 | 901 | 3.6916e-05 | 0.999699 | 2.49396 | 3.31181 | 3.86803 |
+| **no pin** | conv | 4 | **902** | 3.6916e-05 | 0.999699 | 2.49415 | 3.31225 | 3.86583 |
+
+Same iteration count, **one extra CG iteration in total**, same functional to
+five digits; the fields differ by `max|du| = 2.6e-03` (~0.1% of `max|u|`), which
+is loose-solver noise, not a null-mode shift (a shift would give pressure
+spread ~0 and velocity ~0). This is the textbook result: CG on a **consistent**
+singular system is well-behaved, because the right-hand side is a residual and
+so has no null component for CG to amplify. The pin is not load-bearing.
+
+### J does not rank physical quality
+
+That run converged at `w_mom = 0.1` to a **different state** than the §5 sweep
+did, reached only by starting elsewhere:
+
+| | J | max\|u\| | x_r/h | p spread |
+|---|---|---|---|---|
+| from the `w_mom=0.5` field | **3.6916e-05** (lower) | 2.494 | 3.312 | 3.868 |
+| from the sweep (§5) | 3.6926e-05 | **2.264** | 3.431 | **2.706** |
+
+**The better-`J` state is the worse-looking one.** Two genuine minimisers at
+identical parameters — another face of the multi-valuedness, and a caution
+against using the functional to judge solution quality on this domain.
+
+---
+
+## 8. Practical guidance
 
 - **For a steady answer, use `w_mass = 0` with the loose solve** (`cgsfac=1e-3`,
   `tol=1e-6`) and p-MG. 11 Newton iterations against ~320 time steps.
 - **Do not tighten the linear solve on the steady form** until the outflow soft
   modes are understood. It diverges (p-MG) or wanders (Jacobi, 2.65 M CG
   iterations).
-- **Enable `line_search=True` when you cannot control the tolerance.** It is
-  free when unneeded (`alpha=1`) and it converts divergence into a stall, which
-  is at least detectable. Leave `ls_memory` at its default of 10; setting it to
-  1 gives monotone Armijo, which fails here.
+- **Enable `line_search=True` by default on the steady form.** This was
+  originally written as "enable it when you cannot control the tolerance",
+  treating it as insurance. That understates it: on the short domain at
+  `w_mom = 1.0` it converged a case that otherwise capped at 60 iterations,
+  using **18% fewer CG iterations and less wall time** than the runs that
+  failed (§5 correction). It is free when unneeded (`alpha = 1`), it rescues the
+  tight-tolerance short-domain case (§7), and at worst it converts divergence
+  into a detectable stall (§3). Leave `ls_memory` at its default of 10; setting
+  it to 1 gives monotone Armijo, which fails here.
 - **Pick `w_mom` from the quantity you care about**: ~0.1–0.2 for mass
   conservation, ~0.85 to match the Fortran bubble, ~2.0 for the sharpest
   separation and cleanest exit pressure. This is a better knob than dt — it does
