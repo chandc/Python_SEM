@@ -56,6 +56,13 @@ Reproduce: `scratch/bfs_steady.py` (preconditioner/tolerance matrix),
    apart in `J` converge to the same outflow-dominated state. The knob in item 4
    only exists at loose tolerance (§7).
 
+9. **The truncated domain has two converged states 1.1% apart in `J`, and the
+   physical one is the higher minimum.** Seeded from the long-domain solution
+   and globalised, the short domain holds `max|u| = 1.513` (the physical inlet
+   peak) with an exit pressure spread of 0.227; left to its own history it
+   converges to 2.494 and 3.866. The physical state costs 860× more CG. Which
+   one you get is decided by the initial condition, not by the solver (§8).
+
 ---
 
 ## 1. What `w_mass = 0` does
@@ -506,7 +513,101 @@ against using the functional to judge solution quality on this domain.
 
 ---
 
-## 8. Practical guidance
+## 8. Two converged states: seeding the short domain from the long one
+
+Reproduce: `scratch/bfs_interp3.py` (spectral interpolation + solve),
+`scratch/check_interp.py` and `scratch/check_py.py` (verification),
+`scratch/plot_two_states2.py` (figure).
+
+The short domain's outflow plane (x = 2.5) lies in the **interior** of the long
+domain (x up to 8.5), and the long-domain bubble does not reattach until
+`x_r/h = 8.33` (x = 4.17). So the long solution restricted to x ≤ 2.5 is the
+physically correct field for that region. Interpolating it onto the short grid
+and re-solving asks whether the truncated problem can hold it.
+
+Interpolation is spectral — the long-domain order-10 polynomial evaluated at the
+short nodes. It has to be: the grids genuinely differ downstream (61 of 122
+unique short-grid x nodes have no long-grid counterpart), and *linear*
+interpolation agrees on velocity to 7.5e-04 but is off by **0.195 in vorticity**,
+costing 40% in `J`. It is a real interpolation, not a restriction.
+
+### The correct field verified three ways
+
+| | J | Qout/Qin | rms div | max\|u\| | exit p spread | exit rev |
+|---|---|---|---|---|---|---|
+| interpolated long-domain field | 4.4769e-05 | 0.9997 | 5.98e-03 | **1.513** | **0.024** | 25.0% |
+| short domain's own state | **3.6916e-05** | 0.9997 | 4.28e-03 | 2.494 | 3.866 | 27.3% |
+
+`max|u| = 1.513` is the physical inlet peak (1.5); the short domain's own state
+overshoots it by 66%. `x_r/h` is undefined for the correct field, correctly —
+the bubble reattaches beyond the truncated domain.
+
+The small cross-stream pressure variation was challenged and checked:
+
+- re-evaluating the long solution at x = 2.5 by a separate code path reproduces
+  the spread to **1.4e-17**;
+- the **Fortran** solution gives 0.02196 there against Python's 0.02443, with
+  20–24% of the plane reversed in both;
+- the y-momentum row is satisfied: `max|p_y| = 0.08119` against
+  `max|-(u v_x + v v_y) + nu om_x| = 0.08127`, residual 9.6e-05, and integrating
+  `p_y` across the channel gives +0.02256 against the field's +0.02255.
+
+So `p` is **not** constant across that plane — `p_y` reaches 0.081 — but the
+integrated variation is small because the flow is quasi-parallel there
+(`max|v| = 0.102` against `max|u| = 1.270`). Cross-stream pressure scales with
+the transverse dynamic head `v² ≈ 0.010`, not the streamwise one. For contrast,
+the long domain's own outflow plane at x = 8.5 has a spread of 0.267 — 10× the
+interior value — so outflow planes *do* distort pressure; the effect is local.
+
+### Without globalisation it diverges; with it, the state is held
+
+| | status | iters | CG | J end | max\|u\| | exit p spread |
+|---|---|---|---|---|---|---|
+| spectral IC, no line search | **DIVERGED** | 2 | 6,589 | — | 115.07 | — |
+| linear IC, + line search | conv | 9 | 39,118 | 3.7327e-05 | 1.513 | 0.226 |
+| spectral IC, + line search | conv | **143** | **1,113,973** | 3.7326e-05 | 1.513 | 0.227 |
+
+Both interpolations converge to the **same** state — `J` to five significant
+figures, exit reversal identical at 34.1%. The divergence was purely a missing
+globalisation, not interpolation error: linear and spectral ICs blow up
+identically (115.01 vs 115.07).
+
+![two converged states](figs/two_states_final.png)
+
+### The result: a basin problem, not a hopeless one
+
+| | J | max\|u\| | exit p spread | Newton it | CG |
+|---|---|---|---|---|---|
+| **physical state** | 3.7326e-05 | **1.513** | **0.227** | 143 | 1,113,973 |
+| **artifact state** | **3.6916e-05** | 2.494 | 3.866 | 4 | 1,294 |
+
+Two genuine converged solutions of the identical problem, **1.1% apart in the
+functional**, 65% apart in peak velocity and 17× apart in exit pressure. The
+physical one is the *higher* minimum and costs **860× more CG iterations** — the
+solver has every reason to prefer the wrong one. Which you get is decided
+entirely by the initial condition.
+
+The Jacobian is also far worse conditioned at the correct field: 7,512 CG per
+Newton step against 259 at the artifact state, a factor of 29. That is part of
+why the artifact is the attractor.
+
+**Three distinct things, not two.** The recovered state is *not* the long-domain
+restriction:
+
+| | exit p spread |
+|---|---|
+| long-domain truth at x = 2.5 | 0.024 |
+| short domain, seeded and globalised | 0.227 |
+| short domain, own history | 3.866 |
+
+Handed the right answer and solved carefully, the truncated domain still cannot
+hold it — the outflow condition pulls the exit pressure out by 9× and exit
+reversal from 24.4% to 34.1%. It simply does not pull it all the way to the
+artifact. **That 0.227 is the honest measure of what truncation costs.**
+
+---
+
+## 9. Practical guidance
 
 - **For a steady answer, use `w_mass = 0` with the loose solve** (`cgsfac=1e-3`,
   `tol=1e-6`) and p-MG. 11 Newton iterations against ~320 time steps.
@@ -533,3 +634,9 @@ against using the functional to judge solution quality on this domain.
   the same thing without touching the time integration and without the
   divergence limit.
 - **Never tune on `x_r`** on the long domain.
+- **On a truncated domain, seed from a longer one and enable the line search.**
+  That is the only configuration that reaches the physical state (§8); starting
+  from the truncated domain's own history converges — quickly and cleanly — to
+  a 66% velocity overshoot instead. Do not read a clean, cheap convergence as
+  evidence of a good answer here: the artifact state converges in 4 Newton
+  iterations and 1,294 CG, the physical one in 143 and 1.1 M.
