@@ -309,38 +309,73 @@ channel to the exit plus a **second counter-rotating cell** near the outflow
 **Conclusion: use the short domain only for cost comparisons, never to judge
 flow structure.** The long-domain sweep in §4 is the one to read.
 
-> ### Correction (2026-08-09): the caps at `w_mom` ≥ 1.0 are a GLOBALISATION
-> ### failure, not evidence about the weights
+> ### Correction (2026-08-09): every "cap" above is an ITERATION-BUDGET limit
+> ### and carries NO information about the weights
 >
 > This section originally read the three capped runs as "Newton wandering among
-> near-degenerate states" and cited them as multi-valuedness. That was wrong for
-> `w_mom = 1.0`, and is unverified for 1.5 and 2.0.
+> near-degenerate states" and cited them as multi-valuedness. **That was wrong.**
+> All three converge; 60 was simply too small a cap. Re-run from a different
+> converged start (the no-pin `w_mom = 0.1` field) with `line_search=True` and a
+> 250-iteration cap (`scratch/bfs_wx_ls.py`):
 >
-> Re-run from a different converged start (the no-pin `w_mom = 0.1` field,
-> `scratch/bfs_w1_ls.py`), `w_mom = 1.0` reaches the **same** state from both
-> starts, with and without the pin — `Qout/Qin` 0.9909, `rms div` 1.03e-01,
-> `max|u|` 2.325, `x_r/h` ≈ 3.42, exit rev 27.3%, agreeing to 3-4 digits. So it
-> is **single-valued at this weight**, not degenerate. It merely stalls, with
-> `max|dU|` oscillating around 1–2 instead of decaying.
->
-> Turning on the non-monotone line search **converges it in 53 iterations**
-> using *fewer* resources than the runs that failed:
->
-> | | status | iters | CG | wall | J end |
+> | `w_mom` | status | iters | CG | wall | J start → end |
 > |---|---|---|---|---|---|
-> | no pin | cap | 60 | 41,319 | 279 s | 1.122e-03 |
-> | with pin | cap | 60 | 40,897 | 274 s | 1.123e-03 |
-> | **no pin + line search** | **conv** | **53** | **33,980** | **231 s** | 1.122e-03 |
+> | 1.0 | **conv** | **53** | 33,980 | 231 s | 3.539e-03 → 1.122e-03 |
+> | 1.5 | **conv** | **73** | 73,914 | 498 s | 7.960e-03 → 1.546e-03 |
+> | 2.0 | **conv** | **60** | 68,284 | 463 s | 1.415e-02 → 1.873e-03 |
 >
-> The first eight steps are bit-identical to the undamped run (`alpha = 1`
-> throughout the early phase, so the line search is free); damping engages only
-> once the iteration starts oscillating.
+> In every case the capped run had **already arrived** and was only failing to
+> certify: at `w_mom = 1.5` the 60-iteration and 73-iteration runs give the same
+> `J` (1.546e-03), the same `x_r/h` (3.463) and the same exit spread to 0.2%.
 >
-> **`w_mom` = 1.5 and 2.0 have NOT been re-checked** and their "cap" entries in
-> the table above must not be read as evidence about those weights until they
-> are. The multi-valuedness claim for this domain still stands on the separate
-> evidence in §7 (two different converged states at `w_mom = 0.1`), but not on
+> An intermediate reading of mine — that this was specifically a *globalisation*
+> failure — was also too strong, and is corrected here. The line search does
+> help at `w_mom = 1.0`, converging in 53 iterations against a cap at 60 and
+> using **18% fewer CG iterations than the run that failed**. But 1.5 and 2.0
+> needed a bigger budget more than they needed damping. The common mechanism is
+> a **period-2 oscillation** in `max|dU|` — large step, tiny step, repeat:
+>
+> ```
+> w_mom 1.5:  12.0, 0.83, 1.71, 0.023, 2.27, 0.103, 1.47, 0.162
+> w_mom 2.0:  12.8, 1.44, 1.64, 0.035, 1.16, 0.021, 1.03, 0.014
+> ```
+>
+> Convergence is set by whether the small legs decay, which is slow but does
+> happen. Budget for 50–100 Newton iterations on this domain, not 60.
+>
+> **`w_mom = 1.0` is also single-valued here**, contrary to the original text:
+> two unrelated starts, with and without the pin, reach the same state to 3–4
+> digits (`Qout/Qin` 0.9909, `rms div` 1.03e-01, `max|u|` 2.325, `x_r/h` ≈ 3.42).
+> The multi-valuedness claim for this domain now rests **only** on the separate
+> §7 evidence (two different converged states at `w_mom = 0.1`), not on any of
 > these caps.
+>
+> ### The converged short-domain sweep
+>
+> With all three certified, the trends are monotone and match §4 in direction:
+>
+> | `w_mom` | iters | x_r/h | max\|u\| | exit p spread | exit rev | Qout/Qin | rms div |
+> |---|---|---|---|---|---|---|---|
+> | 0.1 | **4** | 3.312 | 2.494 | 3.866 | 26.8% | **0.9997** | **4.28e-03** |
+> | 1.0 | 53 | 3.424 | 2.326 | 3.158 | 26.8% | 0.9909 | 1.03e-01 |
+> | 2.0 | 60 | **3.490** | **2.127** | **2.457** | 29.3% | 0.9851 | 1.45e-01 |
+>
+> ![w_mom 0.1 / 1.0 / 2.0, no pin](figs/wmom_trio_nopin.png)
+>
+> **`w_mom` scales the exit-pressure excursion without changing its shape.** The
+> de-meaned profiles share the same trough at y ≈ 0.38, the same inflection near
+> y ≈ 0.6 and the same zero crossing at y ≈ 0.25; only the amplitude moves
+> (3.866 → 2.457, −36%). The weight is not restructuring the outflow — it is
+> turning down the gain on a mode shape fixed by the geometry and the boundary
+> condition. That is what the soft-mode picture predicts.
+>
+> **The exchange rate on this domain is poor.** `max|u|` improves 2.494 → 2.127,
+> removing 37% of the excess over the physical 1.5, while `rms div` degrades
+> **34×** and mass loss goes 0.03% → 1.5%. On the long domain the same weight
+> change bought a 27% bubble movement for ~1% mass. Here you pay an order of
+> magnitude in divergence for a partial fix to an overshoot still 42% too high at
+> `w_mom = 2.0` — and `w_mom = 0.1` is also **13× cheaper** (4 iterations).
+> On this geometry, take `w_mom = 0.1`.
 
 ---
 
@@ -481,12 +516,17 @@ against using the functional to judge solution quality on this domain.
 - **Enable `line_search=True` by default on the steady form.** This was
   originally written as "enable it when you cannot control the tolerance",
   treating it as insurance. That understates it: on the short domain at
-  `w_mom = 1.0` it converged a case that otherwise capped at 60 iterations,
-  using **18% fewer CG iterations and less wall time** than the runs that
-  failed (§5 correction). It is free when unneeded (`alpha = 1`), it rescues the
-  tight-tolerance short-domain case (§7), and at worst it converts divergence
-  into a detectable stall (§3). Leave `ls_memory` at its default of 10; setting
-  it to 1 gives monotone Armijo, which fails here.
+  `w_mom = 1.0` it converged a case that otherwise capped, using **18% fewer CG
+  iterations and less wall time** than the run that failed (§5 correction). It
+  is free when unneeded (`alpha = 1`), it rescues the tight-tolerance
+  short-domain case (§7), and at worst it converts divergence into a detectable
+  stall (§3). Leave `ls_memory` at its default of 10; setting it to 1 gives
+  monotone Armijo, which fails here.
+- **Budget 50–100 Newton iterations on the short domain, not 60.** Convergence
+  there proceeds by a slowly-damping period-2 oscillation; `w_mom` = 1.0, 1.5
+  and 2.0 need 53, 73 and 60 iterations. A cap of 60 reports "did not converge"
+  on runs that have already arrived — check the *field change*, not just the
+  status, before concluding anything from a cap.
 - **Pick `w_mom` from the quantity you care about**: ~0.1–0.2 for mass
   conservation, ~0.85 to match the Fortran bubble, ~2.0 for the sharpest
   separation and cleanest exit pressure. This is a better knob than dt — it does
