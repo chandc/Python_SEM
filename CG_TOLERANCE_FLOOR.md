@@ -105,11 +105,18 @@ too big to be explained this way and stand unaffected:
 
 | effect | size | tolerance-explicable? |
 |---|---|---|
-| Poiseuille dt spread | 1875x | no |
+| Poiseuille dt spread | 1875x | no — **re-run tight: 212,061x**, see below |
 | BFS bubble response to weighting | 30% | no |
 | cavity vs Poiseuille sensitivity | 5.9x vs 1875x | no |
 | BFS exit pressure spread, Jacobi vs p-MG | 5x | probably not, but unchecked |
 | BFS mass conservation differences | ~0.5–1% | **unchecked** |
+
+> **Resolved for Poiseuille (2026-08-09).** The full dt sweep was re-run with
+> both floors lowered (`scratch/dt_tight.py`). The dt effect is *larger* than
+> published, not smaller: dt=1 improves 113x to 4.65e-06 and dt=0.05 is
+> unchanged at 98.5%. Table in
+> [STEADY_FORM_STUDY.md](./STEADY_FORM_STUDY.md) §6. The BFS rows above remain
+> unchecked.
 
 ---
 

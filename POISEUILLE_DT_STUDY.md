@@ -6,16 +6,21 @@ the BFS steady state to be dt-dependent. This one isolates *why*, on a case with
 a known exact solution, and led to the `w_mom` / `w_mass` parameters that
 decouple the least-squares weight from the time step.
 
-> **Caveat (2026-08-08):** every run here used the default absolute CG
-> tolerance `tol = 1e-6`. Errors in the 1e-4 to 1e-3 band may be
-> tolerance-limited rather than discretisation-limited — see
-> [CG_TOLERANCE_FLOOR.md](./CG_TOLERANCE_FLOOR.md). The large effects (the
-> 1875x dt spread, the dt=0.05 catastrophe) are unaffected; the dt=1 figure
-> improves from 5.26e-04 to 1.72e-04 when the floor is lowered.
+> **Correction (2026-08-09): the effect reported here is real, and UNDERSTATED
+> by 113x.** Every run below used the default absolute CG tolerance
+> `tol = 1e-6` (see [CG_TOLERANCE_FLOOR.md](./CG_TOLERANCE_FLOOR.md)). The sweep
+> has since been re-run with both floors lowered (`cgsfac=1e-8`, `tol=1e-10`):
+> dt=1 improves **113x**, 5.26e-04 → **4.65e-06**, while dt=0.05 is unchanged at
+> 98.5% error — no amount of linear-solve accuracy helps a near-singular
+> pressure block. The spread over dt goes from **1875x to 212,061x**. Full table
+> in [STEADY_FORM_STUDY.md](./STEADY_FORM_STUDY.md) §6, reproduce with
+> `scratch/dt_tight.py`. Read the numbers below as a lower bound.
 
 Follow-up: [WEIGHT_VS_TIMESTEP_STUDY.md](./WEIGHT_VS_TIMESTEP_STUDY.md) uses
 these parameters to separate the weighting from the time step on the BFS, and
 shows the lid-driven cavity is ~300x less sensitive than Poiseuille.
+[STEADY_FORM_STUDY.md](./STEADY_FORM_STUDY.md) then removes the time derivative
+altogether (`w_mass = 0`), which turns the weight into a single monotone knob.
 
 Reproduce: `scratch/poiseuille_dt.py` (dt sweep), `scratch/plot_poiseuille.py`
 (figure), `scratch/poiseuille_pout.py` (outlet pressure), `scratch/poiseuille_new.py`

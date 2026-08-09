@@ -11,6 +11,14 @@ previous sweep moved both at once.
 > tolerance artifacts, but the mass-conservation differences (~0.5-1%) sit in
 > the band where that floor can bind and have NOT been re-checked. See
 > [CG_TOLERANCE_FLOOR.md](./CG_TOLERANCE_FLOOR.md).
+>
+> **Follow-up (2026-08-09):** the analogous Poiseuille re-check found the
+> weighting effect *understated*, not overstated (113x at dt=1). And the
+> divergence recorded in §2 at `a_flux = 2.0` belongs to the **mass term**, not
+> the momentum weight: with `w_mass = 0` the same `a_flux = 2.0` converges in 8
+> Newton iterations. See [STEADY_FORM_STUDY.md](./STEADY_FORM_STUDY.md), which
+> also sweeps `w_mom` with the time derivative removed entirely — every metric
+> moves monotonically, with no stability limit.
 
 Reproduce: `scratch/bfs_wsweep.py` (BFS 2-D sweep), `scratch/cavity_dt.py`
 (cavity sensitivity), raw results in `scratch/bfs_wsweep.json`.

@@ -4,14 +4,13 @@ If the Fortran field yields the same bubble extent as Python, the disagreement
 with Chan's 7.84..9.66 is in the detector or in the quoted benchmark numbers,
 not in the Python solver.
 """
-import os
 import sys, numpy as np
 sys.path.insert(0, '/Users/danielchan/Dropbox/Apple_MLX_CFD/sem_demo')
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 from lssem2d.lgl import diff_matrix
 
-SC = os.path.dirname(os.path.abspath(__file__))
+SC = '/private/tmp/claude-501/-Users-danielchan-Dropbox-F90-SEM/6eb12f11-0cab-40ba-b8d4-95d1b2eccac6/scratchpad'
 H = 0.5
 
 

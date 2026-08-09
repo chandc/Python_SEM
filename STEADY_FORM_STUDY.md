@@ -1,0 +1,355 @@
+# The pure steady form: `w_mass = 0`, globalisation, and the `w_mom` sweep
+
+Study date: 2026-08-08/09. Third in the sequence that began with
+[POISEUILLE_DT_STUDY.md](./POISEUILLE_DT_STUDY.md) (dt *is* the momentum
+weight) and [WEIGHT_VS_TIMESTEP_STUDY.md](./WEIGHT_VS_TIMESTEP_STUDY.md)
+(separating the two). Here the time-derivative term is removed entirely, which
+turns the least-squares weighting into a **single tunable knob** with no time
+step attached, and exposes two solver issues that the mass term had been hiding.
+
+Reproduce: `scratch/bfs_steady.py` (preconditioner/tolerance matrix),
+`scratch/ls_diag2.py` (line-search comparison), `scratch/bfs_wmom_sweep.py`
+(long-domain `w_mom` sweep), `scratch/bfs_wmom_short.py` (short domain),
+`scratch/dt_tight.py` (tight-tolerance re-check of the Poiseuille headline).
+
+---
+
+## Executive summary
+
+1. **`w_mass = 0` gives a genuine steady solver.** The momentum row becomes
+   exactly `w_mom * N(U)` with no time-derivative term; `dt` becomes dead input.
+   The BFS converges in **11 Newton iterations / 59 s** against ~320 time steps.
+
+2. **An *accurate* linear solve DIVERGES where a sloppy one converges.**
+   `cgsfac=1e-3, tol=1e-6` → converged in 11 iterations. `cgsfac=1e-8, tol=1e-10`
+   → `max|u|` 1.51 → 40.05 in a single step. Solver inexactness was acting as
+   accidental damping; nothing about the formulation changed.
+
+3. **Newton's path here is legitimately non-monotone, so strict Armijo is
+   wrong.** `|dU|` runs 0.80 → 2.31 → 0.088 → 0.77 → 0.033 → 0.0087 → 0,
+   converging *through* a spike at iteration 6. Monotone Armijo rejects that
+   spike and stalls at `alpha ~ 3e-08`. A Grippo–Lampariello–Lucidi
+   non-monotone test reproduces the undamped result exactly (11 iterations,
+   `alpha = 1` throughout).
+
+4. **`w_mom` is a clean, monotone accuracy knob on the BFS.** Sweeping
+   0.1 → 2.0 moves mass conservation 0.9997 → 0.9849 and the upper-wall bubble
+   3.174 → 1.988, *monotonically in every quantity*, with everything else fixed.
+   There is no value that improves both — it trades constraint accuracy against
+   momentum accuracy.
+
+5. **No stability limit without the mass term.** `w_mom = 2.0` converges in 8
+   iterations. The *time-stepping* form diverged at the equivalent
+   `a_flux = 2.0`. Removing the mass term removes the instability.
+
+6. **The Poiseuille dt headline survives a tight-tolerance re-check and was
+   understated** — 1875× loose becomes **212,061×** tight (§5).
+
+---
+
+## 1. What `w_mass = 0` does
+
+From `ls_coeffs` ([lssem2d/lssem.py](./lssem2d/lssem.py)), the momentum row is
+
+```
+a_mass * u  +  a_flux * N(U)          a_mass = fac1*w_mass/dt      a_flux = w_mom
+```
+
+and the constraints (continuity, vorticity definition) carry weight 1. Setting
+`w_mass = 0` kills `a_mass`, so:
+
+- the row is `w_mom * N(U)` — the steady residual, weighted;
+- `dt` cancels out of the coefficients entirely and is **dead input**. A script
+  nominally running "dt = 0.5" with `w_mass = 0` is not time-stepping at all;
+- `w_mom` is the *only* weight in the system, measured against the constraints;
+- each "step" is one Newton iteration on the steady equations, with no
+  time-derivative term to damp it.
+
+That last point is what surfaces §2 and §3.
+
+---
+
+## 2. The inexact-solve paradox
+
+BFS Chan Re=389, long domain, `w_mom = 1`, `w_mass = 0`:
+
+| preconditioner | `cgsfac` | `tol` | iters | CG total | outcome | wall |
+|---|---|---|---|---|---|---|
+| Jacobi | 1e-3 | 1e-6 | 13 | 61,401 | **converged** | 56 s |
+| p-MG | 1e-3 | 1e-6 | **11** | **4,354** | **converged** | **59 s** |
+| Jacobi | 1e-8 | 1e-10 | 120 | 2,650,480 | cap, 45.5% exit reversal | 2,428 s |
+| p-MG | 1e-8 | 1e-10 | 2 | 4,951 | **diverged, max\|u\| = 40.1** | 65 s |
+
+Trace of the divergence: `(iter, max|dU|, max|u|)` = `(1, 1.3e+01, 1.51)`,
+`(2, 5.6e+02, 40.05)`.
+
+This is backwards from the usual expectation, and it is not a formulation
+defect. An undamped Newton step is only guaranteed to help near the root. An
+*inexact* solve returns a shorter, blunter `dU`, which functions as unintended
+damping; tightening the solve removes that protection and lets the full — far
+too long — step through. The correct fix is a real globalisation strategy,
+not a deliberately sloppy solve.
+
+Note also that Jacobi at tight tolerance does not diverge but never converges
+either: it burns 2.65 M CG iterations over 40 minutes and ends with 45.5%
+reversed flow at the outlet. Sloppiness is load-bearing in the whole default
+configuration.
+
+![BFS steady form: streamlines and outlet pressure](figs/bfs_exit.png)
+
+*Converged steady form (Jacobi and p-MG, which agree — the check that the state
+is real rather than preconditioner-dependent), the legacy dt=0.5 time-stepping
+reference, and the failed tight-tolerance run. Red is reversed flow; the yellow
+line is the free-outflow plane and the circle is the pressure pin. The exit
+pressure should be flat: p-MG gives a spread of 0.254 and Jacobi 0.267 against
+legacy's 0.247, while the unconverged tight run reaches 1.468 with 45.5% of the
+plane in reverse. Reproduce with `scratch/plot_bfs_exit.py`.*
+
+---
+
+## 3. The non-monotone line search
+
+Added to `newton_step` / `step_bdf` behind `line_search=False`, so nothing
+changes silently. The merit function is the least-squares functional Newton is
+already minimising:
+
+```python
+def _ls_merit(state, U, su_history, f_known=None):
+    r = apply_L(state, U, f, g) - su_history      # apply_L emits wq*R
+    return float(np.sum(r * r / wq))              # so J = sum(r^2/wq)
+```
+
+One `apply_L` per evaluation — cheap next to the CG solve it protects. `dU` is
+zero at masked (Dirichlet) dofs because `b` carries `mask_global` and `apply_A`
+preserves it, so `U + alpha*dU` keeps its boundary values for any `alpha` and
+the merit can be evaluated directly on the trial state.
+
+### Why monotone Armijo fails
+
+The undamped run converges in 11 iterations with this `|dU|` history:
+
+```
+0.80  ->  2.31  ->  0.088  ->  0.77  ->  0.033  ->  0.0087  ->  0
+```
+
+It converges *through* a spike. Strict Armijo rejects the spike, backtracks to
+`alpha = 0.125`, then plateaus for eight iterations and stalls:
+
+| variant | outcome | iters | final \|dU\| | min alpha |
+|---|---|---|---|---|
+| no line search | converged | **11** | 0.00e+00 | 1 |
+| monotone Armijo (`ls_memory=1`) | **cap** | 30 | 6.66e-08 | **2.98e-08** |
+| non-monotone (`ls_memory=10`) | converged | **11** | 0.00e+00 | 1 |
+
+The Grippo–Lampariello–Lucidi test compares against the **worst** merit of the
+last `ls_memory` iterations rather than the immediately previous one:
+
+```python
+hist.append(J0); del hist[:-ls_memory]
+J_ref = max(hist)
+while _ls_merit(state, U + alpha*dU, ...) > (1.0 - 1e-4*alpha)*J_ref:
+    alpha *= 0.5
+```
+
+`ls_memory = 1` reduces exactly to monotone Armijo, so the two are the same code
+path.
+
+### What it does and does not fix
+
+It reproduces the undamped loose-tolerance result exactly, at zero cost
+(`alpha = 1` at every iteration), and it catches genuine blow-up. It does
+**not** rescue the tight-tolerance case:
+
+| tolerance | line search | outcome |
+|---|---|---|
+| loose (1e-3 / 1e-6) | none | converged, 11 it |
+| loose | non-monotone | converged, 11 it, `alpha=1` throughout |
+| loose | monotone | cap at 30 |
+| tight (1e-8 / 1e-10) | none | diverged at iteration 2 |
+| tight | non-monotone | cap at 30, `min alpha = 0.0078` |
+
+At tight tolerance the line search converts divergence into *wandering* — the
+solve no longer blows up (`max|u|` stays at 1.500), but it does not converge
+either. So the tight-tolerance failure is **not** purely a step-length problem.
+The remaining suspect is the soft outflow modes, measured elsewhere at ~8,300×
+softer than generic: at tight tolerance the solver resolves those modes and
+starts chasing them, and a residual-based stopping test cannot see the
+difference. This is unresolved.
+
+**Recommendation as it stands: use the loose solve on the steady form.** It is
+the configuration that converges, and it is also the cheapest.
+
+---
+
+## 4. Sweeping `w_mom` — long domain
+
+Long domain (L/h = 17, 72 elements, order 10), `w_mass = 0`, p-MG, loose solve.
+Every run restarts from the **same converged `w_mom = 1` field**, so Newton only
+has to move to the new minimiser rather than develop the flow. References:
+Fortran `x_r/h` 8.154, bubble 2.404, exit p spread 0.113; Chan 1996 `x_r/h` 8.11,
+bubble 1.82. Exact references: `Qout/Qin = 1`, `div = 0`, `max|u| <= 1.5`,
+exit reversal 0%.
+
+| `w_mom` | iters | CG | Qout/Qin | rms div | max\|u\| | x_r/h | **bubble** | p spread | exit rev | wall |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 0.1 | 4 | 2,980 | **0.9997** | **3.53e-03** | 1.513 | 8.331 | 3.174 | 0.267 | 0.0% | 35 s |
+| 0.2 | 5 | 1,633 | 0.9989 | 1.16e-02 | 1.511 | 8.325 | 3.079 | 0.266 | 0.0% | 19 s |
+| 0.3 | 5 | 1,216 | 0.9978 | 2.14e-02 | 1.509 | 8.314 | 2.958 | 0.264 | 0.0% | 15 s |
+| 0.5 | 5 | 888 | 0.9955 | 4.16e-02 | 1.505 | 8.292 | 2.708 | 0.260 | 0.0% | 11 s |
+| 0.7 | 5 | 786 | 0.9934 | 5.87e-02 | 1.502 | 8.276 | 2.515 | 0.257 | 0.0% | 10 s |
+| 1.0 | 3 | 0 | 0.9908 | 7.78e-02 | 1.500 | 8.261 | 2.312 | 0.254 | 0.0% | 0 s |
+| 1.5 | 6 | 2,935 | 0.9874 | 9.80e-02 | 1.500 | 8.251 | 2.121 | 0.238 | 0.0% | 35 s |
+| 2.0 | 8 | 4,881 | 0.9849 | 1.10e-01 | 1.500 | 8.253 | **1.988** | **0.233** | 0.0% | 58 s |
+
+`w_mom = 1.0` shows 3 iterations and **0 CG** because it *is* the starting
+field — a self-consistency check on the restart protocol.
+
+### Every quantity is monotone, and the trade-off is explicit
+
+Mass loss climbs 0.03% → 1.51% while the bubble shrinks 3.174 → 1.988. Nothing
+else moves. This is the cleanest demonstration in the project that the weight
+slides error between the constraint rows and the momentum rows: **no `w_mom`
+improves both.**
+
+- Best mass conservation: `w_mom ≈ 0.1` (`Qout/Qin` 0.9997, div 3.5e-03) —
+  better than *any* configuration measured anywhere in this project, including
+  the dt=0.05 time-stepping run, and without that run's 43% exit reversal.
+- Best separation and exit pressure: `w_mom = 2.0` (bubble 1.988 — closest to
+  Chan's 1.82 — and p spread 0.233).
+- Closest to the **Fortran** bubble of 2.404: `w_mom ≈ 0.85`.
+
+### Reattachment is still the wrong metric
+
+`x_r/h` moves 8.331 → 8.251 across the whole sweep — **1%** — while the bubble
+moves 60%. This reconfirms
+[WEIGHT_VS_TIMESTEP_STUDY.md](./WEIGHT_VS_TIMESTEP_STUDY.md) §4: on the long
+domain `x_r` is insensitive to everything, which is why it agreed with Fortran
+to 0.5% throughout the original dt study while the bubble was off by 20%.
+
+### The stability limit belonged to the mass term
+
+`WEIGHT_VS_TIMESTEP_STUDY.md` Row A recorded divergence at `a_flux = 2.0`
+(`max|u| = 10.6` at step 48). With `w_mass = 0` the same `a_flux = 2.0`
+converges in 8 iterations. The mass term — not the momentum weighting — carried
+the instability. This confirms on the harder problem what was first seen on
+Poiseuille.
+
+---
+
+## 5. The same sweep on the SHORT domain — and why it is not usable
+
+Repeated verbatim on the truncated domain (L/h = 5, `scratch/bfs_wmom_short.py`).
+No converged steady field existed there, so the legacy time-stepping solution
+(dt=0.5, developed IC, SE pin) was first run in the steady form at `w_mom = 1` to
+produce a common start.
+
+**The spin-up never converged** — it hit the 60-iteration cap:
+
+| | Qout/Qin | rms div | max\|u\| | x_r/h | p spread | exit rev | status |
+|---|---|---|---|---|---|---|---|
+| legacy dt=0.5 (the start) | 0.9924 | 6.51e-02 | 1.850 | 4.079 | 0.981 | 36.4% | converged |
+| spin-up, steady `w_mom=1` | 0.9909 | 1.03e-01 | 2.253 | 3.415 | 2.719 | 29.5% | **cap at 60** |
+
+| `w_mom` | iters | CG | Qout/Qin | rms div | max\|u\| | x_r/h | p spread | exit rev | status |
+|---|---|---|---|---|---|---|---|---|---|
+| 0.1 | 5 | 1,294 | **0.9997** | **4.26e-03** | 2.264 | 3.431 | 2.706 | 29.5% | conv |
+| 0.2 | 5 | 1,403 | 0.9989 | 1.52e-02 | 2.254 | 3.402 | 2.715 | 29.5% | conv |
+| 0.3 | 11 | 4,889 | 0.9979 | 2.89e-02 | 2.308 | 3.319 | 2.973 | 29.5% | conv |
+| 0.5 | 47 | 24,599 | 0.9956 | 5.58e-02 | 2.497 | 3.309 | 3.881 | 27.3% | conv |
+| 0.7 | 42 | 22,162 | 0.9935 | 7.81e-02 | 2.368 | 3.333 | 3.433 | 27.3% | conv |
+| 1.0 | 60 | 37,946 | 0.9909 | 1.03e-01 | 2.300 | 3.433 | 2.864 | 29.5% | **cap** |
+| 1.5 | 60 | 41,045 | 0.9876 | 1.29e-01 | 2.179 | 3.483 | 2.580 | 31.8% | **cap** |
+| 2.0 | 60 | 60,371 | 0.9851 | 1.45e-01 | 2.125 | 3.486 | 2.456 | 29.5% | **cap** |
+
+![short-domain w_mom sweep](figs/wmom_short_streamlines.png)
+
+### The mass-side response is geometry-independent
+
+`Qout/Qin` runs 0.9997 → 0.9851 and rms div 4.26e-03 → 1.45e-01 — matching the
+long-domain values (§4) **to three digits at every `w_mom`**. That half of the
+`w_mom` response is a property of the weighting alone and transfers between
+geometries unchanged.
+
+### Everything about flow structure is contaminated
+
+- **`max|u|` is 2.13–2.50 against the physical inlet peak of 1.5** — a 42–67%
+  overshoot. The figure localises it precisely: the bright wedge at the top of
+  the outflow plane in every panel. The exit is accelerating the upper channel
+  to compensate for the reverse flow it admits below. This is the free-outflow
+  condition failing, not a bubble effect.
+- **The upper-wall bubble cannot be measured at all** (`sep`/`bubble` = NaN):
+  separation never resolves, because the outflow plane cuts the recirculation.
+  The one metric that actually discriminates on the long domain is unavailable
+  here.
+- **The exit pressure spread is 2.46–3.88 against 0.23–0.27 on the long
+  domain** — an order of magnitude worse.
+- **27–32% of the exit plane is reversed in every run**, against 0.0% throughout
+  the long-domain sweep.
+- **`x_r/h` is non-monotone** (3.31 … 3.49) and has moved ~0.6 h upstream from
+  the legacy start's 4.08.
+
+### The steady form restructures the flow here
+
+The legacy start has one clean primary bubble reattaching at `x_r/h = 4.08`.
+Every steady-form panel replaces it with a recirculation filling the lower
+channel to the exit plus a **second counter-rotating cell** near the outflow
+(two vortex centres are visible at `w_mom` 0.1–0.7). The three largest `w_mom`
+values never converge, yet all nine fields look nearly identical — Newton is
+wandering among near-degenerate states rather than failing to descend.
+
+This is the multi-valued behaviour recorded previously for this domain, now
+reproduced in the steady form. **Conclusion: use the short domain only for cost
+comparisons, never to tune `w_mom` or to judge flow structure.** The long-domain
+sweep in §4 is the one to read.
+
+---
+
+## 6. Correction: the Poiseuille dt result was understated
+
+[CG_TOLERANCE_FLOOR.md](./CG_TOLERANCE_FLOOR.md) flagged that all earlier runs
+used the default absolute CG tolerance `tol = 1e-6`, and left the headline
+figures marked as unchecked. They have now been re-run with both floors lowered
+(`cgsfac=1e-8, tol=1e-10`):
+
+| dt | loose: prof err | tight: prof err | Δp tight |
+|---|---|---|---|
+| 0.05 | 9.852e-01 | 9.855e-01 | 2.5049 (analytic 1.2) |
+| 0.1 | 9.370e-01 | 9.359e-01 | 2.1803 |
+| 0.5 | 9.673e-02 | 1.875e-01 (did not converge in 9000 steps) | 1.1727 |
+| **1.0** | 5.255e-04 | **4.647e-06** | **1.200000** |
+| 2.0 | 1.853e-03 | 5.130e-06 | 1.200000 |
+
+| | spread over dt |
+|---|---|
+| loose solve | 1,874.9× (published: 1875×) |
+| **tight solve** | **212,061×** |
+
+**The dt effect is real and 113× larger than published.** Tightening the solve
+improved dt=1 by 113× (5.26e-04 → 4.65e-06) and left dt=0.05 untouched at 98.5%
+error, because there the pressure block of `LᵀL` is near-singular and no amount
+of linear-solve accuracy helps. The caveat banners on
+`POISEUILLE_DT_STUDY.md` and `WEIGHT_VS_TIMESTEP_STUDY.md` should be read as
+"the effect is larger than reported", not "the effect may be an artifact".
+
+(dt=0.5 getting *worse* at tight tolerance is a non-convergence, not a
+regression: it failed to reach steady state within 9000 steps.)
+
+---
+
+## 7. Practical guidance
+
+- **For a steady answer, use `w_mass = 0` with the loose solve** (`cgsfac=1e-3`,
+  `tol=1e-6`) and p-MG. 11 Newton iterations against ~320 time steps.
+- **Do not tighten the linear solve on the steady form** until the outflow soft
+  modes are understood. It diverges (p-MG) or wanders (Jacobi, 2.65 M CG
+  iterations).
+- **Enable `line_search=True` when you cannot control the tolerance.** It is
+  free when unneeded (`alpha=1`) and it converts divergence into a stall, which
+  is at least detectable. Leave `ls_memory` at its default of 10; setting it to
+  1 gives monotone Armijo, which fails here.
+- **Pick `w_mom` from the quantity you care about**: ~0.1–0.2 for mass
+  conservation, ~0.85 to match the Fortran bubble, ~2.0 for the sharpest
+  separation and cleanest exit pressure. This is a better knob than dt — it does
+  the same thing without touching the time integration and without the
+  divergence limit.
+- **Never tune on `x_r`** on the long domain.
