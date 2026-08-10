@@ -206,3 +206,39 @@ def test_ls_memory_explicit_value_is_respected(monkeypatch):
     S.step_bdf(st, [U], max_newton=5, line_search=True, ls_memory=7,
                cgsfac=1e-3, cg_max_iter=2000)
     assert seen['ls_memory'] == 7
+
+
+# --- p-MG coarse operator must match the fine one --------------------------
+
+@pytest.mark.parametrize("kw", [
+    dict(w_mom=1.0, w_mass=1.0),
+    dict(w_mom=0.1, w_mass=0.0),
+    dict(w_mom=1.0, w_mass=1.0, dtau=0.3),
+])
+def test_pmg_coarse_carries_the_same_weighting(kw):
+    """The p-MG coarse SolverState must inherit w_mom/w_mass/dtau.
+
+    Built with only (nu, dt, fac1), ls_coeffs takes its LEGACY branch on the
+    coarse grid -- (fac1, dt) instead of (fac1*w_mass/dt, w_mom) -- so the
+    V-cycle preconditions a differently-weighted operator.  Measured cost of
+    that mismatch at w_mom = w_mass = 1, dt = 0.1: 5955 CG iterations against
+    597, a factor of 10.
+    """
+    from lssem2d import precond as P
+    from lssem2d.lssem import ls_coeffs, ls_pseudo
+
+    mesh = build_channel(1.0, 1.0, 2, 2, 8, bcs=(1, 1, 1, 2))
+    st = SolverState(mesh, diff_matrix(8), nu=1.0/389.0, dt=0.1, fac1=1.0, **kw)
+    fu = np.zeros((mesh.nelem, 9, 9))
+    fv = np.zeros((mesh.nelem, 9, 9))
+    st.update_linearisation(fu, fv)
+    M_inv = S.compute_jacobi(st, fu, fv)
+
+    pmg = P.make('pmg2', st, fu, fv, M_inv, False, pc=4, deg=4, coarse_deg=10)
+
+    assert pmg.sc.w_mom == st.w_mom
+    assert pmg.sc.w_mass == st.w_mass
+    assert getattr(pmg.sc, 'dtau', None) == getattr(st, 'dtau', None)
+    # the coefficients themselves, which is what actually matters
+    assert ls_coeffs(pmg.sc)[:2] == pytest.approx(ls_coeffs(st)[:2])
+    assert ls_pseudo(pmg.sc) == pytest.approx(ls_pseudo(st))

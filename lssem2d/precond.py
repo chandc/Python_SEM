@@ -165,8 +165,19 @@ class PMG2:
         mc.setup_derived()
         mc.compute_global_indices()
         self.mc = mc
+        # The coarse operator MUST carry the same least-squares weighting as the
+        # fine one.  Omitting w_mom/w_mass sends ls_coeffs down its LEGACY branch
+        # on the coarse grid -- (fac1, dt) instead of (fac1*w_mass/dt, w_mom) --
+        # so the coarse problem is weighted differently from the fine one and the
+        # V-cycle returns a correction to the wrong operator.  With
+        # w_mass = w_mom = 1 at dt = 0.1 that is a factor of 10 on BOTH
+        # coefficients, and CG needed ~2000 iterations per solve instead of tens.
+        # dtau matters for the same reason: it sits on the momentum diagonal.
         self.sc = SolverState(mc, diff_matrix(self.pc), state.nu, state.dt,
-                              state.fac1)
+                              state.fac1,
+                              w_mom=getattr(state, 'w_mom', None),
+                              w_mass=getattr(state, 'w_mass', None),
+                              dtau=getattr(state, 'dtau', None))
 
         # coarse linearisation velocities: restrict fu, fv
         # Prolongation P: coarse -> fine (nodal interpolation).
