@@ -160,3 +160,49 @@ def test_reset_line_search_clears():
     st._ls_hist = [3.0, 4.0]
     S.reset_line_search(st)
     assert st._ls_hist == []
+
+
+@pytest.mark.parametrize("max_newton,expected", [(1, 10), (2, 1), (5, 1)])
+def test_ls_memory_default_depends_on_regime(max_newton, expected, monkeypatch):
+    """step_bdf picks Armijo for sub-iterated solves, GLL for a single step.
+
+    max_newton > 1 is a bounded solve at a fixed time level and must be
+    monotone: sub-iteration 0 drops J by ~3 decades from the previous time
+    level, and a window retaining that value lets GLL accept steps that grow J.
+    max_newton == 1 means successive calls form one continuous iteration, which
+    is legitimately non-monotone.
+    """
+    seen = {}
+    real = S.newton_step
+
+    def spy(*a, **kw):
+        seen['ls_memory'] = kw.get('ls_memory')
+        return real(*a, **kw)
+
+    monkeypatch.setattr(S, 'newton_step', spy)
+
+    mesh = build_channel(1.0, 1.0, 2, 2, N, bcs=(1, 1, 1, 2))
+    st = SolverState(mesh, diff_matrix(N), nu=1.0/100.0, dt=0.5, fac1=1.0)
+    U = np.random.default_rng(5).standard_normal((mesh.nelem, N+1, N+1, 4))*0.05
+    S.step_bdf(st, [U], max_newton=max_newton, line_search=True,
+               cgsfac=1e-3, cg_max_iter=2000)
+    assert seen['ls_memory'] == expected
+
+
+def test_ls_memory_explicit_value_is_respected(monkeypatch):
+    """An explicit ls_memory must override the regime default."""
+    seen = {}
+    real = S.newton_step
+
+    def spy(*a, **kw):
+        seen['ls_memory'] = kw.get('ls_memory')
+        return real(*a, **kw)
+
+    monkeypatch.setattr(S, 'newton_step', spy)
+
+    mesh = build_channel(1.0, 1.0, 2, 2, N, bcs=(1, 1, 1, 2))
+    st = SolverState(mesh, diff_matrix(N), nu=1.0/100.0, dt=0.5, fac1=1.0)
+    U = np.random.default_rng(5).standard_normal((mesh.nelem, N+1, N+1, 4))*0.05
+    S.step_bdf(st, [U], max_newton=5, line_search=True, ls_memory=7,
+               cgsfac=1e-3, cg_max_iter=2000)
+    assert seen['ls_memory'] == 7

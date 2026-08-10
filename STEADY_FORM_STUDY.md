@@ -621,8 +621,43 @@ artifact. **That 0.227 is the honest measure of what truncation costs.**
   iterations and less wall time** than the run that failed (§5 correction). It
   is free when unneeded (`alpha = 1`), it rescues the tight-tolerance
   short-domain case (§7), and at worst it converts divergence into a detectable
-  stall (§3). Leave `ls_memory` at its default of 10; setting it to 1 gives
-  monotone Armijo, which fails here.
+  stall (§3). **`ls_memory` now defaults by regime and you should not override
+  it** — see the correction below.
+
+> ### Correction (2026-08-10): `ls_memory` depends on the regime
+>
+> This section originally said "leave `ls_memory` at its default of 10; setting
+> it to 1 gives monotone Armijo, which fails here." That is true **only for the
+> steady form**, and wrong for a sub-iterated time step.
+>
+> | regime | what it is | correct setting |
+> |---|---|---|
+> | `max_newton = 1` (steady form) | successive calls form ONE continuous iteration | **GLL, `ls_memory = 10`** |
+> | `max_newton > 1` (time step) | a bounded solve at a FIXED time level | **Armijo, `ls_memory = 1`** |
+>
+> The steady form is legitimately non-monotone — `|dU|` runs
+> 0.80 → 2.31 → 0.088 → 0.77 → … and converges *through* the spike, where Armijo
+> backtracks to `alpha = 0.125` and stalls at ~3e-08.
+>
+> A sub-iterated time step is the opposite. Sub-iteration 0 always drops `J` by
+> ~3 decades because it starts from the *previous time level*, so a window that
+> retains that value makes `J_ref = max(J)` the pre-Newton residual — and GLL
+> then accepts steps that **grow `J` by 184×** while still sitting under it.
+> Measured on the short BFS (dt=0.1, `w_mom = w_mass = 1`, `nsub = 5`):
+>
+> | line search | outcome |
+> |---|---|
+> | none | `max\|u\|` 1.500 → **5.567 inside the first time step**, `J` ×748,184 |
+> | GLL (`ls_memory = 10`) | creeps to **6.776** by step 5; `J` still grows on alternate sub-iterations |
+> | **Armijo (`ls_memory = 1`)** | **holds `max\|u\|` = 1.500 for every step; no sub-iteration ever increases `J`** |
+>
+> `step_bdf` now picks the default from `max_newton`, so both regimes are right
+> without the caller choosing. An explicit `ls_memory` still overrides it.
+>
+> This also corrects a claim in `PSEUDO_TIME_RESULTS.md` §5: the `nsub = 5`
+> divergences recorded there were **undamped Newton**, not a property of δτ or of
+> sub-iteration. More sub-iterations do improve convergence once the step length
+> is controlled.
 - **Budget 50–100 Newton iterations on the short domain, not 60.** Convergence
   there proceeds by a slowly-damping period-2 oscillation; `w_mom` = 1.0, 1.5
   and 2.0 need 53, 73 and 60 iterations. A cap of 60 reports "did not converge"

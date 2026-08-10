@@ -203,6 +203,47 @@ is only negligible once `R` is small, and `tol = 1e-6` does not make it small.
 
 ---
 
+## 6b. Correction (2026-08-10): the `nsub = 5` failures were undamped Newton
+
+A sweep of δτ with `nsub = 5` sub-iterations per time step (short BFS, dt=0.1,
+`w_mom = w_mass = 1`, cold developed IC) had **six of eight runs diverge,
+including the κ = 0 control** — which the `nsub = 1` control survived. I read
+that as sub-iteration destabilising the scheme. **It does not.** The cause was an
+uncontrolled Newton step length, and it is fixed.
+
+Instrumenting `|dU|` and the implicit residual `J` per sub-iteration shows it
+directly:
+
+```
+step 0  sub 0:  J 9.30e-01 -> 2.55e-03   ratio 0.003    max|u| 1.500    CG 318
+step 0  sub 1:  J 2.55e-03 -> 1.20e-03   ratio 0.468    max|u| 1.500    CG 404
+step 0  sub 2:  J 1.20e-03 -> 8.94e+02   ratio 748184   max|u| 5.567    CG 6201
+```
+
+Sub-iterations 0 and 1 behave exactly as sub-iteration should — `J` falls three
+decades, `max|u|` sits at the physical inlet peak. Sub-iteration 2 takes
+`|dU| = 22.9` and destroys the solution, and it never recovers. This is the same
+undamped-Newton failure as `STEADY_FORM_STUDY.md` §2 ("an *accurate* linear solve
+diverges where a sloppy one converges"): as the residual falls the soft outflow
+modes dominate, `CG` jumps 404 → 6201, and the step explodes. With `nsub = 1`
+you never take a third sub-iteration, so the shortfall was acting as accidental
+damping.
+
+The fix is the line search with **`ls_memory = 1`** — see the correction in
+`STEADY_FORM_STUDY.md` §8. GLL is wrong here because sub-iteration 0 always
+drops `J` by ~3 decades from the previous time level, so `max(J)` anchors on the
+pre-Newton residual and licenses steps that grow `J` by 184×. Armijo holds
+`max|u| = 1.500` for every time step with no sub-iteration ever increasing `J`.
+`step_bdf` now defaults `ls_memory` by regime.
+
+**Two conjectures of mine were refuted along the way and are recorded so they
+are not repeated:** that under-converged implicit steps drift toward explicit
+and destabilise (withdrawn — unsupported), and that the CG absolute tolerance
+floor was responsible (tested: `tol` = 1e-10 and 1e-14 give bit-identical
+results, so the floor stops binding by 1e-10 and is not the mechanism).
+
+---
+
 ## 7. Next
 
 1. Short domain from **its own** IC with δτ, then `u(y)` and `ω(y)` at 4h and 5h

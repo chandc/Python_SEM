@@ -335,7 +335,7 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
 
     return U_new, dU, cg_iters
 
-def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_factor=0.1, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, verbose=False, line_search=False, ls_memory=10):
+def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_factor=0.1, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, verbose=False, line_search=False, ls_memory=None):
     """
     Advances one time step using BDF1 or BDF2.
     U_history: list of previous states [U_n, U_{n-1}]. 
@@ -386,6 +386,29 @@ def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_f
     # measured against a different functional.
     if line_search:
         reset_line_search(state)
+
+    # ls_memory default depends on the REGIME, because the two are not the same
+    # problem (measured on the short BFS, dt=0.1, w_mom = w_mass = 1, nsub = 5):
+    #
+    #   max_newton > 1  -- a bounded solve at a FIXED time level.  Newton should
+    #     be monotone here, so ls_memory = 1 (Armijo).  Sub-iteration 0 always
+    #     drops J by ~3 decades because it starts from the previous time level;
+    #     with a window that retains that value, GLL takes max(J) = the
+    #     pre-Newton residual as its reference and licenses later steps that
+    #     GROW J by 184x while still sitting under it.  Measured: undamped
+    #     reaches max|u| = 5.57 inside the first step, ls_memory=10 creeps to
+    #     6.78 by step 5, ls_memory=1 holds 1.500 (the physical inlet peak) for
+    #     every step with no sub-iteration ever increasing J.
+    #
+    #   max_newton == 1 -- successive calls form ONE continuous iteration (the
+    #     steady form drives it this way).  That path is legitimately
+    #     non-monotone -- |dU| runs 0.80 -> 2.31 -> 0.088 -> 0.77 -> ... and
+    #     converges THROUGH the spike -- so keep GLL with ls_memory = 10.
+    #     Armijo there backtracks to alpha = 0.125 and stalls at ~3e-08.
+    #
+    # See STEADY_FORM_STUDY.md sec 3 and PSEUDO_TIME_RESULTS.md.
+    if ls_memory is None:
+        ls_memory = 1 if max_newton > 1 else 10
 
     du_norm_0 = None
     
