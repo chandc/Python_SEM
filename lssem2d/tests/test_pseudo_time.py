@@ -126,3 +126,37 @@ def test_jacobi_still_matches_the_true_diagonal(dtau):
         assert abs(d_true - 1.0/M_inv[ij]) <= 1e-10 * abs(d_true)
         checked += 1
     assert checked > 0, "no interior dofs were actually checked"
+
+
+# --- non-monotone line-search window scoping -------------------------------
+# Separate concern from dtau, but the same file already builds the fixtures.
+
+def test_line_search_window_is_per_time_step():
+    """state._ls_hist must not carry merits across time levels.
+
+    The GLL reference is max(J) over the window, and J is measured against
+    su_history, which step_bdf rebuilds at every time level.  A merit retained
+    from an earlier step compares a different functional and would license a
+    step the current level should reject.
+    """
+    mesh = build_channel(1.0, 1.0, 2, 2, N, bcs=(1, 1, 1, 2))
+    st = SolverState(mesh, diff_matrix(N), nu=1.0/100.0, dt=0.5, fac1=1.0)
+    rng = np.random.default_rng(5)
+    U = rng.standard_normal((mesh.nelem, N+1, N+1, 4)) * 0.05
+    hist = [U]
+
+    # poison the window with a merit no real iterate at the next level produces
+    st._ls_hist = [1.0e9]
+    S.step_bdf(st, hist, max_newton=2, line_search=True, cgsfac=1e-3,
+               cg_max_iter=2000)
+
+    assert 1.0e9 not in st._ls_hist, "stale merit survived into the next time step"
+    assert len(st._ls_hist) <= 2, "window grew beyond this step's sub-iterations"
+
+
+def test_reset_line_search_clears():
+    st = SolverState(build_channel(1.0, 1.0, 2, 2, N), diff_matrix(N),
+                     nu=0.01, dt=0.5, fac1=1.0)
+    st._ls_hist = [3.0, 4.0]
+    S.reset_line_search(st)
+    assert st._ls_hist == []

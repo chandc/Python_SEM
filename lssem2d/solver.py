@@ -178,6 +178,22 @@ def pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=False, max_ite
     print(f"Warning: PCG did not converge after {max_iter} iterations. Relative residual: {np.sqrt(np.sum(r*r*multiplicity_weight))/b_norm:.2e}")
     return x, max_iter
 
+def reset_line_search(state):
+    """Clear the non-monotone line-search window.
+
+    The GLL reference is max(J) over the last ls_memory sub-iterations, and J is
+    measured against su_history.  su_history is rebuilt at every time level, so
+    merits from different levels compare different functionals and must not
+    share a window.  step_bdf calls this once per time step.
+
+    Harmless in the steady form, where the whole run is one continuous
+    iteration against a fixed (zero) history -- there the window is meant to
+    span it, and step_bdf's per-step reset coincides with the single Newton
+    step taken per call.
+    """
+    state._ls_hist = []
+
+
 def _drop_pseudo(state, r, U):
     """Remove the pseudo-time term from a RESIDUAL, in place.
 
@@ -294,6 +310,12 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
         # max|u| 1.51 -> 40.05 in one step).
         #
         # ls_memory = 1 reduces exactly to monotone Armijo.
+        #
+        # The window must not span time steps.  J is measured against
+        # su_history, which is rebuilt at every time level, so merits from
+        # different levels are not comparable -- a large J carried over from an
+        # earlier step would license a step the current one should reject.
+        # step_bdf calls reset_line_search() once per time step to scope it.
         J0 = _ls_merit(state, U, su_history, f_known)
         hist = getattr(state, '_ls_hist', None)
         if hist is None:
@@ -358,7 +380,13 @@ def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_f
         
     # Initial guess is the previous state
     U = U_history[0].copy()
-    
+
+    # Scope the non-monotone line-search window to THIS time step: su_history has
+    # just been rebuilt, so any merit recorded at an earlier time level was
+    # measured against a different functional.
+    if line_search:
+        reset_line_search(state)
+
     du_norm_0 = None
     
     for i in range(max_newton):
