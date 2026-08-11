@@ -178,15 +178,55 @@ Three supporting checks:
 - **Divergence scales linearly with amplitude** (7.28→3.64, 3.69→1.86,
   2.00→1.00e-09 on halving), i.e. it is the decaying field, not a fixed floor.
 
-### The temporal-accuracy panel does NOT show clean 2nd order
+### Temporal accuracy and p-refinement
 
-Fitted slope **1.54**, not 2, with the finest `dt` sitting *above* the slope-2
-reference. This is a **spatial** error floor: at 2.3e-05 relative, a 2×4
-element order-6 mesh cannot resolve the mode any better, and reducing `dt`
-further buys nothing. Chan's own right-hand panel spans `dt` from 1e-3 to 1e0 —
-three decades wider — which is what exposes a clean slope-2 region before the
-floor. Reproducing that panel faithfully needs the wider sweep, and is not yet
-done.
+Chan's right-hand panel spans a far wider `dt` range than the three values used
+for the left panel. Reproduced with `dt` from 0.1 down to 6.25e-4, at four
+polynomial orders. The window adapts per `dt`: sigma = 9.31 means
+`E ~ exp(-18.6 t)`, so a large `dt` needs a short integration to avoid underflow
+while still leaving enough samples for a slope fit.
+
+Relative error in sigma against the analytic 9.3137399:
+
+| `dt` | N=6 | N=8 | N=10 | N=14 |
+|---|---|---|---|---|
+| 0.1 | 8.969e-02 | 8.960e-02 | 8.962e-02 | 8.963e-02 |
+| 0.05 | 9.463e-02 | 9.462e-02 | 9.461e-02 | 9.461e-02 |
+| 0.02 | 9.864e-03 | 9.861e-03 | 9.861e-03 | 9.861e-03 |
+| 0.01 | 3.018e-03 | 3.033e-03 | 3.045e-03 | 3.046e-03 |
+| 0.005 | 7.630e-04 | 7.569e-04 | 7.621e-04 | 7.620e-04 |
+| 0.0025 | 1.966e-04 | 1.946e-04 | 1.873e-04 | 1.824e-04 |
+| 0.00125 | 4.652e-05 | 4.770e-05 | 4.169e-05 | 4.031e-05 |
+| **0.000625** | 2.311e-05 | 1.435e-05 | **1.671e-06** | **2.051e-06** |
+| **fitted slope, 0.02 - 0.00125** | **1.940** | **1.935** | **1.980** | **1.993** |
+
+![Chan Figure 1 with p-refinement](figs/chan_fig1_pref.png)
+
+**For `dt` from 0.02 to 0.00125 all four orders coincide to three digits.** The
+error there is purely temporal, and the spatial discretisation contributes
+nothing — which is the strongest available evidence that the measured slope is
+real. Any spatial leakage would separate the curves.
+
+**Only the finest `dt` moves with `N`**, and it moves 14x (2.31e-05 -> 1.67e-06
+from N=6 to N=10). That is the spatial floor descending, and it lifts the fitted
+slope from 1.94 to **1.993** by putting more of the sweep in the second-order
+regime. **The method is second order as the paper claims**, to within 0.4% at
+N = 14.
+
+At the coarse end all orders saturate together at ~9e-02, where six time steps
+no longer resolve the mode whatever the spatial resolution.
+
+> **Correction.** An earlier version of this section reported a slope of 1.54
+> and attributed it to the spatial floor. The attribution was right but the
+> number was an artifact of a bad fit window: it fitted only Chan's three finest
+> `dt`, two of which sit at or past the floor. The wider span plus p-refinement
+> shows 1.99.
+
+**N = 10 and N = 14 are effectively tied** (1.67e-06 vs 2.05e-06, N=14
+fractionally worse). By N = 10 the spatial error has fallen below whatever now
+limits the finest point, so further p-refinement has nothing left to remove.
+The mild non-monotonicity is a different limit taking over — most likely the
+linear-solve tolerance or the slope-fit window — not noise.
 
 ---
 

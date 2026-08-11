@@ -29,10 +29,16 @@ import lssem2d.solver as S
 from stokes_ic import stokes_ic, energy, slowest_mode, ALPHA, NU
 
 LX, LY = 2.0*np.pi, 2.0          # half-height 1 -> full height 2
-N, EX, EY = 6, 2, 4
+N, EX, EY = int(os.environ.get('NORD', '6')), 2, 4
 TEND = 0.1                        # Fig. 1 x-axis
 SIGMA_REF = 9.313316              # Chan
 CHAN_DTS = (0.0025, 0.00125, 0.000625)
+# Wider span for the temporal-accuracy panel, to match Chan's own right-hand
+# figure.  The window has to adapt: sigma = 9.31 means E ~ exp(-18.6 t), so a
+# large dt needs a SHORT integration or the energy underflows, while still
+# giving enough samples to fit a slope.  nsteps = max(6, 0.1/dt) capped at
+# T = 0.6 keeps E/E0 above ~1e-5 everywhere.
+ACC_DTS = (0.1, 0.05, 0.02, 0.01, 0.005, 0.0025, 0.00125, 0.000625)
 
 
 def build():
@@ -59,7 +65,9 @@ def run(dt, amp, verbose=False):
     U = U0.copy(); hist = [U]
     E0 = energy(m, U)
     ts, Es = [0.0], [E0]
-    nsteps = int(round(TEND/dt))
+    nsteps = max(6, int(round(TEND/dt)))
+    if nsteps*dt > 0.6:                    # keep E/E0 above ~1e-5
+        nsteps = max(6, int(0.6/dt))
     t0 = time.perf_counter()
     for s in range(nsteps):
         U = S.step_bdf(st, hist, time=s*dt, max_newton=2,
@@ -95,8 +103,8 @@ if __name__ == '__main__':
     print(f"{'dt':>10}{'amp':>9}{'steps':>7}{'sigma':>13}{'err vs Chan':>13}"
           f"{'E(T)/E0':>11}{'rms div':>11}{'wall':>8}")
     traces = {}
-    for dt in CHAN_DTS:
-        for amp in (1e-3, 5e-4):
+    for dt in ACC_DTS:
+        for amp in ((1e-3, 5e-4) if dt in CHAN_DTS else (1e-3,)):
             r = run(dt, amp)
             if r['status'] != 'ok':
                 print(f"{dt:>10.6f}{amp:>9.0e}{'':>7}{r['status']:>13}")
@@ -106,7 +114,10 @@ if __name__ == '__main__':
             sys.stdout.flush()
             if amp == 1e-3:
                 traces[dt] = (r['ts'], r['Es']/r['E0'], r['sigma'])
-    np.savez(f'{SC}/stokes_traces.npz',
+    np.savez(f'{SC}/stokes_traces_N{N}.npz',
              **{f'dt{k:g}_{a}': v for k, (t, e, sg) in traces.items()
                 for a, v in (('t', t), ('e', e), ('s', np.array([sg])))})
-    print('\nsaved stokes_traces.npz')
+    print(f'\nsaved stokes_traces_N{N}.npz')
+    np.savez(f'{SC}/stokes_acc_N{N}.npz',
+             dts=np.array(ACC),
+             sig=np.array([traces[k][2] for k in ACC]))
