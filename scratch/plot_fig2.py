@@ -37,12 +37,14 @@ ax.plot(dbad['N8_t'], np.log(dbad['N8_e']), ls=':', lw=2.0, color='tab:red',
         label='wall elem 0.6  (30% of full width)')
 ax.plot(d['N8_t'], np.log(d['N8_e']), ls='-', lw=2.0, color='tab:red',
         label='wall elem 0.3  (30% of half-width)')
-ax.annotate('spurious mode\ntakes over', xy=(24, 0.35), xytext=(45, 0.75),
-            fontsize=8.5, ha='center', arrowprops=dict(arrowstyle='->', lw=1.1))
+# mark the departure with a rule rather than an arrow across the data
+ax.axvline(18, color='0.45', ls='--', lw=1.1, zorder=0)
+ax.text(20, 1.33, 'spurious mode takes over', fontsize=8.5,
+        ha='left', va='top', color='0.25')
 ax.set_xlabel('Time'); ax.set_ylabel('Natural Log of Energy Ratio')
 ax.set_xlim(0, 100); ax.set_ylim(-0.05, 1.4)
 ax.set_title('N = 8: the wall-element reading\n(over- vs under-predicting)', fontsize=10)
-ax.grid(alpha=.3); ax.legend(fontsize=8, loc='upper left')
+ax.grid(alpha=.3); ax.legend(fontsize=8, loc='lower right')
 
 # (c) p-refinement
 ax = axs[2]
