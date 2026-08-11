@@ -235,7 +235,7 @@ def _ls_merit(state, U, su_history, f_known=None):
     return float(np.sum(r * r / wq))
 
 
-def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, line_search=False, max_backtrack=25, ls_memory=10):
+def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, cg_tol=1e-6, line_search=False, max_backtrack=25, ls_memory=10):
     """
     Performs one Newton sub-iteration.
     U: current guess for the new time step, shape (nelem, n, n, 4)
@@ -280,7 +280,13 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
     b = -c_gs * mask_global
     
     # 3. Solve A * dU = b
-    dU, cg_iters = pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=pin_p, max_iter=cg_max_iter, cgsfac=cgsfac)
+    # cg_tol is the ABSOLUTE floor in pcg_solve's  target = max(cgsfac*|b|, tol).
+    # It was hardcoded at the 1e-6 default for the life of this project, so the
+    # relative test stopped mattering as soon as |b| fell -- see
+    # CG_TOLERANCE_FLOOR.md, whose section 5 recommended exactly this argument.
+    # The 1996 F77 runs tol=1e-14 (absolute effectively off) with cgsfac=0.01,
+    # i.e. purely relative; reproducing that setup needs this to be settable.
+    dU, cg_iters = pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=pin_p, max_iter=cg_max_iter, cgsfac=cgsfac, tol=cg_tol)
 
     # 4. Update U, optionally with a backtracking line search.
     #
@@ -335,7 +341,7 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
 
     return U_new, dU, cg_iters
 
-def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_factor=0.1, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, verbose=False, line_search=False, ls_memory=None):
+def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_factor=0.1, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, cg_tol=1e-6, verbose=False, line_search=False, ls_memory=None):
     """
     Advances one time step using BDF1 or BDF2.
     U_history: list of previous states [U_n, U_{n-1}]. 
@@ -413,7 +419,7 @@ def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_f
     du_norm_0 = None
     
     for i in range(max_newton):
-        U, dU, cg_iters = newton_step(state, U, su_history, state.M_inv, state.multiplicity_weight, time=time, f_known=f_known, custom_inlet=custom_inlet, custom_lid=custom_lid, exact_solution=exact_solution, pin_p=pin_p, cg_max_iter=cg_max_iter, cgsfac=cgsfac, line_search=line_search, ls_memory=ls_memory)
+        U, dU, cg_iters = newton_step(state, U, su_history, state.M_inv, state.multiplicity_weight, time=time, f_known=f_known, custom_inlet=custom_inlet, custom_lid=custom_lid, exact_solution=exact_solution, pin_p=pin_p, cg_max_iter=cg_max_iter, cgsfac=cgsfac, cg_tol=cg_tol, line_search=line_search, ls_memory=ls_memory)
         
         du_norm = np.max(np.abs(dU))
         if du_norm_0 is None:

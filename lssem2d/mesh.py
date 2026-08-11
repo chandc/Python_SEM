@@ -82,11 +82,35 @@ class Mesh:
         # (~1e-10) and far below the smallest LGL spacing (O(h/p^2), ~1e-3 here).
         TOL = 1.0e-8
 
+        # PERIODICITY.  Everything downstream -- gather_scatter, the masks, the
+        # multiplicity weights -- is driven by gidx, so wrapping the coordinate
+        # here is the whole change: x = Lx then hashes to the same cell as x = 0
+        # and the two ends of the domain merge into one set of global nodes.
+        #
+        # Only CONNECTIVITY is wrapped.  xnod/facx/wq keep their true values, so
+        # geometry, quadrature and derivatives are untouched.
+        #
+        # Set mesh.periodic_x = Lx (and/or periodic_y = Ly) BEFORE calling this,
+        # and leave the corresponding bc codes at 0 so no Dirichlet mask is
+        # applied on the seam.
+        px = getattr(self, 'periodic_x', None)
+        py = getattr(self, 'periodic_y', None)
+
         for e in range(self.nelem):
             for i in range(self.nterm):
                 for j in range(self.nterm):
                     x = self.xnod[e, i]
                     y = self.ynod[e, j]
+                    if px:
+                        # tolerance-aware wrap: a node sitting a hair below Lx
+                        # must land on 0, not on Lx - 1e-12
+                        x = x % px
+                        if px - x < TOL:
+                            x = 0.0
+                    if py:
+                        y = y % py
+                        if py - y < TOL:
+                            y = 0.0
 
                     cx = int(np.floor(x / TOL))
                     cy = int(np.floor(y / TOL))
@@ -125,8 +149,47 @@ class Mesh:
         if unmerged:
             raise ValueError(
                 f"compute_global_indices: {unmerged} neighbour edges were not merged "
-                f"(snap tolerance 1e-{SNAP} too tight for this mesh's coordinate "
+                f"(snap tolerance {TOL:g} too tight for this mesh's coordinate "
                 f"precision). The mesh would be silently disconnected.")
+
+        # Periodic seam guard.  The check above only looks at `neighbour` pairs,
+        # and the two ends of a periodic domain are NOT neighbours -- so without
+        # this, a periodic_x that failed to merge would leave the domain silently
+        # open and every result would look plausible.
+        for axis, L in (('x', px), ('y', py)):
+            if not L:
+                continue
+            # The declared period must equal the domain extent.  If it is a
+            # fraction of it, the wrap folds the domain onto ITSELF -- x = 0, L
+            # and 2L all merge -- and the seam test below still passes because
+            # the merge, though wrong, is self-consistent.  Check the extent
+            # first, where the error is unambiguous.
+            c = self.xnod if axis == 'x' else self.ynod
+            extent = float(c.max() - c.min())
+            if abs(extent - L) > TOL:
+                raise ValueError(
+                    f"periodic_{axis} = {L} but the domain spans {extent:g} in "
+                    f"{axis}. The period must equal the extent, or the wrap "
+                    f"folds the domain onto itself.")
+            lo, hi = [], []
+            for e in range(self.nelem):
+                for i in range(n):
+                    for j in range(n):
+                        c = self.xnod[e, i] if axis == 'x' else self.ynod[e, j]
+                        if abs(c) < TOL:
+                            lo.append(self.gidx[e, i, j])
+                        elif abs(c - L) < TOL:
+                            hi.append(self.gidx[e, i, j])
+            if not lo or not hi:
+                raise ValueError(
+                    f"periodic_{axis} = {L}: no nodes found at one of the seam "
+                    f"faces ({len(lo)} at 0, {len(hi)} at {L}). Check that the "
+                    f"domain really spans [0, {L}] in {axis}.")
+            if not set(hi) <= set(lo):
+                raise ValueError(
+                    f"periodic_{axis} = {L}: the seam did not merge -- "
+                    f"{len(set(hi) - set(lo))} global ids at {axis} = {L} have no "
+                    f"counterpart at {axis} = 0. The domain would be open.")
 
         # Build scipy.sparse gather-scatter matrices Q and QT
         import scipy.sparse as sp
