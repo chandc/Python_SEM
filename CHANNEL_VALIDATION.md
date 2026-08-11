@@ -243,18 +243,38 @@ linear-solve tolerance or the slope-fit window — not noise.
 Mesh: 1 element streamwise over `[0, 2pi]` (periodic), 3 wall-to-wall, `Re = 7500`,
 `dt = 0.1`, perturbation amplitude 1e-4, integrated to `t = 100`.
 
-### The base flow has to be forced
+### Driving the mean flow with a body force
 
-With periodicity in `x`, the mean pressure gradient that sustains `U = 1 - y^2`
-**cannot** be carried by a periodic `p`. It must enter as a body force
-`f_x = 2*nu` — which is precisely the `2.0*pr*dt` term in the F77 `rhs` that
-this document earlier dismissed as "channel-specific, not needed for the BFS".
-Correct as far as it went, but understated: it is **structurally required** for
-any streamwise-periodic channel.
+**Any streamwise-periodic channel needs one.** A periodic pressure field cannot
+carry a mean gradient: `p(0) = p(L)` forces the net `dp/dx` around the domain to
+zero, so the gradient that sustains `U = 1 - y^2` has nowhere to live. It must
+be supplied as a body force instead.
 
-`f_known` is subtracted as `su_nl -= f_known*wq`, so it is the source on the RHS
-of the *weighted* equation and the momentum row needs
-`f_known[...,0] = a_flux * 2*nu`.
+For plane Poiseuille the steady balance is `0 = -dp/dx + nu*U''` with
+`U'' = -2`, so the required force is
+
+```
+f_x = -dp/dx = 2*nu            (2*pr in the F77's notation)
+```
+
+This is exactly the `2.0*pr*dt` term in `reference/tj_channel_1996.f`'s `rhs`,
+which `PSEUDO_TIME_DESIGN.md` §1 originally called "irrelevant here… belongs to
+the test case, not the method". Irrelevant to the **BFS**, yes — that case is
+inflow/outflow driven. But it is **structurally required** for a periodic
+channel, and Figure 2 simply does not run without it. That note is corrected.
+
+**Getting the weight right.** `f_known` is applied as `su_nl -= f_known*wq`, so
+it is the source on the right-hand side of the *weighted* equation, not of the
+raw PDE. The momentum row carries `a_flux` on its spatial terms, so the force
+must carry it too:
+
+```python
+f = np.zeros_like(U)
+f[..., 0] = a_flux * 2.0 * nu          # NOT 2*nu
+```
+
+Omitting `a_flux` under-forces the flow by a factor of `dt` in legacy weighting,
+and the parabola decays instead of holding.
 
 **Gate test** (`scratch/os_base.py`), run before any eigenfunction: with no
 perturbation, `max|u - U0| = 0.000e+00` after 200 steps and `rms div = 2.4e-15`.
@@ -337,6 +357,14 @@ meaningless without stating the window.** The headline table above uses
 - **Figure 2 (Orr–Sommerfeld) is reproduced**, and at N=14 our 0.014% is well
   inside Chan's reported 0.76%. Both the accuracy and the low-order *sign* of
   the error match once the wall elements are read as 30% of the half-width.
+- **A streamwise-periodic channel needs a body force** to sustain the mean
+  flow, weighted by `a_flux` to match the momentum row (§6). This is general,
+  not specific to these two figures, and corrects a dismissal in
+  `PSEUDO_TIME_DESIGN.md` §1.
+- **Chan measures against the HALF-channel.** Both cases turned on this: the
+  Stokes "dimension of one" is the half-height, and Figure 2's "30 percent of
+  the channel width" is 30% of the half-width. Assume the half-channel reading
+  for anything else taken from this paper.
 - **δτ is untested here.** `dtau=None` throughout.
 - **σ is compared against two references.** Our eigenproblem gives 9.3137399;
   Chan reports 9.313316, itself 4.6e-05 away. The `dt=6.25e-4` run differs from

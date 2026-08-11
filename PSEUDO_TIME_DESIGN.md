@@ -39,9 +39,12 @@ in the transpose coefficient:
 The Python matches the F90 exactly. This is a **1996-original vs modernised-F90**
 difference, not a porting bug.
 
-Also present in `tj.channel.f` and irrelevant here: `rhs` adds `2.0*pr*dt`, a
-body force `f_x = 2ν` driving the plane channel. That belongs to the test case,
-not the method.
+Also present in `tj.channel.f`: `rhs` adds `2.0*pr*dt`, a body force `f_x = 2ν`
+driving the plane channel. Irrelevant to the BFS, but **not** merely a test-case
+detail as first written here — it is structurally required for any
+streamwise-periodic channel, because a periodic pressure field cannot carry a
+mean gradient. See [CHANNEL_VALIDATION.md](./CHANNEL_VALIDATION.md) §6, where
+the Orr–Sommerfeld case does not run without it.
 
 ---
 
