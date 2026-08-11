@@ -96,10 +96,59 @@ the same observation from the other side.
    include everything the CPU retired, making his the more inclusive measure.
    The two are not strictly the same quantity.
 
+### What the Mflops figure means: peak, and the block-size ceiling
+
+Measured on this machine with `scratch/peak_dgemm.py` (Apple **M3 Max**, 12
+performance + 4 efficiency cores, 128 GB; NumPy 2.4.6 on Accelerate):
+
+| FP64 DGEMM, large | GFLOP/s | | at SEM block sizes | GFLOP/s | ns/call |
+|---|---|---|---|---|---|
+| n = 1000 | **842.6** | | n = 5  (N=4) | 0.45 | 559 |
+| n = 2000 | 754.7 | | n = 10 (N=9) | 3.14 | 637 |
+| n = 4000 | 760.2 | | n = 15 (N=14) | **6.86** | 984 |
+
+> Limiting threads via `VECLIB_MAXIMUM_THREADS` / `OMP_NUM_THREADS` still gave
+> 385 GFLOP/s, which no single core can do. Accelerate dispatches to the **AMX**
+> matrix coprocessor, which is per-cluster rather than per-core, so those
+> variables do not constrain it the way they would with OpenBLAS. The
+> "single-threaded" number is meaningless here.
+
+**Machine peak is ~760-840 GFLOP/s, and this algorithm cannot reach it.** The
+inner kernel is a 15x15 matmul at N=14: 6,750 flops against ~1 KB of operands,
+so there is no arithmetic intensity to exploit. A bare optimised DGEMM at that
+size manages only 6.86 GFLOP/s — **0.9% of peak** — and that, not the peak, is
+the ceiling the solver works against.
+
+| | rate | vs 760 GFLOP/s peak | vs block-size ceiling |
+|---|---|---|---|
+| LSSEM at N=14 | 5.31 GFLOP/s | 0.7% | **77%** |
+
+Against the right denominator the solver runs at **77% of what a bare DGEMM
+achieves at its own block size**, so there is little left on the table without
+changing the algorithm's shape. At N=4 we actually *exceed* the microbenchmark
+(0.68 vs 0.45 GFLOP/s) because `dUdx` batches the matmul across all elements in
+one call, amortising the per-call overhead the microbenchmark pays every time.
+
+The block-size column is **Chan's efficiency argument in isolation**: 0.45 ->
+3.14 -> 6.86 GFLOP/s from n=5 to n=15 is a 15x swing driven purely by matrix
+size, with no solver involved.
+
+### An uncomfortable comparison, for honesty
+
+The RS6000-590 peaked at about **266 MFLOPS**. Chan's 96 Mflops is therefore
+**~36% of his machine's peak**; our 5.31 GFLOP/s is **0.7% of ours**.
+
+He was not a better programmer for it. 1995 hardware had little peak to miss and
+a 15x15 matmul could saturate it; modern chips have ~3,000x the peak and small
+matmuls cannot get near it. **This is the real reason our wall-clock advantage
+is only 48-200x when raw hardware improved by ~3,000x** — most of that
+improvement sits in vector width and matrix units that a spectral-element
+operator at these block sizes cannot use.
+
 ### Timings are not a method comparison
 
-Chan: single-node IBM SP2, RS6000-590, c. 1995. Ours: one core of an
-M-series Mac, NumPy backend. The 48-200x wall-clock ratio is thirty years of
+Chan: single-node IBM SP2, RS6000-590, c. 1995. Ours: an Apple M3 Max,
+NumPy/Accelerate backend. The 48-200x wall-clock ratio is thirty years of
 hardware and says nothing about the algorithm. Only the *scaling* is
 comparable, and it agrees: cost rises 40x for him from N=4 to N=14 and 13x for
 us on the same 8-element mesh.
@@ -280,6 +329,10 @@ not be reported as though the discrepancy is understood.
 - **We are NOT uniformly more efficient than Chan.** At fixed mesh we are more
   accurate; on work-for-accuracy the two are comparable near N=12 and he is
   ahead at the very top end (§4d). Do not conflate the two claims.
+- **The solver is at 77% of its block-size ceiling**, not 0.7% of machine peak
+  (§3). The limit is the arithmetic intensity of a 15x15 matmul, not the code.
+  Chan reached ~36% of his machine's peak against our 0.7% of ours — because
+  1995 hardware had little peak to miss (§3).
 - **Chan's efficiency claim confirmed** — high order raises the achieved flop
   rate; we measure 7.9x against his 3.7x.
 - **A latent accuracy ceiling in `pcg_solve` found and diagnosed**, worth
