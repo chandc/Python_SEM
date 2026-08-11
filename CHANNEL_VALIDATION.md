@@ -24,6 +24,10 @@ identification), `scratch/stokes_ic.py` (eigenmode IC), `scratch/stokes_run.py`
 | `cgsfac` / `cg_tol` / `nitcgs` | 0.01 / **1e-14** / 1000 |
 | preconditioner | Jacobi (`pcg_solve` default) |
 
+For **Figure 2** (§6): `dt = 0.1`, `nsub` iterated to `newton_tol = 1e-10` per
+Chan's stated criterion, `Re = 7500`, perturbation amplitude 1e-4, mesh
+1 x 3 elements. `dtau` again unused.
+
 That is the F77 solver configuration from `reference/tj_channel_1996.f`.
 **The pseudo-time term was not exercised**, so nothing here validates or
 refutes δτ. The `cg_tol = 1e-14` setting is only reachable because of the
@@ -234,13 +238,105 @@ linear-solve tolerance or the slope-fit window — not noise.
 
 ---
 
-## 6. Status and caveats
+## 6. Figure 2 — Orr-Sommerfeld growth rate
 
-- **Figure 1 (Stokes) is reproduced** to the digit Chan quotes.
-- **Figure 2 (Orr–Sommerfeld) is not yet run.** The reference eigenvalue is
-  verified (§4), but the CFD case needs a non-uniform `y` mesh — Chan's wall
-  elements cover 30% of the channel width each — which `build_channel` does not
-  currently produce.
+Mesh: 1 element streamwise over `[0, 2pi]` (periodic), 3 wall-to-wall, `Re = 7500`,
+`dt = 0.1`, perturbation amplitude 1e-4, integrated to `t = 100`.
+
+### The base flow has to be forced
+
+With periodicity in `x`, the mean pressure gradient that sustains `U = 1 - y^2`
+**cannot** be carried by a periodic `p`. It must enter as a body force
+`f_x = 2*nu` — which is precisely the `2.0*pr*dt` term in the F77 `rhs` that
+this document earlier dismissed as "channel-specific, not needed for the BFS".
+Correct as far as it went, but understated: it is **structurally required** for
+any streamwise-periodic channel.
+
+`f_known` is subtracted as `su_nl -= f_known*wq`, so it is the source on the RHS
+of the *weighted* equation and the momentum row needs
+`f_known[...,0] = a_flux * 2*nu`.
+
+**Gate test** (`scratch/os_base.py`), run before any eigenfunction: with no
+perturbation, `max|u - U0| = 0.000e+00` after 200 steps and `rms div = 2.4e-15`.
+That simultaneously validates the forcing weight, the non-uniform `y` mesh, and
+periodicity on a **single** streamwise element — where the seam joins an element
+to itself, a stricter test than the Stokes case.
+
+### "30 percent of the channel width" means the HALF-width
+
+The decisive parameter, and the same class of ambiguity as the Stokes
+half-height:
+
+| wall elements | N=8 | N=10 | N=14 |
+|---|---|---|---|
+| 0.6 / 0.8 / 0.6 (30% of full width 2) | 555.5% | 23.5% | 2.7% |
+| **0.3 / 1.4 / 0.3 (30% of half-width 1)** | **22.8%** | **0.136%** | **0.014%** |
+
+**With the correct mesh, N=14 gives 0.014% against Chan's reported 0.76%**, and
+even N=10 reaches 0.136%.
+
+It also fixes a discrepancy in *character*, which is what makes the
+interpretation convincing rather than merely better-fitting. With the coarser
+wall elements, N=8 **over**-predicted the growth (`ln(E/E0) = 2.64` against the
+expected 0.447) whereas Chan's figure shows 8th order falling **below** linear
+theory. Binning the local slope showed why:
+
+```
+N=8, coarse wall elements, local sigma per 10-unit bin:
+   t  0-10   0.002531   (13% high)   <- the physical mode
+   t 10-20   0.003730   (67%)        <- transition
+   t 20-30   0.023583   (955%)       <- takeover
+   t 30-100  0.0141-0.0149           <- locked on a SPURIOUS mode
+```
+
+The under-resolved critical layer admitted a spurious unstable mode that
+overtook the physical one at `t ~ 20`. Halving the wall-element thickness
+removes it entirely, and N=8 then under-predicts at `ln(E/E0) = 0.360`, as
+Chan's figure does.
+
+![Chan Figure 2](figs/chan_fig2.png)
+
+### What did NOT matter
+
+Chan states "a convergence criterion of 1e-10 is used for each time step", where
+the earlier runs used a fixed `nsub = 2` with no test at all. Correcting that
+changed nothing:
+
+| | fixed `nsub=2` | `newton_tol=1e-10` |
+|---|---|---|
+| N=8 | 0.01464978 | 0.01465011 |
+| N=10 | 0.00275953 | 0.00275897 |
+| N=14 | 0.00217535 | 0.00217532 |
+
+Agreement to 4-5 digits, at ~5% more wall time. The sub-iteration was already
+converged in two steps — expected in hindsight, since a 1e-4 perturbation on an
+O(1) base flow is nearly linear. Worth testing, since it was a real departure
+from the stated setup, but it is not a source of error here.
+
+### The fit window matters enormously at low order
+
+| window | N=8 | N=10 | N=14 |
+|---|---|---|---|
+| t 2-15 | 27.1% | 18.6% | 1.2% |
+| t 5-40 | 533.6% | 9.7% | 2.0% |
+| t 25-100 | 555.5% | 23.5% | 2.7% |
+
+(coarse-mesh runs). N=14 is stable at 1.2-2.7% regardless; N=8 varies by a
+factor of 20. **Any single growth-rate number for an under-resolved case is
+meaningless without stating the window.** The headline table above uses
+`t > 25`, which is safe once the spurious mode is gone.
+
+---
+
+---
+
+## 7. Status and caveats
+
+- **Figure 1 (Stokes) is reproduced** to the digit Chan quotes, and the method
+  is confirmed second order (fitted 1.99 at N=14).
+- **Figure 2 (Orr–Sommerfeld) is reproduced**, and at N=14 our 0.014% is well
+  inside Chan's reported 0.76%. Both the accuracy and the low-order *sign* of
+  the error match once the wall elements are read as 30% of the half-width.
 - **δτ is untested here.** `dtau=None` throughout.
 - **σ is compared against two references.** Our eigenproblem gives 9.3137399;
   Chan reports 9.313316, itself 4.6e-05 away. The `dt=6.25e-4` run differs from
