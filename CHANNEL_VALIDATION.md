@@ -165,7 +165,11 @@ no-slip walls, pressure pinned at one interior node, IC amplitude 1e-3.
 **At Chan's finest time step: σ = 9.31379 against his 9.313316 — 0.005%, versus
 his reported 0.0045%.**
 
-![Chan Figure 1](figs/chan_fig1.png)
+![Chan Figure 1 reproduced, with p-refinement](figs/chan_fig1_pref.png)
+
+*Left: the decay itself, all three of Chan's time steps on the analytic
+line. Right: temporal accuracy at four polynomial orders — see the
+p-refinement section below.*
 
 Three supporting checks:
 
@@ -200,7 +204,7 @@ Relative error in sigma against the analytic 9.3137399:
 | **0.000625** | 2.311e-05 | 1.435e-05 | **1.671e-06** | **2.051e-06** |
 | **fitted slope, 0.02 - 0.00125** | **1.940** | **1.935** | **1.980** | **1.993** |
 
-![Chan Figure 1 with p-refinement](figs/chan_fig1_pref.png)
+(Right-hand panel of the figure above.)
 
 **For `dt` from 0.02 to 0.00125 all four orders coincide to three digits.** The
 error there is purely temporal, and the spatial discretisation contributes
