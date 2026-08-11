@@ -365,7 +365,12 @@ meaningless without stating the window.** The headline table above uses
   Stokes "dimension of one" is the half-height, and Figure 2's "30 percent of
   the channel width" is 30% of the half-width. Assume the half-channel reading
   for anything else taken from this paper.
-- **δτ is untested here.** `dtau=None` throughout.
+- **The figures above are all `dtau=None`.** δτ has since been swept across both
+  cases (κ = 0 … 2.5 on Stokes, 0 … 1 on Orr–Sommerfeld); see
+  [PSEUDO_TIME_RESULTS.md §7](./PSEUDO_TIME_RESULTS.md). Headline: δτ always
+  slows the dynamics, and a growth rate is ~100× more sensitive to it than a
+  decay rate — Orr–Sommerfeld is 22× degraded at κ = 0.01, where Stokes is still
+  untouched. **Leave `dtau=None` when measuring a rate.**
 - **σ is compared against two references.** Our eigenproblem gives 9.3137399;
   Chan reports 9.313316, itself 4.6e-05 away. The `dt=6.25e-4` run differs from
   the *analytic* value by 5e-06, i.e. the solver is closer to the true mode than

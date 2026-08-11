@@ -244,12 +244,110 @@ results, so the floor stops binding by 1e-10 and is not the mechanism).
 
 ---
 
-## 7. Next
+## 7. The 1996 channel cases — δτ against published rates (2026-08-11)
+
+§6 closed with the complaint that every δτ number here was measured on the short
+BFS domain, which has no reference answer. The two Chan (1996) channel cases do:
+`CHANNEL_VALIDATION.md` reproduces the Stokes decay rate and the Orr–Sommerfeld
+growth rate, both to well inside Chan's own published error. Re-running them
+across κ is the first δτ measurement in this project against a **known answer**.
+
+Scripts: `stokes_dtau.py`, `os_dtau.py`. κ = `dt`/`dtau` in both (`w_mom = 1`).
+
+**Stokes decay** — N=10, dt=0.0025, exact σ = 9.3137399:
+
+| `dtau` | κ | σ | rel err | shift vs κ=0 |
+|---|---|---|---|---|
+| — | 0 | 9.3154840 | +1.87e-04 | — |
+| 1.0 | 0.0025 | 9.3154520 | +1.84e-04 | -3.4e-06 |
+| 0.1 | 0.025 | 9.3116990 | -2.19e-04 | -4.1e-04 |
+| 0.01 | 0.25 | 9.0331680 | -3.01e-02 | -3.0e-02 |
+| 0.001 | 2.5 | 4.7430260 | **-4.91e-01** | -4.9e-01 |
+
+**Orr–Sommerfeld growth** — N=14, dt=0.1, exact σ = 0.00223497:
+
+| `dtau` | κ | σ | rel err | vs undamped |
+|---|---|---|---|---|
+| — | 0 | 0.00223466 | -0.014% | — |
+| 100 | 0.001 | 0.00223014 | -0.216% | 15× worse |
+| 10 | 0.01 | 0.00222823 | -0.302% | 22× worse |
+| 1.0 | 0.1 | 0.00220575 | -1.307% | 93× worse |
+| 0.1 | 1.0 | 0.00155276 | **-30.524%** | 2180× worse |
+
+Three findings.
+
+**δτ always slows the dynamics.** Every shift is negative in both cases — decay
+rates shrink, growth rates shrink. It is a damping term and behaves like one.
+
+**A growth rate is ~100× more fragile than a decay rate.** Stokes is untouched at
+κ = 0.0025 and still fine at 0.025; Orr–Sommerfeld is already 22× degraded at
+κ = 0.01. A growth rate is a small imbalance (0.00223 against O(1) advection), so
+a perturbation to the momentum operator lands directly on the measured quantity,
+whereas the Stokes decay rate is leading-order and only notices κ once it is
+comparable to `a_mass`.
+
+**The F77's own setting is not free on its own test case.** At `dt = 0.01,
+dtau = 1` the 1996 code runs κ = 0.01 — the third row — costing 22× in
+growth-rate accuracy. Chan's reported 0.76% at N=14 sits in the same band.
+
+### The bias is against the DISCRETISATION residual, not the Newton residual
+
+§3 established the shift is `O(κ·R)`, vanishing as `R → 0`. It is tempting to
+read `R` as the Newton residual and conclude that converging the sub-iterations
+harder makes δτ free. **It does not.** `os_dtau_conv.py`, same case, δτ fixed at
+κ = 0.01, sub-iterations tripled:
+
+| `dtau` | κ | `nsub` | σ | rel err |
+|---|---|---|---|---|
+| — | 0 | 2 | 0.00223466 | -0.014% |
+| 10 | 0.01 | 2 | 0.00222823 | -0.302% |
+| — | 0 | 6 | 0.00223516 | +0.009% |
+| 10 | 0.01 | 6 | 0.00222838 | **-0.295%** |
+
+2 → 6 sub-iterations moves the biased case from -0.302% to -0.295%: nothing. The
+control confirms the extra Newton is not otherwise disturbing the answer.
+
+`R` in `O(κ·R)` is the **least-squares residual at the minimum**, and `J_min > 0`
+always — the discrete solution does not satisfy the PDE exactly. Newton
+converges accurately to the *augmented* system's fixed point, which is displaced
+from the true minimiser by an amount set by mesh and `dt`, not by iteration
+count. This is why §3's Poiseuille test showed the shift vanishing: that case has
+an **exactly representable** solution, so `R → 0` genuinely. It does not
+generalise to cases that do not.
+
+The practical consequence, which contradicts a plausible reading of §3: **δτ is
+not automatically free at a steady state either**, since `R₀ ≠ 0` there too. It
+would be free if implemented in vanishing-increment form, `κ(U^{k+1} − U^k)`,
+which cancels identically at a fixed point. Folding κ into `a_mass` on both `ℒ`
+and `ℒᵀ` — what we do, and what §1 describes — is Levenberg–Marquardt on the
+normal equations, and that biases the fixed point instead. Two schemes, one
+name; ours is the second.
+
+> Caveat: `os_dtau_conv.py` does not record the Newton residual history, so it
+> cannot fully exclude that 6 fixed sub-iterations are still unconverged. The
+> `J_min > 0` argument is what carries the conclusion; the run is consistent
+> with it, not independent proof.
+
+> A first version of this run imported `os_base` (wall fraction fixed at 0.30 →
+> elements 0.6/0.8/0.6) instead of `os_base2` with `WFRAC=0.15`. The control
+> came back at -2.668% instead of -0.014% — the superseded mesh's known ~2.7%
+> error at N=14. Caught by the control, which is why the control is there.
+
+**Guidance.** Choose κ by what you are measuring, not by `dt` — the
+`dtau ≈ 100·dt` heuristic is not supported. For a leading-order quantity κ ≲ 0.01
+is cheap; for stability or transition work κ ≲ 0.001, and even that costs an
+order of magnitude. If you are measuring a rate, turn δτ off.
+
+---
+
+## 8. Next
 
 1. Short domain from **its own** IC with δτ, then `u(y)` and `ω(y)` at 4h and 5h
    against the long domain — Fig. 2's real metric, the correct experiment.
 2. Re-run the δτ validation on the **long** domain, so its conclusions rest on
    the discriminating case.
-3. Run the 1996 channel cases (`tj_channel_1996.f`): the Stokes decay rate
-   9.313316 and the Orr–Sommerfeld growth rate 0.00223497 are hard published
-   targets and the only end-to-end check that this reading of δτ is right.
+3. ~~Run the 1996 channel cases~~ — **done, §7.** Both rates reproduced and swept
+   across κ.
+4. Try the vanishing-increment form `κ(U^{k+1} − U^k)` and check whether it
+   leaves the converged state alone where the present form does not. If the F77
+   implements that form, §1's reading of it needs revisiting.
