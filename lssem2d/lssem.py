@@ -208,24 +208,35 @@ class SolverState:
         if hasattr(self, '_cached_mask_pin') and self._cached_mask_pin == pin_p:
             return self._global_mask
             
+        # NOTE: this duplicates bc.apply_mask's logic and MUST stay in step with
+        # it.  The two disagreed on bc == 4 until 2026-08-12: apply_mask froze the
+        # pressure DOF, this did not, and since newton_step builds
+        # `b = -c_gs * mask_global` from HERE, the update moved p straight off the
+        # value apply_bc had just written.  bc = 4 therefore imposed nothing --
+        # measured max|p| = 4.87e-01 on a plane where p = 0 was claimed.  See
+        # OUTFLOW_BC_STUDY.md sec 3.
         mask_local = np.ones((self.mesh.nelem, self.mesh.N + 1, self.mesh.N + 1, 4))
         for e in range(self.mesh.nelem):
             bc_W = self.mesh.bc[e, 0]
             if bc_W in (1, 2, 3): mask_local[e, 0, :, 0:2] = 0.0
+            elif bc_W == 4: mask_local[e, 0, :, 2] = 0.0
             elif bc_W == 5: mask_local[e, 0, :, 1] = 0.0; mask_local[e, 0, :, 3] = 0.0
-            
+
             bc_E = self.mesh.bc[e, 1]
             if bc_E in (1, 2, 3): mask_local[e, -1, :, 0:2] = 0.0
+            elif bc_E == 4: mask_local[e, -1, :, 2] = 0.0
             elif bc_E == 5: mask_local[e, -1, :, 1] = 0.0; mask_local[e, -1, :, 3] = 0.0
-            
+
             bc_S = self.mesh.bc[e, 2]
             if bc_S in (1, 2, 3): mask_local[e, :, 0, 0:2] = 0.0
+            elif bc_S == 4: mask_local[e, :, 0, 2] = 0.0
             elif bc_S == 5: mask_local[e, :, 0, 1] = 0.0; mask_local[e, :, 0, 3] = 0.0
-            
+
             bc_N = self.mesh.bc[e, 3]
             if bc_N in (1, 2, 3): mask_local[e, :, -1, 0:2] = 0.0
+            elif bc_N == 4: mask_local[e, :, -1, 2] = 0.0
             elif bc_N == 5: mask_local[e, :, -1, 1] = 0.0; mask_local[e, :, -1, 3] = 0.0
-            
+
         if pin_p:
             e_p, i_p, j_p = pin_p if isinstance(pin_p, tuple) else (0, 0, 0)
             mask_local[e_p, i_p, j_p, 2] = 0.0

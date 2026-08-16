@@ -7,6 +7,27 @@ Implemented 2026-08-07. Supersedes the design in
 [NUMBA_INTEGRATION_PROPOSAL.md](./NUMBA_INTEGRATION_PROPOSAL.md), whose kernel
 source is stale (see §5 below).
 
+> **Parity caveat (2026-08-12): per-operator parity does NOT imply agreement on
+> accumulated states.** The gates in §6 verify a *single* application of
+> `apply_L` / `apply_LT` / `compute_jacobi` to 1e-16, and that holds. But over a
+> few hundred time steps with a tight CG the two backends settle on different
+> fixed points. Measured on Poiseuille Re=100, order 8, 10x2, dt=1,
+> `w_mom = w_mass = 1`, `cgsfac=1e-8`, `cg_tol=1e-10`, run to a bit-exact steady
+> state in 300 steps:
+>
+> | backend | `newton_tol` | converged profile error |
+> |---|---|---|
+> | **numpy** | 1e-12 | **4.6471e-06** (= the published tight value to every digit) |
+> | numba | 1e-12 | 8.4673e-06 |
+> | numpy | 1e-14 | 4.6471e-06 |
+>
+> A 1.8x discrepancy at 4e-06, independent of `newton_tol`. Every published
+> Poiseuille number was produced on numpy, and numpy is the one that reproduces
+> them. **Any result at the 1e-05 level or below should be re-checked on numpy
+> before it goes in a doc.** Use numba for speed on timings, scaling and
+> qualitative behaviour; do not use it to measure accuracy floors.
+> Reproduce: `scratch/pois_dt_w1.py` (header comment).
+
 ---
 
 ## 1. Using it

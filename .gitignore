@@ -9,3 +9,9 @@ matrices_p*.txt
 
 # numba compiled-kernel cache (per fastmath flavour)
 __nbcache__/
+
+# Simulation output: every run saves a uniquely-named .npz so results can be
+# compared without re-solving, but they are working data (30 MB and growing),
+# not artefacts.  Regenerate with the driver scripts.
+scratch/*.npz
+*.log
