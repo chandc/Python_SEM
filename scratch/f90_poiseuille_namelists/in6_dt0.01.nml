@@ -1,0 +1,19 @@
+&input
+ fin    = 'poiseuille_dt/pois_grid.dat'
+ fout   = 'poiseuille_dt/out6_dt0.01.dat'
+ frun   = 'poiseuille_dt/sol6_dt0.01.dat'
+ re     = 100.0
+ dt     = 0.01
+ ntime  = 20000
+ nsub   = 1
+ iprt   = 0
+ tol    = 1.0e-6
+ nitcgs = 40000
+ istart = 0
+ iform  = 1
+ cgsfac = 1.0e-3
+ nsave  = 20000
+ ystep  = 0.0
+ hinlet = 1.0
+ pmg_on = .false.
+/
