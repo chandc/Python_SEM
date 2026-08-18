@@ -14,7 +14,9 @@ Drivers: `scratch/pois_ac.py` (channel), `scratch/gartling_run.py` (BFS),
 `scratch/cavity_ac_cgiters.py` + `scratch/cavity_ac_cgplot.py` (CG cost),
 `scratch/cavity_ac_pconv.py` + `scratch/cavity_ac_pconv_plot.py` (pressure
 convergence), `scratch/cavity_ac_nsweep.py` + `scratch/cavity_ac_nsweep_plot.py`
-and `scratch/cavity_n_profiles.py` (order N), `scratch/gartling_ac_streamlines.py`.
+and `scratch/cavity_n_profiles.py` (order N),
+`scratch/cavity_steady_streamlines.py` (§5.3 figure),
+`scratch/gartling_ac_streamlines.py`.
 
 Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
 `FORTRAN_POISEUILLE_OUTFLOW.md` (the outflow-BC side of the same problem),
@@ -74,8 +76,11 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
    **6747** CG iterations per solve, 5× the worst transient point — and it
    converges to a **spurious** solution: RMS u = 2.5e−01 against Ghia, versus
    1.8e−02 for the transient. Started *on* the correct field it walks off it
-   immediately, so this is not a basin problem. Neither the functional nor
-   `|dU|` detects it. (§5.3)
+   immediately, so this is not a basin problem. Neither the functional, nor
+   `|dU|`, nor a streamline plot detects it — the restarted state has the right
+   topology and a primary vortex centre within 0.008 of Ghia's, yet its profile
+   is 8× off. Only the benchmark profile catches it. (§5.3,
+   `figs/cavity_steady_spurious_streamlines.png`)
 
 8. **Scoping correction: the `a_mass` threshold does not transfer to the closed
    cavity.** `GARTLING_VALIDATION.md` measured stable ≤ 6.05 / divergent ≥ 12.1
@@ -555,7 +560,33 @@ the right shape but over-amplified (u = 0.58 at y = 0.85 against Ghia's 0.33,
 point of the steady iteration here, and there is more than one spurious fixed
 point.
 
-**The functional cannot detect this, which is the part worth remembering.**
+**What the two spurious states look like.**
+`figs/cavity_steady_spurious_streamlines.png`
+(`scratch/cavity_steady_streamlines.py`) puts all three converged fields side by
+side, with reversed-flow shading and the primary-vortex centre marked against
+Ghia's (0.5313, 0.5625):
+
+| | primary vortex centre | offset from Ghia | RMS u |
+|---|---|---|---|
+| steady, from rest | (0.317, 0.727) | **0.270** | 2.52e−01 |
+| steady, restarted on the correct field | (0.526, 0.569) | **0.008** | 1.28e−01 |
+| time-accurate `dt` = 0.05, AC on | (0.534, 0.567) | 0.005 | 1.57e−02 |
+
+The from-rest state is *visibly* wrong: an extra band of counter-rotating cells
+sits under the lid and the primary vortex is pushed to (0.32, 0.73).
+
+**The restarted state is the dangerous one.** It has the correct topology — one
+primary vortex, both bottom corner eddies — and its vortex centre is within
+**0.008** of Ghia's, i.e. 0.8% of the cavity width, essentially as good as the
+correct run's 0.005. It would pass a visual inspection, a topology check *and* a
+vortex-position check. Only the full centreline profile exposes it: RMS u is
+1.28e−01, eight times worse than the correct solution, because the velocity
+magnitudes are inflated throughout (u = 0.58 at y = 0.85 against Ghia's 0.33).
+**Streamline plots and integral diagnostics are not sufficient validation for
+this solver; the profile comparison is.**
+
+**The functional cannot detect this either, which is the part worth
+remembering.**
 Comparing the from-rest steady field against the transient one on the same mesh:
 
 | | rms momentum | rms div u | rms vorticity |
