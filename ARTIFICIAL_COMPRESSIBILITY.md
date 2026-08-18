@@ -568,7 +568,7 @@ Re-run with the line search off (`scratch/cavity_steady_ls.py`):
 | start | line search | outcome | sweeps | RMS u vs Ghia |
 |---|---|---|---|---|
 | rest | on | **LS_STALL** (alpha = 2.98e−08) | 26 | 2.525e−01 |
-| rest | **off** | **does not converge** — `\|dU\|` oscillates 30–75 | 280+ | — |
+| rest | **off** | **does not converge** — `\|dU\|` oscillates 30–75 throughout | 400 (cap) | 2.475e−01 |
 | correct field | on | **LS_STALL** (alpha = 2.98e−08) at sweep 1 | 1 | 1.342e−01 |
 | correct field | **off** | **converged, `\|dU\|` = 0.00e+00 exactly** | 10 | **1.516e−01** |
 | *(transient `dt` = 0.05, reference)* | on | conv | 512 | 1.568e−02 |
@@ -582,10 +582,12 @@ fixed point of the steady form on this mesh, and it is not a basin problem
 either: the iteration walks off the correct answer and lands elsewhere.
 
 **What must be withdrawn.** The from-rest case is *not* a converged spurious
-state — with the line search it stalls, and without it the iteration does not
-converge at all within 280 sweeps. The "spatially oscillatory converged state"
-and the claim of *two* spurious fixed points are withdrawn; one spurious fixed
-point is established, and the from-rest behaviour is simply non-convergence.
+state. With the line search it stalls; without it the iteration ran the full
+400-sweep cap with `|dU|` oscillating between 30 and 75 the whole way and never
+settling (2427 s, final `|dU|` = 3.85e+01). The "spatially oscillatory converged
+state" and the claim of *two* spurious fixed points are withdrawn; **one**
+spurious fixed point is established, and the from-rest behaviour is simply
+non-convergence of Newton on the steady form from a poor initial guess.
 
 **What the two spurious states look like.**
 `figs/cavity_steady_spurious_streamlines.png`
