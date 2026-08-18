@@ -69,9 +69,16 @@ FILES = sorted(glob.glob(f'{SC}/cavity_ac_dt*.npz'),
                key=lambda s: (-float(re.search(r'dt([\d.]+)_', s).group(1)),
                               s.split('_')[-1]))
 STY = {'off': dict(ls='-', lw=2.0), 'half': dict(ls='--', lw=1.8),
-       'match': dict(ls=':', lw=2.2)}
+       'match': dict(ls=':', lw=2.2),
+       # The two w_mass = 0 runs are NOT part of the AC comparison -- they are
+       # the steady form, and both converge to spurious states (sec 5.3).  Drawn
+       # heavy and black so they cannot be mistaken for one of the AC curves.
+       'wm0': dict(ls='-', lw=2.6, color='k', alpha=.85),
+       'restart': dict(ls='--', lw=2.6, color='k', alpha=.55)}
 COL = {1.0: 'tab:blue', 0.25: 'tab:green', 0.1: 'tab:orange', 0.05: 'tab:red',
        2.0: 'tab:gray'}
+LAB = {'wm0': 'STEADY $w_{mass}$=0, from rest (spurious)',
+       'restart': 'STEADY $w_{mass}$=0, from converged (spurious)'}
 
 fig, axs = plt.subplots(1, 2, figsize=(14.5, 6.4))
 rows = []
@@ -84,9 +91,15 @@ for f in FILES:
     ru = np.sqrt(np.mean((np.interp(GHIA_Y, ys, us)-GHIA_U)**2))
     rv = np.sqrt(np.mean((np.interp(GHIA_XV[::-1], xs_, vs)[::-1]-GHIA_V)**2))
     rows.append((dt, kind, float(d['kappa_p']), str(d['status']), ru, rv))
-    lab = f"dt={dt:g}, {kind}" + ("" if kind == 'off' else f" (k={float(d['kappa_p']):g})")
-    axs[0].plot(us, ys, color=COL.get(dt, 'k'), **STY.get(kind, {}), label=lab)
-    axs[1].plot(xs_, vs, color=COL.get(dt, 'k'), **STY.get(kind, {}), label=lab)
+    sty = dict(STY.get(kind, {}))
+    if kind in LAB:
+        lab = LAB[kind]
+    else:
+        lab = f"dt={dt:g}, {kind}" + ("" if kind == 'off'
+                                      else f" (k={float(d['kappa_p']):g})")
+        sty['color'] = COL.get(dt, 'k')
+    axs[0].plot(us, ys, **sty, label=lab, zorder=8 if kind in LAB else 3)
+    axs[1].plot(xs_, vs, **sty, label=lab, zorder=8 if kind in LAB else 3)
 
 axs[0].plot(GHIA_U, GHIA_Y, 'ko', ms=7, mfc='none', mew=1.8, zorder=9,
             label='Ghia 1982 (Table I)')
@@ -99,9 +112,10 @@ axs[1].set_title('v(x) on the horizontal centreline  y = 0.5', fontsize=12)
 for a in axs:
     a.grid(alpha=.3); a.axhline(0, color='k', lw=.6); a.axvline(0, color='k', lw=.6)
 axs[0].legend(fontsize=8, loc='lower right')
-fig.suptitle('Lid-driven cavity Re = 1000, 6x6 elements N = 10, time-accurate '
-             '(w_mom = w_mass = 1), pressure-pinned.\n'
-             'Closed domain: no outflow BC, so a_mass / kappa_p act alone.',
+fig.suptitle('Lid-driven cavity Re = 1000, 6x6 elements N = 10, pressure-pinned.  '
+             'Coloured: time-accurate (w_mom = w_mass = 1), AC off/on.\n'
+             'Black: the STEADY form (w_mass = 0) -- converges, but to spurious '
+             'states, from rest AND from the converged field (sec 5.3).',
              fontsize=11.5)
 fig.tight_layout(rect=[0, 0, 1, 0.93])
 fig.savefig('figs/cavity_ac_centrelines.png', dpi=125, bbox_inches='tight')

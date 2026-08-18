@@ -48,7 +48,16 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
    as `a_flux²` and `compute_jacobi` has **no `a33` entry at all** without AC.
    AC supplies `a33 = κ_p·P`, which is exactly the block that was unscaled.
 
-5. **Scoping correction: the `a_mass` threshold does not transfer to the closed
+5. **The time-derivative term is load-bearing for correctness, not just
+   stability.** At the other end of the same sweep, `w_mass` = 0 (the pure
+   steady form, `a_mass` = 0) is both the most expensive setting measured —
+   **6747** CG iterations per solve, 5× the worst transient point — and it
+   converges to a **spurious** solution: RMS u = 2.5e−01 against Ghia, versus
+   1.8e−02 for the transient. Started *on* the correct field it walks off it
+   immediately, so this is not a basin problem. Neither the functional nor
+   `|dU|` detects it. (§5.3)
+
+6. **Scoping correction: the `a_mass` threshold does not transfer to the closed
    cavity.** `GARTLING_VALIDATION.md` measured stable ≤ 6.05 / divergent ≥ 12.1
    on the BFS. The cavity at `a_mass` = 30 converges *without* AC
    (`|dU|` = 5.4e−10 after 518 steps). The threshold is a property of flows with
@@ -239,7 +248,11 @@ where the weighting actually bites. Benchmark: Ghia, Ghia & Shin (1982).
 | 0.25 | 6 | 0 (off) | 3000 | 2.66e−09 | 1.924e−02 | 2.289e−02 |
 | 0.25 | 6 | 3 | 3000 | 2.60e−09 | 1.773e−02 | 2.261e−02 |
 | 0.25 | 6 | 6 | 3000 | 2.62e−09 | 1.719e−02 | 2.256e−02 |
+| 1.0 | 1.5 | 0 (off) | 3000 | 9.26e−09 | 2.154e−02 | — |
+| 1.0 | 1.5 | 0.75 | 3000 | 9.24e−09 | 2.096e−02 | — |
 | 1.0 | 1.5 | 1.5 | 3000 | 7.86e−09 | 1.964e−02 | 2.548e−02 |
+| **steady** (`w_mass` = 0) | **0** | 0 (off) | 36 (stalled) | 6.94e−08 | **2.525e−01** | — |
+| **steady**, restarted on the converged field | **0** | 0 (off) | 11 (stalled) | 7.90e−08 | **1.280e−01** | — |
 
 All ten are at `|dU|` ≈ 1e−9, i.e. steady in all but name (the 3000-step rows hit
 the step cap rather than the 1e−9 test). Every profile overlays Ghia; the spread
@@ -276,6 +289,7 @@ CG calls per case — identical work, only `κ_p` differs.
 | 0.05 | 30 | 0 (off) | 275 791 | 1379.0 | — | 148.3 s |
 | 0.05 | 30 | 15 | 14 879 | 74.4 | 18.5× | 10.9 s |
 | 0.05 | 30 | 30 | 10 026 | 50.1 | **27.5×** | 8.2 s |
+| steady (`w_mass` = 0) | **0** | 0 (off) | 1 349 390 | **6746.9** | — | 660.1 s |
 
 `figs/cavity_ac_cg_iterations.png`. Measured by `scratch/cavity_ac_cgiters.py`
 into `scratch/cavity_ac_cgiters.csv`, which `scratch/cavity_ac_cgplot.py` reads —
@@ -284,9 +298,16 @@ no hand-copied numbers. The iteration counts are deterministic: re-measuring
 Only the wall column moves with machine load, so run the sweep serially.
 
 **The AC-off cost is U-shaped in `a_mass`, with a minimum near 6.** Reading the
-`κ_p` = 0 rows: 1227 → 832 → **690** → 976 → 1379. Cost rises in *both*
-directions from `a_mass` ≈ 6 — refining `dt` past that point makes each solve
-harder, but so does coarsening it below.
+`κ_p` = 0 rows: **6747** (`a_mass` = 0) → 1227 → 832 → **690** → 976 → 1379.
+Cost rises in *both* directions from `a_mass` ≈ 6 — refining `dt` past that
+point makes each solve harder, but so does coarsening it below, and the left
+branch runs away hard: the steady form is **5× worse than the worst transient
+point and 135× worse than the best AC-on one.** That is the mass term acting as
+a diagonal regulariser on `LᵀL`; remove it and there is nothing holding the
+momentum rows together.
+
+`a_mass` = 0 has no position on a log axis, so the plot carries it as a
+horizontal reference line rather than a point.
 
 > **Retraction.** An earlier version of this section measured only `a_mass` = 6
 > and 30, saw 690 → 1379, and concluded that "AC reverses the sign of the `dt`
@@ -319,6 +340,56 @@ beats `a_mass/2` on iterations at every time step (50 vs 74, 97 vs 145, 228 vs
 BFS at `a_mass` = 60, `κ_p = a_mass` **diverges** and only `a_mass/2` survives.
 Choose for stability first; the iteration count at `a_mass/2` is still within
 50% of the best.
+
+### 5.3 The steady form (`w_mass` = 0) does not have the physical solution as a fixed point
+
+`w_mass` = 0 makes `s = w_mass/dt = 0` in `ls_coeffs`, so `a_mass` and
+`hist_scale` both vanish and the functional collapses to the pure steady form
+with no time-derivative term. Run on the same cavity, AC off, line search on:
+
+| start | steps | `\|dU\|` at exit | RMS u vs Ghia | wall |
+|---|---|---|---|---|
+| from rest | 36 (stalled) | 6.94e−08 | **2.525e−01** | 594 s |
+| from the converged transient field | 11 (stalled) | 7.90e−08 | **1.280e−01** | 152 s |
+| *(transient `dt` = 0.05 for reference)* | 518 (conv) | 5.37e−10 | 1.791e−02 | — |
+
+**It converges, and it converges to the wrong answer.** From rest, `|dU|` falls
+336 → 0.87 → 6.9e−08 in ~30 Newton sweeps with no overshoot (`max|u|` = 1.0
+throughout, so line search is doing its job). The state it reaches is
+*spatially oscillatory* — centreline u runs 1.0 → 0.29 → −0.40 → −0.01 → +0.34
+on an element scale where the true profile decays smoothly.
+
+**It is not a basin problem.** Started *on* the converged, Ghia-matching field,
+the very first steady sweep moves the solution by `|dU|` = 1.01e+01 — four orders
+above any tolerance floor — and it settles at a *different* wrong state, this one
+the right shape but over-amplified (u = 0.58 at y = 0.85 against Ghia's 0.33,
+−0.52 at y = 0.27 against −0.28). So the physical solution is **not** a fixed
+point of the steady iteration here, and there is more than one spurious fixed
+point.
+
+**The functional cannot detect this, which is the part worth remembering.**
+Comparing the from-rest steady field against the transient one on the same mesh:
+
+| | rms momentum | rms div u | rms vorticity |
+|---|---|---|---|
+| steady, `w_mass` = 0 | 2.067e−01 | 1.259e−01 | 6.601e−02 |
+| transient, `dt` = 0.05 | 2.001e−01 | 1.443e−01 | 6.609e−02 |
+
+Indistinguishable — the steady field is even *better* on `div u`. The lid corner
+singularities dominate the domain integral at 6×6 N = 10, so J is not a usable
+correctness test on this problem, and neither is `|dU|`. Both runs reported
+convergence in good faith. **Any steady-form result in this repo needs checking
+against a benchmark profile, not against its own residual.**
+
+This is one configuration (6×6 N = 10, Re = 1000, pressure-pinned, nsub = 5,
+`cg_tol` = 1e−8) and the "fixed point" is that of the outer iteration as
+implemented, whose `|dU|` floor is ~8e−08. The departure of 1.01e+01 on the first
+restart sweep is far above that floor, so the conclusion does not rest on it. It
+is consistent with, and may explain, the steady-form-versus-unsteady gap left
+open in `GARTLING_VALIDATION.md`.
+
+Reproduce: `scratch/cavity_ac.py 1.0 off 0.0` and
+`scratch/cavity_ac.py 1.0 off 0.0 scratch/_ic_converged.npz`.
 
 ---
 

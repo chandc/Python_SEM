@@ -47,11 +47,11 @@ def counting_pcg(*a, **k):
 S.pcg_solve = counting_pcg
 
 
-def measure(dt, kap):
+def measure(dt, kap, w_mass=1.0):
     n = N+1
     mesh = build_channel(1.0, 1.0, EX, EX, N, bcs=(1, 1, 1, 2))
     st = SolverState(mesh, diff_matrix(N), nu=1.0/RE, dt=dt, fac1=1.0,
-                     w_mom=1.0, w_mass=1.0)
+                     w_mom=1.0, w_mass=w_mass)
     st.dtau_p = None if kap is None else 1.0/kap
     U = np.zeros((mesh.nelem, n, n, 4)); hist = [U.copy()]
     COUNT['it'] = 0; COUNT['calls'] = 0
@@ -80,15 +80,36 @@ def save_csv(rows):
             w.writerow(rows[k])
 
 
+def measure_steady():
+    """The STEADY form (w_mass = 0 => a_mass = 0) is the a_mass -> 0 limit of the
+    same curve, measured under identical conditions.  It goes to its OWN csv
+    because a_mass = 0 has no position on the log axis cavity_ac_cgplot.py draws
+    -- it belongs there as a horizontal reference line, not a plotted point."""
+    its, calls, wall = measure(1.0, None, w_mass=0.0)
+    with open(f'{SC}/cavity_ac_cgiters_steady.csv', 'w', newline='') as fh:
+        wr = csv.DictWriter(fh, COLS); wr.writeheader()
+        wr.writerow(dict(dt=1.0, a_mass=0, kappa_p=0, tag='steady', cg_its=its,
+                         cg_calls=calls, its_per_call=f'{its/max(calls,1):.1f}',
+                         its_per_step=f'{its/NSTEP:.1f}', wall_s=f'{wall:.1f}'))
+    print(f'{"steady":>7}{0:>8}{0:>9}{its:>10d}{its/NSTEP:>10.1f}'
+          f'{calls:>10d}{its/max(calls,1):>10.1f}{wall:>7.1f}s   (w_mass = 0)',
+          flush=True)
+
+
+HDR = (f"{'dt':>7}{'a_mass':>8}{'kappa_p':>9}{'CG its':>10}{'per step':>10}"
+       f"{'CG calls':>10}{'its/call':>10}{'wall':>8}")
+
 if __name__ == '__main__':
-    DTS = [float(a) for a in sys.argv[1:]] or [1.0, 0.5, 0.25, 0.1, 0.05]
-    rows = load_csv()
+    ARGS = sys.argv[1:]
     print(f'Cavity Re={RE:.0f}, {EX}x{EX} elem N={N}, {NSTEP} steps from rest, '
           f'nsub=5,\ncg_tol=1e-8, cgsfac=1e-3.  CG iterations counted inside '
           f'pcg_solve.\n')
-    hdr = (f"{'dt':>7}{'a_mass':>8}{'kappa_p':>9}{'CG its':>10}{'per step':>10}"
-           f"{'CG calls':>10}{'its/call':>10}{'wall':>8}")
-    print(hdr); print('-'*len(hdr))
+    print(HDR); print('-'*len(HDR))
+    if ARGS == ['steady']:                   # just the a_mass = 0 reference point
+        measure_steady()
+        raise SystemExit
+    DTS = [float(a) for a in ARGS] or [1.0, 0.5, 0.25, 0.1, 0.05]
+    rows = load_csv()
     for dt in DTS:
         a_mass = 1.5/dt                                  # BDF2 fac1 = 1.5
         for tag, kap in (('off', None), ('half', a_mass/2), ('match', a_mass)):
@@ -103,4 +124,6 @@ if __name__ == '__main__':
             print(f'{dt:>7g}{a_mass:>8.4g}{kv:>9.4g}{its:>10d}{its/NSTEP:>10.1f}'
                   f'{calls:>10d}{its/max(calls,1):>10.1f}{wall:>7.1f}s', flush=True)
             save_csv(rows)                               # checkpoint every case
+    print()
+    measure_steady()
     print(f'\n-> {CSV}')

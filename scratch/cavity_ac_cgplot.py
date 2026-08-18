@@ -46,6 +46,19 @@ def series(tag):
     return [(a, d[a]['its_per_call'], d[a]['wall_s']) for a in AM if a in d]
 
 
+# The STEADY form (w_mass = 0) has a_mass = 0 EXACTLY, which has no position on a
+# log axis -- so it is drawn as a horizontal reference line rather than given a
+# fake x.  Read before the axis limits are set: at 6747 its/solve it is 5x the
+# worst transient point and would fall off the top otherwise.
+STEADY_CSV = f'{SC}/cavity_ac_cgiters_steady.csv'
+STEADY = None
+if os.path.exists(STEADY_CSV):
+    with open(STEADY_CSV) as fh:
+        STEADY = float(next(csv.DictReader(fh))['its_per_call'])
+else:
+    print(f'note: {STEADY_CSV} absent -- steady reference line omitted '
+          f'(run "cavity_ac_cgiters.py steady")', file=sys.stderr)
+
 SERIES = [('off', 'AC off', 'tab:red', 'o'),
           ('half', r'AC on, $\kappa_p=a_{mass}/2$', 'tab:blue', 's'),
           ('match', r'AC on, $\kappa_p=a_{mass}$', 'tab:green', '^')]
@@ -65,7 +78,7 @@ for tag, lab, col, mk in SERIES:
 ax.set_xscale('log'); ax.set_yscale('log')
 ax.set_xlim(min(AM)/1.6, max(AM)*3.0)
 ax.set_ylim(min(p[1] for p in series('match'))*0.62,
-            max(p[1] for p in series('off'))*2.1)
+            max([p[1] for p in series('off')] + ([STEADY] if STEADY else []))*2.1)
 ax.set_xticks(AM); ax.set_xticklabels([f'{a:g}' for a in AM])
 ax.get_xaxis().set_minor_formatter(matplotlib.ticker.NullFormatter())
 ax.set_xlabel(r'$a_{mass} = w_{mass}\,fac_1/dt$'
@@ -89,6 +102,17 @@ if interior:
                 xy=(a_min, y_min), xytext=(a_min*1.25, y_min*0.47), fontsize=9,
                 color='tab:red', ha='left', va='center',
                 arrowprops=dict(arrowstyle='->', color='tab:red', lw=1.2))
+if STEADY:
+    ax.axhline(STEADY, color='0.3', lw=1.7, ls=(0, (7, 3)), zorder=1)
+    ax.annotate(f'steady form  $w_{{mass}}$ = 0  ($a_{{mass}}$ = 0, off the log '
+                f'axis):  {STEADY:.0f} its/solve\n'
+                f'— {STEADY/max(p[1] for p in series("off")):.0f}x the worst '
+                f'transient point, and it converges to a SPURIOUS\noscillatory '
+                f'state (RMS u = 2.5e-01 vs 1.8e-02).  Not a usable setting.',
+                xy=(min(AM)/1.45, STEADY), xytext=(0, -42),
+                textcoords='offset points', fontsize=8.5, color='0.3',
+                va='bottom', ha='left')
+
 mt = series('match')
 ax.annotate('with AC the cost falls\nmonotonically as dt is refined',
             xy=mt[-1][:2], xytext=(max(AM)*1.22, mt[-1][1]*1.5), fontsize=9,
