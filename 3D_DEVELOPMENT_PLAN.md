@@ -45,6 +45,23 @@ With `w_mass` = 1 and BDF2, `a_mass = 1.5/dt` gives **150 … 1500** — one to 
 orders above anything that has ever been stable in this code, and above the
 `a_mass` = 120 at which AC failed on the BFS.
 
+**Do not take reassurance from the 2D channel.** The periodic channel ran
+happily at `a_mass` = 1.5, 3 and **30** (`TEMPORAL_ACCURACY_STUDY.md`, bit-exact
+fixed points) and at 15 (`ARTIFICIAL_COMPRESSIBILITY.md` §3, exact `Δp`), with no
+sign of the instability that kills the BFS above 12.1. That looks like evidence
+the 3D channel will be fine. **It is not.** `GARTLING_VALIDATION.md` §8 gives the
+reason for the exemption: laminar Poiseuille/Stokes are *exactly representable*
+(`J` = 5.94e−27), so all four rows vanish together and the weighting has nothing
+to trade off. The BFS sits at `L2(div u)` = 2.3e−02 and there the weights decide
+which row is sacrificed.
+
+A **turbulent** channel at `Re_τ` = 180 is not exactly representable and its
+residual is nowhere near zero — it belongs to the BFS regime, not the laminar
+one. Two further gaps: the largest `a_mass` ever measured on any channel here is
+**30**, five to fifty times below the 150–1500 that CFL implies; and the
+`pois_ac.py` sweep that nominally reaches `a_mass` = 60 only ever had its
+`dt` = 0.1 runs saved, so that range is unmeasured rather than clean.
+
 Three ways out, none free, and the plan must pick one *with measurements* at
 Stage 5:
 
@@ -256,8 +273,13 @@ forcing.
 Before any turbulence. Laminar 3D channel (Poiseuille + a decaying `z`
 perturbation), which has a known answer.
 
+Run it **laminar first, then with a finite-amplitude perturbation**, because the
+laminar case is exactly the one §0.2 says will look deceptively healthy.
+
 | measure | why |
 |---|---|
+| stability vs `a_mass`, laminar | expected to be *clean* up to at least 30 — this reproduces the known 2D channel result and is a control, not evidence of feasibility |
+| stability vs `a_mass`, perturbed | the case that matters: a non-zero residual is what activates the `a_mass` mechanism |
 | stability vs `a_mass` | re-derive the threshold **for the Stokes-like operator**; §0.1 says the 2D number does not transfer |
 | CFL limit of the explicit convection | measured, not assumed |
 | do the two windows overlap? | **if not, the formulation is infeasible as specified** |
