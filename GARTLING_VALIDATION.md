@@ -266,6 +266,19 @@ Sorting every run with a trustworthy time axis by `a_mass`:
 grids, both initial conditions, sub-iterations 1/3/5/10, `a_flux` from 0.1 to 1,
 dt from 0.01 to 2. None of those predict the outcome; `a_mass` does.
 
+> **Scope.** The threshold is measured on *this flow*, which has an outflow
+> boundary. It does **not** transfer to a closed domain: the Ghia Re = 1000
+> lid-driven cavity converges at `a_mass` = 30 with no remedy at all
+> (`|dU|` = 5.4e−10 after 518 steps, `ARTIFICIAL_COMPRESSIBILITY.md` §5.1). Read
+> 6.05 / 12.1 as a property of the weighting imbalance *interacting with an
+> outflow condition*, not of `a_mass` alone.
+>
+> **It can be moved.** Adding artificial compressibility to the continuity row
+> raises the usable limit on this flow to `a_mass` = 60 at `κ_p` = `a_mass`/2 —
+> dt = 0.1, 0.05 and 0.025 all reach t = 140 within 0.9% of Gartling's
+> reattachment. `a_mass` = 120 still fails at every `κ_p` tried. See
+> `ARTIFICIAL_COMPRESSIBILITY.md` §4.
+
 `peak|u|` is a perfect secondary discriminator: every stable run peaks at
 1.55–1.59 against the inlet peak of 1.5, every diverged run reaches 11.5–20,
 with nothing in between. That includes the `nsub=1` run that never tripped a

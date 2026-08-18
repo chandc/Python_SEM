@@ -189,7 +189,7 @@ def run_steady(NX, N, cap=300, wmom=1.0):
 
 
 def run_unsteady(NX, N, dt=0.1, tmax=140.0, nsub=5, outlet='pz',
-                 ic='stagnant', ramp=0.0, wmom=1.0, wmass=1.0):
+                 ic='stagnant', ramp=0.0, wmom=1.0, wmass=1.0, dtau_p=None):
     """ic='stagnant' is Chan's own start.  ic='steady' restarts from the converged
     steady field: the time stepper MUST hold that fixed point, so if it does not,
     the failure is in the time stepping and not in the violent startup transient.
@@ -198,6 +198,17 @@ def run_unsteady(NX, N, dt=0.1, tmax=140.0, nsub=5, outlet='pz',
     m, D, st, bc2, pin = build(NX, N, steady=False, outlet=outlet,
                                wmom=wmom, wmass=wmass)
     st.dt = dt
+    # artificial compressibility on the continuity row (lssem.ls_pseudo_p).
+    # 'match' sets kappa_p = a_mass, the balance that makes the continuity row
+    # scale with the momentum row at every dt.  Needs converged sub-iterations.
+    a_mass_ = wmass*1.5/dt
+    if dtau_p == 'match':
+        dtau_p = 1.0/a_mass_
+    elif dtau_p is not None:
+        dtau_p = float(dtau_p)
+    st.dtau_p = dtau_p
+    print(f"      a_mass = {a_mass_:.4g}, a_flux = {wmom:g}, "
+          f"kappa_p = {0.0 if dtau_p is None else 1.0/dtau_p:.4g}", flush=True)
     S.apply_bc = bc2
     n = m.N+1
     dt_eff_ = dt*wmom/wmass
@@ -230,8 +241,9 @@ def run_unsteady(NX, N, dt=0.1, tmax=140.0, nsub=5, outlet='pz',
     try:
         for s in range(nsteps):
             tnow = (s+1)*dt_eff
-            U = S.step_bdf(st, h, time=tnow, max_newton=nsub, newton_tol=1e-10,
-                           newton_factor=1e-4, custom_inlet=inl, pin_p=pin,
+            U = S.step_bdf(st, h, time=tnow, max_newton=nsub, newton_tol=1e-12,
+                           newton_factor=(1e-6 if st.dtau_p is not None else 1e-4),
+                           custom_inlet=inl, pin_p=pin,
                            cgsfac=1e-3, cg_tol=1e-6, cg_max_iter=200000,
                            line_search=True)
             if not np.all(np.isfinite(U)):
@@ -261,11 +273,13 @@ def run_unsteady(NX, N, dt=0.1, tmax=140.0, nsub=5, outlet='pz',
     ic_tag = 'restart' if ic.startswith('file:') else ic
     tag = (f'{SC}/gartling_unsteady_nx{NX}_N{N}_dt{dt:g}_T{tmax:g}_nsub{nsub}'
            f'_{outlet}_{ic_tag}{("_ramp%g" % ramp) if ramp else ""}'
-           f'_wm{wmom:g}_ws{wmass:g}.npz')
+           f'_wm{wmom:g}_ws{wmass:g}'
+           f'{"" if dtau_p is None else "_ac%g" % (1.0/dtau_p)}.npz')
     np.savez(tag, U=U, xnod=m.xnod, ynod=m.ynod, hy=m.hy, hx=m.hx, N=m.N,
              nu=NU, status=status, dt=dt, tmax=tmax, NX=NX, nsub=nsub,
              outlet=outlet, ic=ic, ramp=ramp, wmom=wmom, wmass=wmass,
-             dt_eff=dt*wmom/wmass, hist=hh,
+             dt_eff=dt*wmom/wmass, kappa_p=(0.0 if dtau_p is None else 1.0/dtau_p),
+             hist=hh,
              snaps=np.array(snaps), snap_t=np.array(snap_t))
     treach = hh[-1, 0] if nfilled else 0.0
     print(f"  UNSTEADY nx{NX} N{N} dt={dt:g} nsub={nsub} {outlet} ic={ic}"
@@ -308,4 +322,7 @@ if __name__ == '__main__':
         ramp = float(sys.argv[9]) if len(sys.argv) > 9 else 0.0
         wmom = float(sys.argv[10]) if len(sys.argv) > 10 else 1.0
         wmass = float(sys.argv[11]) if len(sys.argv) > 11 else 1.0
-        run_unsteady(NX, N, dt, tmax, nsub, outlet, ic, ramp, wmom, wmass)
+        dtau_p = sys.argv[12] if len(sys.argv) > 12 else None
+        if dtau_p in ('none', 'None', ''):
+            dtau_p = None
+        run_unsteady(NX, N, dt, tmax, nsub, outlet, ic, ramp, wmom, wmass, dtau_p)

@@ -136,6 +136,50 @@ def ls_pseudo(state):
     return a_flux / float(dtau)
 
 
+def ls_pseudo_p(state):
+    """Artificial-compressibility coefficient kappa_p for the CONTINUITY row.
+    0.0 when disabled (`dtau_p = None`, the default).
+
+    The continuity row is normally `div u` with weight exactly 1, while the
+    momentum row carries `a_mass = w_mass*fac1/dt`.  Refining dt therefore drives
+    momentum up against a constraint that never moves -- measured in
+    GARTLING_VALIDATION.md sec 6 as a hard stability limit: every run with
+    a_mass <= 6.05 bounded, every run with a_mass >= 12.1 divergent, 34 runs with
+    no crossover.  Artificial compressibility gives the continuity row its own
+    coefficient so the two can be balanced:
+
+        (1/(beta^2 dtau_p)) * (p - p_prev)  +  div u
+
+    `dtau_p` here absorbs beta^2, i.e. kappa_p = 1/dtau_p, so there is one knob.
+    Setting dtau_p = 1/a_mass makes the two rows scale together at every dt, which
+    is the balance the identity a_mass = fac1*a_flux/dt_eff says is needed.
+
+    PSEUDO-TIME, NOT PHYSICAL TIME.  Like `ls_pseudo`, the reference is the
+    previous SUB-ITERATE, not the previous time level, and solver._drop_pseudo
+    removes kappa_p*p from the residual.  At sub-iteration convergence p = p_prev
+    and the term vanishes identically, so each time level still solves the
+    incompressible equations and time accuracy is preserved -- which the physical
+    -time form `(1/beta^2) dp/dt + div u = 0` would not do, since it solves a
+    genuinely compressible system through the transient.
+
+    THIS REQUIRES THE SUB-ITERATIONS TO CONVERGE.  With max_newton = 1 there is no
+    sub-iteration to converge, the term does not vanish, and it degenerates into
+    the physical-time form with its accuracy cost.
+
+    NOT EXACTLY INVARIANT.  Same caveat as ls_pseudo: each sub-iteration minimises
+    ||L_k U - (f + kappa_p E_p U0)||^2, so at the fixed point the stationarity
+    condition carries an extra kappa_p*E_p^T R and the converged state is
+    perturbed by O(kappa_p * R).  Where the residual is driven to zero (Poiseuille
+    reaches J = 5.94e-27) the two coincide and the term is free; where it is not
+    (BFS, J ~ 3.7e-05) the perturbation is proportional to the discretisation
+    residual and vanishes under refinement.  Measure it, do not assume it.
+    """
+    dtau_p = getattr(state, 'dtau_p', None)
+    if dtau_p is None:
+        return 0.0
+    return 1.0/float(dtau_p)
+
+
 class SolverState:
     """Holds mesh, operator matrices, and cached linearisation data for the LSSEM solver."""
     def __init__(self, mesh, D, nu, dt, fac1=1.0, w_mom=None, w_mass=None, dtau=None):
@@ -305,7 +349,13 @@ def _apply_L_numpy(state, U, fu, fv):
     su0[...] = (a_mass * u + a_flux * (fu * u_x + fv * u_y + u * dfu_dx + v * dfu_dy + p_x + state.nu * om_y)) * wq
     su1[...] = (a_mass * v + a_flux * (fu * v_x + fv * v_y + u * dfv_dx + v * dfv_dy + p_y - state.nu * om_x)) * wq
     
-    su2[...] = (u_x + v_y) * wq
+    # Artificial compressibility (pseudo-time) on the continuity row.  kappa_p = 0
+    # unless state.dtau_p is set, so this is bit-identical to the previous
+    # behaviour by default.  As with the momentum kappa, the caller cancels
+    # kappa_p*p out of the RESIDUAL (solver._drop_pseudo); it is unconditional
+    # here because apply_L is also the operator applied to the increment.
+    a_p = ls_pseudo_p(state)
+    su2[...] = (a_p * p + u_x + v_y) * wq
     su3[...] = (om + u_y - v_x) * wq
     
     su = state.su_out
@@ -372,6 +422,12 @@ def _apply_LT_numpy(state, su, fu, fv):
     DxT(su1, state.D, state.mesh.facx, out=tmp)
     DyT(su2, state.D, state.mesh.facy, out=tmp2)
     c2[...] = tmp + tmp2
+    a_p = ls_pseudo_p(state)
+    if a_p != 0.0:
+        # transpose of the kappa_p*p entry added to the continuity row in apply_L.
+        # su3_scaled is su[...,2] (the continuity residual), unscaled -- correct,
+        # because the continuity row carries weight 1, not a_flux.
+        c2[...] += a_p * su3_scaled
     
     # c_4
     DyT(su1, state.D, state.mesh.facy, out=tmp)
@@ -410,11 +466,24 @@ def _bind_backend(name):
 backend.register(_bind_backend)
 
 
+def _check_ac_backend(state):
+    """The numba kernels do not carry the artificial-compressibility term, so
+    running with dtau_p set on that backend would silently solve a different
+    system.  Fail loudly instead."""
+    if getattr(state, 'dtau_p', None) is not None and _IMPL_L is not _apply_L_numpy:
+        raise NotImplementedError(
+            "artificial compressibility (state.dtau_p) is implemented in the numpy "
+            "backend only; the numba kernels would silently drop the term. "
+            "Call lssem2d.set_backend('numpy').")
+
+
 def apply_L(state, U, fu, fv):
     """Apply the VVP operator L using the active backend (see lssem2d.backend)."""
+    _check_ac_backend(state)
     return _IMPL_L(state, U, fu, fv)
 
 
 def apply_LT(state, su, fu, fv):
     """Apply the transpose VVP operator L^T using the active backend."""
+    _check_ac_backend(state)
     return _IMPL_LT(state, su, fu, fv)

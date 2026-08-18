@@ -1,5 +1,5 @@
 import numpy as np
-from .lssem import apply_L, apply_LT, ls_pseudo
+from .lssem import apply_L, apply_LT, ls_pseudo, ls_pseudo_p
 from .assembly import gather_scatter
 from .bc import apply_mask, apply_bc
 
@@ -82,11 +82,12 @@ def compute_jacobi(state, fu, fv, pin_p=False):
     # a_mk = dR_m/dU_k for m in {1,2} is scaled by dt.  Rows 3-4 (continuity, vorticity)
     # are unweighted.  Keeping these consistent with apply_L is mandatory: scaling the
     # operator without scaling this diagonal destroys the preconditioner.
-    from .lssem import ls_coeffs, ls_pseudo
+    from .lssem import ls_coeffs, ls_pseudo, ls_pseudo_p
     a_mass, a_flux, _ = ls_coeffs(state)
     # Must track apply_L exactly, pseudo-time included, or the preconditioner is
     # no longer the diagonal of the operator actually being solved.
     a_mass = a_mass + ls_pseudo(state)
+    a_p = ls_pseudo_p(state)          # artificial compressibility on continuity
     conv = uo * Px + vo * Py
     a11 = a_mass * P + a_flux * (conv + ux * P)
     a22 = a_mass * P + a_flux * (conv + vy * P)
@@ -96,14 +97,15 @@ def compute_jacobi(state, fu, fv, pin_p=False):
     a23, a24 = Py * a_flux, -nu * Px * a_flux
     
     a31, a32 = Px, Py
-    
+    a33 = a_p * P                     # d(continuity)/dp, zero unless AC is on
+
     a41, a42, a44 = Py, -Px, P
 
     w = m.wq[:, None, None, :, :]
     diag_A = np.empty((m.nelem, n, n, 4))
     diag_A[..., 0] = np.sum((a11**2 + a21**2 + a31**2 + a41**2) * w, axis=(3, 4))
     diag_A[..., 1] = np.sum((a12**2 + a22**2 + a32**2 + a42**2) * w, axis=(3, 4))
-    diag_A[..., 2] = np.sum((a13**2 + a23**2) * w, axis=(3, 4))
+    diag_A[..., 2] = np.sum((a13**2 + a23**2 + a33**2) * w, axis=(3, 4))
     diag_A[..., 3] = np.sum((a14**2 + a24**2 + a44**2) * w, axis=(3, 4))
                 
     diag_A = gather_scatter(state.mesh, diag_A)
@@ -209,11 +211,18 @@ def _drop_pseudo(state, r, U):
     order instead of by O(kappa*R).  No-op when dtau is None.
     """
     a_p = ls_pseudo(state)
-    if a_p == 0.0:
+    a_pp = ls_pseudo_p(state)
+    if a_p == 0.0 and a_pp == 0.0:
         return
     wq = state.mesh.wq
-    r[..., 0] -= a_p * U[..., 0] * wq
-    r[..., 1] -= a_p * U[..., 1] * wq
+    if a_p != 0.0:
+        r[..., 0] -= a_p * U[..., 0] * wq
+        r[..., 1] -= a_p * U[..., 1] * wq
+    if a_pp != 0.0:
+        # same argument for the artificial-compressibility term on continuity:
+        # its reference is the current iterate, so it must not appear in the
+        # residual or the fixed point moves at leading order instead of O(kappa*R).
+        r[..., 2] -= a_pp * U[..., 2] * wq
 
 
 def _ls_merit(state, U, su_history, f_known=None):
