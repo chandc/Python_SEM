@@ -36,6 +36,21 @@ from lssem2d.lgl import diff_matrix
 from lssem2d.lssem import SolverState
 import lssem2d.solver as S
 
+# Count CG iterations: the steady form is the worst-conditioned setting measured
+# anywhere in this study (6747 its/solve, sec 5.2b), so whether AC rescues its
+# CONDITIONING is a separate question from whether it rescues its ANSWER.
+_orig_pcg = S.pcg_solve
+COUNT = {'it': 0}
+
+
+def _counting_pcg(*a, **k):
+    x, it = _orig_pcg(*a, **k)
+    COUNT['it'] += it
+    return x, it
+
+
+S.pcg_solve = _counting_pcg
+
 RE, EX, N = 1000.0, 6, 10
 MAXSWEEP = 400
 ALPHA_MIN = 1e-6            # below this the line search has effectively stalled
@@ -69,18 +84,19 @@ def rms_vs_ghia(mesh, U, n):
                                   - GH['ghia_u'])**2)))
 
 
-def run(ls, start):
+def run(ls, start, kap=None):
     n = N+1
     mesh = build_channel(1.0, 1.0, EX, EX, N, bcs=(1, 1, 1, 2))
     st = SolverState(mesh, diff_matrix(N), nu=1.0/RE, dt=1.0, fac1=1.0,
                      w_mom=1.0, w_mass=0.0)          # a_mass = 0: steady form
-    st.dtau_p = None
+    st.dtau_p = None if kap is None else 1.0/kap
     if start == 'rest':
         U = np.zeros((mesh.nelem, n, n, 4))
     else:
         U = np.load(f'{SC}/cavity_ac_dt0.05_match.npz',
                     allow_pickle=True)['U'].copy()
     hist = [U.copy()]
+    COUNT['it'] = 0
     T = []                                            # sweep, alpha, |dU|, max|u|
     t0 = time.perf_counter(); status = 'CAP'
     print(f"{'sweep':>6}{'alpha':>12}{'|dU|':>12}{'max|u|':>10}", flush=True)
@@ -107,9 +123,11 @@ def run(ls, start):
             status = 'conv'; break
     ok = np.all(np.isfinite(U))
     rms = rms_vs_ghia(mesh, U, n) if ok else np.nan
-    np.savez(f'{SC}/cavity_steadyls_{"on" if ls else "off"}_{start}.npz',
+    ktag = '' if kap is None else f'_k{kap:g}'
+    np.savez(f'{SC}/cavity_steadyls_{"on" if ls else "off"}_{start}{ktag}.npz',
              U=U, xnod=mesh.xnod, ynod=mesh.ynod, trace=np.array(T),
              line_search=ls, start=start, status=status, rms=rms,
+             kappa_p=(0.0 if kap is None else kap), cg_its=COUNT['it'],
              sweeps=len(T), wall=time.perf_counter()-t0)
     return status, rms, len(T), time.perf_counter()-t0
 
@@ -117,7 +135,8 @@ def run(ls, start):
 if __name__ == '__main__':
     ls = sys.argv[1] == 'on'
     start = sys.argv[2]
-    st_, rms, nsw, w = run(ls, start)
+    kap = float(sys.argv[3]) if len(sys.argv) > 3 and sys.argv[3] != '-' else None
+    st_, rms, nsw, w = run(ls, start, kap)
     print(f'\nline_search={"on" if ls else "off":<3} start={start:<8} '
-          f'{st_:<28} sweeps={nsw:<4} wall={w:6.0f}s  RMS u={rms:.4e}',
-          flush=True)
+          f'kappa_p={0.0 if kap is None else kap:<5g} {st_:<28} sweeps={nsw:<4} '
+          f'cg={COUNT["it"]:<9} wall={w:6.0f}s  RMS u={rms:.4e}', flush=True)
