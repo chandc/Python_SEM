@@ -36,11 +36,12 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
    `a_mass` = 120.
 
 3. **The main pay-off is conditioning, not stability.** On the closed cavity
-   (Re = 1000, 6×6 elements N = 10) AC cuts Jacobi-preconditioned CG from 690 to
-   228 iterations per solve at `a_mass` = 6, and from 1379 to **50** at
-   `a_mass` = 30 — a 27× reduction, 150 s → 9 s of wall time. Without AC the
-   system gets *harder* as `dt` is refined; with AC it gets *easier*.
-   (`figs/cavity_ac_cg_iterations.png`)
+   (Re = 1000, 6×6 elements N = 10) AC cuts Jacobi-preconditioned CG at every
+   `a_mass` measured, and the saving **grows monotonically** with it —
+   1.5× at `a_mass` = 1.5, then 1.9×, 3.0×, 10.1×, and **27.5×** at `a_mass` = 30
+   (1379 → 50 iterations per solve, 148 s → 8 s). The AC-off cost is *U-shaped*
+   in `a_mass` with a minimum near 6; the AC-on cost is monotone in `dt` and
+   lower everywhere. (15 runs, `figs/cavity_ac_cg_iterations.png`)
 
 4. **The mechanism is a missing preconditioner diagonal.** Pressure appears only
    in the momentum rows of the VVP system, so the pressure block of `LᵀL` scales
@@ -260,20 +261,46 @@ CG calls per case — identical work, only `κ_p` differs.
 
 | `dt` | `a_mass` | `κ_p` | total CG its | its / solve | reduction | wall |
 |---|---|---|---|---|---|---|
-| 0.25 | 6 | 0 (off) | 138 098 | 690.5 | — | 77.6 s |
-| 0.25 | 6 | 3 | 67 343 | 336.7 | 2.1× | 40.1 s |
-| 0.25 | 6 | 6 | 45 491 | 227.5 | **3.0×** | 28.3 s |
-| 0.05 | 30 | 0 (off) | 275 791 | 1379.0 | — | 150.2 s |
-| 0.05 | 30 | 15 | 14 879 | 74.4 | 18.5× | 11.5 s |
-| 0.05 | 30 | 30 | 10 026 | 50.1 | **27.5×** | 8.6 s |
+| 1.0 | 1.5 | 0 (off) | 245 431 | 1227.2 | — | 132.8 s |
+| 1.0 | 1.5 | 0.75 | 209 097 | 1045.5 | 1.2× | 114.9 s |
+| 1.0 | 1.5 | 1.5 | 168 630 | 843.1 | **1.5×** | 93.5 s |
+| 0.5 | 3 | 0 (off) | 166 408 | 832.0 | — | 91.5 s |
+| 0.5 | 3 | 1.5 | 113 529 | 567.6 | 1.5× | 64.3 s |
+| 0.5 | 3 | 3 | 88 068 | 440.3 | **1.9×** | 50.9 s |
+| 0.25 | 6 | 0 (off) | 138 098 | **690.5** | — | 76.6 s |
+| 0.25 | 6 | 3 | 67 343 | 336.7 | 2.1× | 39.6 s |
+| 0.25 | 6 | 6 | 45 491 | 227.5 | **3.0×** | 27.9 s |
+| 0.1 | 15 | 0 (off) | 195 245 | 976.2 | — | 106.7 s |
+| 0.1 | 15 | 7.5 | 29 014 | 145.1 | 6.7× | 19.1 s |
+| 0.1 | 15 | 15 | 19 381 | 96.9 | **10.1×** | 13.8 s |
+| 0.05 | 30 | 0 (off) | 275 791 | 1379.0 | — | 148.3 s |
+| 0.05 | 30 | 15 | 14 879 | 74.4 | 18.5× | 10.9 s |
+| 0.05 | 30 | 30 | 10 026 | 50.1 | **27.5×** | 8.2 s |
 
-`figs/cavity_ac_cg_iterations.png`.
+`figs/cavity_ac_cg_iterations.png`. Measured by `scratch/cavity_ac_cgiters.py`
+into `scratch/cavity_ac_cgiters.csv`, which `scratch/cavity_ac_cgplot.py` reads —
+no hand-copied numbers. The iteration counts are deterministic: re-measuring
+`a_mass` = 6 / AC off in a later serial pass returned 138 098 again, bit for bit.
+Only the wall column moves with machine load, so run the sweep serially.
 
-**AC reverses the sign of the `dt` dependence.** Without AC, halving `dt` five
-times over makes each solve *harder* — 690 → 1379 iterations. With AC it makes
-each solve *easier* — 228 → 50. That is the whole result in one line: refinement
-without AC costs twice over (more steps, each more expensive), with AC it costs
-only in step count.
+**The AC-off cost is U-shaped in `a_mass`, with a minimum near 6.** Reading the
+`κ_p` = 0 rows: 1227 → 832 → **690** → 976 → 1379. Cost rises in *both*
+directions from `a_mass` ≈ 6 — refining `dt` past that point makes each solve
+harder, but so does coarsening it below.
+
+> **Retraction.** An earlier version of this section measured only `a_mass` = 6
+> and 30, saw 690 → 1379, and concluded that "AC reverses the sign of the `dt`
+> dependence — without AC, refining `dt` makes each solve harder." That sampled
+> one branch of a U and mistook it for a monotone trend. The AC-off curve has an
+> interior minimum; there is no single sign to reverse. What is true is stated
+> below.
+
+**With AC the cost is monotone in `dt`, and lower everywhere.** Both AC curves
+fall steadily as `dt` is refined — 843 → 440 → 228 → 97 → 50 at `κ_p` = `a_mass`
+— with no interior minimum, and every AC row beats the AC-off row at the same
+`a_mass`. So AC does not merely shift the curve down, it removes the penalty for
+refining past `a_mass` ≈ 6, which is the regime a time-accurate run wants to be
+in.
 
 **The mechanism is a missing diagonal.** In the VVP first-order system pressure
 enters only through `∇p` in the momentum rows. The pressure block of `LᵀL`
@@ -281,11 +308,14 @@ therefore scales as `a_flux²` while the velocity blocks pick up `a_mass²`, and
 `compute_jacobi` has no `a33` term to normalise it with. As `a_mass` grows the
 pressure block becomes relatively tiny and the Jacobi preconditioner does nothing
 for it. AC contributes `a33 = κ_p·P` (`lssem2d/solver.py:90`) directly to the
-diagonal that was empty — which is why the benefit *grows* with `a_mass`
-(3.0× at 6, 27.5× at 30) rather than being a fixed constant.
+diagonal that was empty — which is why the benefit *grows monotonically* with
+`a_mass` (1.5× → 1.9× → 3.0× → 10.1× → 27.5× over 1.5 … 30) rather than being a
+fixed constant. Five points, no reversal: this is the one trend in the table
+that is genuinely monotone.
 
 **Iterations and stability want different `κ_p`.** On the cavity `κ_p = a_mass`
-beats `a_mass/2` on iterations at both time steps (50 vs 74, 228 vs 337). On the
+beats `a_mass/2` on iterations at every time step (50 vs 74, 97 vs 145, 228 vs
+337, 440 vs 568, 843 vs 1046). On the
 BFS at `a_mass` = 60, `κ_p = a_mass` **diverges** and only `a_mass/2` survives.
 Choose for stability first; the iteration count at `a_mass/2` is still within
 50% of the best.

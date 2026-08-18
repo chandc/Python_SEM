@@ -2,14 +2,14 @@
 
     uv run --quiet python scratch/cavity_ac_cgplot.py
 
-DATA below is the measured output of scratch/cavity_ac_cgiters.py -- 40 steps
-from rest, 6x6 elements N = 10, nsub = 5, cg_tol = 1e-8, cgsfac = 1e-3.  Re-run
-that script and update DATA if anything in the solver changes.
-Documented in ARTIFICIAL_COMPRESSIBILITY.md sec 5.2.
+Reads the MEASURED table scratch/cavity_ac_cgiters.csv (written by
+scratch/cavity_ac_cgiters.py) -- nothing here is hard-coded, so re-measuring and
+re-plotting cannot drift apart.  Documented in ARTIFICIAL_COMPRESSIBILITY.md
+sec 5.2.
 
     figs/cavity_ac_cg_iterations.png
 """
-import os, sys
+import os, sys, csv
 SC = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, '/Users/danielchan/Dropbox/Apple_MLX_CFD/sem_demo')
 os.chdir('/Users/danielchan/Dropbox/Apple_MLX_CFD/sem_demo')
@@ -17,84 +17,129 @@ import numpy as np
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-# (dt, a_mass, kappa_p, its_per_call, wall_s)
-DATA = [(0.25, 6, 0.0, 690.5, 77.6),
-        (0.25, 6, 3.0, 336.7, 40.1),
-        (0.25, 6, 6.0, 227.5, 28.3),
-        (0.05, 30, 0.0, 1379.0, 150.2),
-        (0.05, 30, 15.0, 74.4, 11.5),
-        (0.05, 30, 30.0, 50.1, 8.6)]
+CSV = f'{SC}/cavity_ac_cgiters.csv'
+with open(CSV) as fh:
+    ROWS = [{k: (v if k == 'tag' else float(v)) for k, v in r.items()}
+            for r in csv.DictReader(fh)]
 
-fig, axs = plt.subplots(1, 2, figsize=(13.5, 5.6))
+# Keep only a_mass values measured for ALL THREE settings.  cavity_ac_cgiters.py
+# checkpoints by rewriting the whole csv after every case, so reading it while
+# that sweep is still running catches a partial file -- which silently produced a
+# plot missing its highest points until this guard was added.
+_TAGS = {'off', 'half', 'match'}
+_seen = {}
+for r in ROWS:
+    _seen.setdefault(r['a_mass'], set()).add(r['tag'])
+AM = sorted(a for a in _seen if _seen[a] >= _TAGS)
+_partial = sorted(set(_seen) - set(AM))
+if _partial:
+    print(f'WARNING: dropping incomplete a_mass {_partial} '
+          f'(is cavity_ac_cgiters.py still running?)', file=sys.stderr)
+if not AM:
+    raise SystemExit(f'{CSV} has no a_mass measured for all of {sorted(_TAGS)}')
+DT = {r['a_mass']: r['dt'] for r in ROWS}
 
-# --- (a) iterations per CG call vs a_mass, AC off / half / match ---
+
+def series(tag):
+    """(a_mass, its/call, wall) for one AC setting, ordered by a_mass."""
+    d = {r['a_mass']: r for r in ROWS if r['tag'] == tag}
+    return [(a, d[a]['its_per_call'], d[a]['wall_s']) for a in AM if a in d]
+
+
+SERIES = [('off', 'AC off', 'tab:red', 'o'),
+          ('half', r'AC on, $\kappa_p=a_{mass}/2$', 'tab:blue', 's'),
+          ('match', r'AC on, $\kappa_p=a_{mass}$', 'tab:green', '^')]
+
+fig, axs = plt.subplots(1, 2, figsize=(14.0, 5.8))
+
+# --- (a) iterations per CG solve vs a_mass ---
 ax = axs[0]
-am = sorted({d[1] for d in DATA})
-for tag, sel, col, mk in (('AC off', lambda d: d[2] == 0, 'tab:red', 'o'),
-                          (r'AC on, $\kappa_p=a_{mass}/2$',
-                           lambda d: d[2] != 0 and abs(d[2]-d[1]/2) < 1e-9,
-                           'tab:blue', 's'),
-                          (r'AC on, $\kappa_p=a_{mass}$',
-                           lambda d: d[2] != 0 and abs(d[2]-d[1]) < 1e-9,
-                           'tab:green', '^')):
-    pts = sorted([(d[1], d[3]) for d in DATA if sel(d)])
-    ax.plot([p[0] for p in pts], [p[1] for p in pts], mk+'-', color=col, ms=10,
-            lw=2.0, label=tag)
-    for x, y in pts:
-        ax.annotate(f'{y:.0f}', (x, y), textcoords='offset points',
-                    xytext=(0, 9), ha='center', fontsize=9, color=col)
+for tag, lab, col, mk in SERIES:
+    pts = series(tag)
+    ax.plot([p[0] for p in pts], [p[1] for p in pts], mk+'-', color=col, ms=9,
+            lw=2.0, label=lab)
+    for a, y, _ in pts:
+        ax.annotate(f'{y:.0f}', (a, y), textcoords='offset points',
+                    xytext=(0, 10 if tag != 'match' else -15), ha='center',
+                    fontsize=8.5, color=col)
 ax.set_xscale('log'); ax.set_yscale('log')
-ax.set_xlim(4.8, 78); ax.set_ylim(28, 3300)
-ax.set_xticks(am); ax.set_xticklabels([f'{a:g}' for a in am])
-ax.set_xlabel(r'$a_{mass} = w_{mass}\,fac_1/dt$   (6 at dt=0.25,  30 at dt=0.05)')
+ax.set_xlim(min(AM)/1.6, max(AM)*3.0)
+ax.set_ylim(min(p[1] for p in series('match'))*0.62,
+            max(p[1] for p in series('off'))*2.1)
+ax.set_xticks(AM); ax.set_xticklabels([f'{a:g}' for a in AM])
+ax.get_xaxis().set_minor_formatter(matplotlib.ticker.NullFormatter())
+ax.set_xlabel(r'$a_{mass} = w_{mass}\,fac_1/dt$'
+              '\n(dt = ' + ',  '.join(f'{DT[a]:g}' for a in AM) + ')')
 ax.set_ylabel('CG iterations per solve')
-ax.set_title('Conditioning: AC reverses the slope', fontsize=12)
+ax.set_title('AC is cheaper at every $a_{mass}$', fontsize=12)
 ax.grid(alpha=.3, which='both'); ax.legend(fontsize=9.5, loc='lower left')
-ax.annotate('without AC, refining dt\nmakes the system HARDER',
-            xy=(30, 1379), xytext=(33, 1500), fontsize=9, color='tab:red',
-            arrowprops=dict(arrowstyle='->', color='tab:red', lw=1.2))
-ax.annotate('with AC, refining dt\nmakes it EASIER',
-            xy=(30, 50.1), xytext=(33, 60), fontsize=9, color='tab:green',
+
+# The AC-off cost is U-SHAPED in a_mass, not monotone -- it rises towards BOTH
+# ends.  An earlier two-point version of this plot sampled only the right-hand
+# branch and was captioned "AC reverses the slope", which is wrong: refining dt
+# only makes the solve harder above the minimum.  Mark the minimum from the data
+# rather than asserting a direction.
+off_pts = series('off')
+imin = int(np.argmin([p[1] for p in off_pts]))
+a_min, y_min, _ = off_pts[imin]
+interior = 0 < imin < len(off_pts)-1
+if interior:
+    ax.annotate(f'AC off is cheapest near $a_{{mass}}$ = {a_min:g};\n'
+                'cost rises towards BOTH ends',
+                xy=(a_min, y_min), xytext=(a_min*1.25, y_min*0.47), fontsize=9,
+                color='tab:red', ha='left', va='center',
+                arrowprops=dict(arrowstyle='->', color='tab:red', lw=1.2))
+mt = series('match')
+ax.annotate('with AC the cost falls\nmonotonically as dt is refined',
+            xy=mt[-1][:2], xytext=(max(AM)*1.22, mt[-1][1]*1.5), fontsize=9,
+            color='tab:green', ha='left', va='center',
             arrowprops=dict(arrowstyle='->', color='tab:green', lw=1.2))
 
-# --- (b) speed-up factor ---
+# --- (b) reduction factor ---
 ax = axs[1]
-w = 0.35
-labels, s_half, s_match = [], [], []
-for a in am:
-    off = [d[3] for d in DATA if d[1] == a and d[2] == 0][0]
-    h = [d[3] for d in DATA if d[1] == a and abs(d[2]-a/2) < 1e-9][0]
-    m = [d[3] for d in DATA if d[1] == a and abs(d[2]-a) < 1e-9][0]
-    ws = {d[2]: d[4] for d in DATA if d[1] == a}
-    labels.append(f'$a_{{mass}}$ = {a:g}   (dt = {[d[0] for d in DATA if d[1]==a][0]:g})\n'
-                  f'wall  {ws[0.0]:.0f}s $\\rightarrow$ {ws[a/2]:.0f}s '
-                  f'$\\rightarrow$ {ws[a]:.0f}s')
-    s_half.append(off/h); s_match.append(off/m)
-x = np.arange(len(am))
-b1 = ax.bar(x-w/2, s_half, w, color='tab:blue', label=r'$\kappa_p=a_{mass}/2$')
-b2 = ax.bar(x+w/2, s_match, w, color='tab:green', label=r'$\kappa_p=a_{mass}$')
-for bars in (b1, b2):
+off = {a: y for a, y, _ in series('off')}
+wall = {t: {a: w for a, _, w in series(t)} for t, _, _, _ in SERIES}
+w = 0.36
+x = np.arange(len(AM))
+for k, (tag, lab, col, _) in enumerate([s for s in SERIES if s[0] != 'off']):
+    d = {a: y for a, y, _ in series(tag)}
+    h = [off[a]/d[a] for a in AM]
+    bars = ax.bar(x + (k-0.5)*w, h, w, color=col, label=lab)
     for b in bars:
-        ax.annotate(f'{b.get_height():.1f}x', (b.get_x()+b.get_width()/2, b.get_height()),
-                    textcoords='offset points', xytext=(0, 3), ha='center', fontsize=10)
+        ax.annotate(f'{b.get_height():.1f}x',
+                    (b.get_x()+b.get_width()/2, b.get_height()),
+                    textcoords='offset points', xytext=(0, 3), ha='center',
+                    fontsize=9.5)
 ax.axhline(1.0, color='k', lw=1.0, ls='--')
-ax.set_xticks(x); ax.set_xticklabels(labels)
-ax.set_ylim(0, max(s_match)*1.22)
+ax.set_xticks(x)
+ax.set_xticklabels([f'{a:g}\n(dt = {DT[a]:g})\n'
+                    f'{wall["off"][a]:.0f}s $\\rightarrow$ {wall["match"][a]:.0f}s'
+                    for a in AM], fontsize=9)
+ax.set_xlabel(r'$a_{mass}$,  with wall time  AC off $\rightarrow$ '
+              r'$\kappa_p=a_{mass}$')
+ax.set_ylim(0, max(off[a]/{aa: y for aa, y, _ in series('match')}[a]
+                   for a in AM)*1.20)
 ax.set_ylabel('CG-iteration reduction vs AC off')
 ax.set_title('Benefit grows with $a_{mass}$', fontsize=12)
 ax.grid(alpha=.3, axis='y'); ax.legend(fontsize=9.5, loc='upper left')
 
-fig.suptitle('Artificial compressibility and linear-solver cost -- lid-driven cavity '
-             'Re = 1000, 6x6 elements N = 10\n'
-             '40 steps from rest, nsub = 5, cg_tol = 1e-8, Jacobi-preconditioned CG',
-             fontsize=11.5)
-fig.text(0.5, 0.005, 'Mechanism: pressure enters only the momentum rows, so without AC the '
-         r'Jacobi preconditioner has no pressure diagonal ($a_{33}=0$).  AC supplies '
-         r'$a_{33}=\kappa_p P$ — exactly where the conditioning is worst.',
-         ha='center', fontsize=10)
-fig.tight_layout(rect=[0, 0.035, 1, 0.91])
+fig.suptitle('Artificial compressibility and linear-solver cost -- lid-driven '
+             'cavity Re = 1000, 6x6 elements N = 10\n'
+             '40 steps from rest, nsub = 5, cg_tol = 1e-8, Jacobi-preconditioned '
+             'CG (200 solves per case, identical work)', fontsize=11.5)
+fig.text(0.5, 0.005, 'Mechanism: pressure enters only the momentum rows, so '
+         r'without AC the Jacobi preconditioner has no pressure diagonal '
+         r'($a_{33}=0$).  AC supplies $a_{33}=\kappa_p P$ — exactly where the '
+         'conditioning is worst.', ha='center', fontsize=10)
+fig.tight_layout(rect=[0, 0.035, 1, 0.90])
 fig.savefig('figs/cavity_ac_cg_iterations.png', dpi=125, bbox_inches='tight')
-print('figs/cavity_ac_cg_iterations.png')
-for d in DATA:
-    print(f'  dt={d[0]:<6g} a_mass={d[1]:<4g} kappa_p={d[2]:<6g} '
-          f'its/call={d[3]:>7.1f}  wall={d[4]:>6.1f}s')
+print('figs/cavity_ac_cg_iterations.png\n')
+hdr = (f"{'dt':>7}{'a_mass':>8}{'kappa_p':>9}{'tag':>7}{'CG its':>9}"
+       f"{'its/call':>10}{'reduction':>11}{'wall':>8}")
+print(hdr); print('-'*len(hdr))
+for r in ROWS:
+    red = off[r['a_mass']]/r['its_per_call']
+    print(f"{r['dt']:>7g}{r['a_mass']:>8g}{r['kappa_p']:>9g}{r['tag']:>7}"
+          f"{int(r['cg_its']):>9d}{r['its_per_call']:>10.1f}"
+          f"{('--' if r['tag'] == 'off' else f'{red:.1f}x'):>11}"
+          f"{r['wall_s']:>7.1f}s")
