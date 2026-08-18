@@ -30,11 +30,19 @@ from lssem2d.mesh import build_channel
 from lssem2d.lgl import diff_matrix, lgl_weights
 
 CASES = [('cavity_ac_dt1_off_wm0.npz',
-          'STEADY  $w_{mass}$ = 0,  from rest', 'spurious'),
-         ('cavity_ac_dt1_off_wm0_restart.npz',
-          'STEADY  $w_{mass}$ = 0,  from the correct field', 'spurious'),
+          'STEADY  $w_{mass}$ = 0,  from rest,  line search ON',
+          'stalled'),
+         ('cavity_steadyls_off_restart.npz',
+          'STEADY  $w_{mass}$ = 0,  from the correct field,  NO line search',
+          'spurious'),
          ('cavity_ac_dt0.05_match.npz',
           'time-accurate  dt = 0.05,  AC on ($\\kappa_p$ = 30)', 'correct')]
+KIND_NOTE = {
+    'stalled': 'NOT CONVERGED — line search stalled at $\\alpha$ = $2^{-25}$',
+    'spurious': 'SPURIOUS — a true fixed point ($|dU|$ = 0 exactly)',
+    'correct': 'correct'}
+KIND_COL = {'stalled': 'tab:orange', 'spurious': 'tab:red',
+            'correct': 'tab:green'}
 RE, EX, N = 1000.0, 6, 10
 nu = 1.0/RE
 _m = build_channel(1.0, 1.0, EX, EX, N, bcs=(1, 1, 1, 2))
@@ -112,10 +120,8 @@ for ax, (f, title, kind) in zip(axs, CASES):
     ax.plot(cx, cy, 'x', ms=11, color='red', mew=2.4, zorder=11,
             label='this centre')
     r = residuals(d['U'])
-    ax.set_title(f'{title}\nRMS u vs Ghia = {float(d["rms"]):.2e}   '
-                 f'({"SPURIOUS" if kind == "spurious" else "correct"})',
-                 fontsize=10.5,
-                 color='tab:red' if kind == 'spurious' else 'tab:green')
+    ax.set_title(f'{title}\nRMS u vs Ghia = {float(d["rms"]):.2e}\n'
+                 f'{KIND_NOTE[kind]}', fontsize=10, color=KIND_COL[kind])
     ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.set_aspect('equal')
     ax.set_xlabel(f"rms momentum {r['mom']:.3e}   rms div u {r['div']:.3e}\n"
                   f"vortex centre ({cx:.3f}, {cy:.3f}) — {off:.3f} from Ghia",
@@ -129,8 +135,9 @@ fig.suptitle('The steady form converges to spurious states — lid-driven cavity
              '§5.3)\n'
              'Red shading = reversed flow (u < 0).  Gold circle = Ghia\'s primary '
              'vortex centre, red cross = this run\'s.\n'
-             'All three are converged fixed points on the same mesh, and the '
-             'least-squares functional (below each panel) cannot tell them apart.',
+             'The middle panel is a TRUE fixed point reached without any line '
+             'search ($|dU|$ = 0 exactly) — yet the functional (below each panel) '
+             'and the vortex position both fail to flag it.',
              fontsize=11.5)
 fig.tight_layout(rect=[0, 0, 1, 0.90])
 fig.savefig('figs/cavity_steady_spurious_streamlines.png', dpi=125,

@@ -194,6 +194,7 @@ def reset_line_search(state):
     step taken per call.
     """
     state._ls_hist = []
+    state._ls_exhausted = False
 
 
 def _drop_pseudo(state, r, U):
@@ -339,11 +340,25 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
         del hist[:-max(1, int(ls_memory))]
         J_ref = max(hist)
         alpha = 1.0
+        accepted = False
         for _ in range(max_backtrack):
             if _ls_merit(state, U + alpha*dU, su_history, f_known) <= (1.0 - 1e-4*alpha)*J_ref:
+                accepted = True
                 break
             alpha *= 0.5
+        # EXHAUSTION IS NOT ACCEPTANCE.  If no alpha satisfied the condition we
+        # still take the step, for continuity with the previous behaviour -- but
+        # alpha is then 0.5**max_backtrack (3e-08 at the default 25), the state
+        # barely moves, and a caller watching |U - U_prev| sees a tiny change and
+        # concludes "converged".  That is exactly how a stalled line search got
+        # written up as a converged steady fixed point in
+        # ARTIFICIAL_COMPRESSIBILITY.md sec 5.3.  Record it so callers can tell
+        # the two apart; state._ls_exhausted is the flag to check before
+        # believing any small |dU| from a line-searched run.
         state._last_alpha = alpha
+        state._ls_exhausted = not accepted
+        if not accepted:
+            state._ls_exhausted_count = getattr(state, '_ls_exhausted_count', 0) + 1
         U_new = U + alpha*dU
     else:
         U_new = U + dU

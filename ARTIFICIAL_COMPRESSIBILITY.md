@@ -74,12 +74,13 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
    stability.** At the other end of the same sweep, `w_mass` = 0 (the pure
    steady form, `a_mass` = 0) is both the most expensive setting measured —
    **6747** CG iterations per solve, 5× the worst transient point — and it
-   converges to a **spurious** solution: RMS u = 2.5e−01 against Ghia, versus
-   1.8e−02 for the transient. Started *on* the correct field it walks off it
-   immediately, so this is not a basin problem. Neither the functional, nor
-   `|dU|`, nor a streamline plot detects it — the restarted state has the right
-   topology and a primary vortex centre within 0.008 of Ghia's, yet its profile
-   is 8× off. Only the benchmark profile catches it. (§5.3,
+   converges to a **spurious** solution. Started *on* the correct field with **no
+   line search**, undamped Newton reaches an exact fixed point (`|dU|` = 0.00e+00
+   in 10 sweeps) with RMS u = 1.52e−01 — 10× the transient's 1.57e−02. So the
+   physical solution is not a fixed point of the steady form, and it is not a
+   basin problem. Neither the functional, nor `|dU|`, nor a streamline plot, nor
+   the vortex position detects it — that state's vortex centre is within 0.010 of
+   Ghia's. Only the benchmark profile catches it. (§5.3,
    `figs/cavity_steady_spurious_streamlines.png`)
 
 8. **Scoping correction: the `a_mass` threshold does not transfer to the closed
@@ -277,8 +278,8 @@ where the weighting actually bites. Benchmark: Ghia, Ghia & Shin (1982).
 | 1.0 | 1.5 | 0.75 | 3000 | 9.24e−09 | 2.096e−02 | 2.567e−02 |
 | 1.0 | 1.5 | 1.5 | 3000 | 7.86e−09 | 1.964e−02 | 2.548e−02 |
 | 2.0 | 0.75 | 0 (off) | 3000 | 1.40e−08 | 2.045e−02 | 2.143e−02 |
-| **steady** (`w_mass` = 0) | **0** | 0 (off) | 36 (stalled) | 6.94e−08 | **2.525e−01** | **2.147e−01** |
-| **steady**, restarted on the converged field | **0** | 0 (off) | 11 (stalled) | 7.90e−08 | **1.280e−01** | **1.111e−01** |
+| **steady** (`w_mass` = 0), from rest — *line-search stall, not converged* | **0** | 0 (off) | 36 | 6.94e−08 | 2.525e−01 | 2.147e−01 |
+| **steady** fixed point, from the correct field, **no line search** | **0** | 0 (off) | 10 | **0.00e+00** | **1.516e−01** | — |
 
 Grouped by `dt` so the two components can be read against each other:
 
@@ -538,27 +539,53 @@ spectral-convergence rate.
 
 `w_mass` = 0 makes `s = w_mass/dt = 0` in `ls_coeffs`, so `a_mass` and
 `hist_scale` both vanish and the functional collapses to the pure steady form
-with no time-derivative term. Run on the same cavity, AC off, line search on:
+with no time-derivative term.
 
-| start | steps | `\|dU\|` at exit | RMS u vs Ghia | wall |
+> **Correction (2026-08-18).** This section originally reported *two* converged
+> spurious steady states, from rest and from the correct field, on runs with the
+> line search **on**. Both were **line-search stalls, not convergence** — see the
+> box below. The headline conclusion survives, but only because it was re-tested
+> without the line search; the original evidence for it was invalid.
+
+**The line search silently reports a stall as convergence.** `newton_step`'s
+backtracking loop runs at most `max_backtrack` = 25 halvings and then takes the
+step **anyway**, with no failure signal:
+
+    for _ in range(max_backtrack):
+        if _ls_merit(state, U + alpha*dU, ...) <= (1 - 1e-4*alpha)*J_ref: break
+        alpha *= 0.5
+    U_new = U + alpha*dU        # taken even if nothing was accepted
+
+`0.5**25` = 2.98e−08. Measured on this problem, alpha collapses to exactly that
+at sweep 26 and never recovers, so the state stops moving:
+`|dU|` = alpha·|step| ≈ 2.98e−08 × 2.3 = **6.9e−08, constant** — precisely the
+number originally quoted as a converged fixed point. `lssem2d/solver.py` now sets
+`state._ls_exhausted` when this happens; **check it before believing any small
+`|dU|` from a line-searched run.**
+
+Re-run with the line search off (`scratch/cavity_steady_ls.py`):
+
+| start | line search | outcome | sweeps | RMS u vs Ghia |
 |---|---|---|---|---|
-| from rest | 36 (stalled) | 6.94e−08 | **2.525e−01** | 594 s |
-| from the converged transient field | 11 (stalled) | 7.90e−08 | **1.280e−01** | 152 s |
-| *(transient `dt` = 0.05 for reference)* | 518 (conv) | 5.37e−10 | 1.791e−02 | — |
+| rest | on | **LS_STALL** (alpha = 2.98e−08) | 26 | 2.525e−01 |
+| rest | **off** | **does not converge** — `\|dU\|` oscillates 30–75 | 280+ | — |
+| correct field | on | **LS_STALL** (alpha = 2.98e−08) at sweep 1 | 1 | 1.342e−01 |
+| correct field | **off** | **converged, `\|dU\|` = 0.00e+00 exactly** | 10 | **1.516e−01** |
+| *(transient `dt` = 0.05, reference)* | on | conv | 512 | 1.568e−02 |
 
-**It converges, and it converges to the wrong answer.** From rest, `|dU|` falls
-336 → 0.87 → 6.9e−08 in ~30 Newton sweeps with no overshoot (`max|u|` = 1.0
-throughout, so line search is doing its job). The state it reaches is
-*spatially oscillatory* — centreline u runs 1.0 → 0.29 → −0.40 → −0.01 → +0.34
-on an element scale where the true profile decays smoothly.
+**The conclusion survives, on better evidence.** Started *on* the converged,
+Ghia-matching field with **no line search at all**, undamped Newton converges in
+10 sweeps to `|dU|` = 0.00e+00 — an exact fixed point of the discrete steady
+operator — and that fixed point has RMS u = 1.516e−01, **ten times** the
+transient solution's 1.568e−02. So the physical solution genuinely is **not** a
+fixed point of the steady form on this mesh, and it is not a basin problem
+either: the iteration walks off the correct answer and lands elsewhere.
 
-**It is not a basin problem.** Started *on* the converged, Ghia-matching field,
-the very first steady sweep moves the solution by `|dU|` = 1.01e+01 — four orders
-above any tolerance floor — and it settles at a *different* wrong state, this one
-the right shape but over-amplified (u = 0.58 at y = 0.85 against Ghia's 0.33,
-−0.52 at y = 0.27 against −0.28). So the physical solution is **not** a fixed
-point of the steady iteration here, and there is more than one spurious fixed
-point.
+**What must be withdrawn.** The from-rest case is *not* a converged spurious
+state — with the line search it stalls, and without it the iteration does not
+converge at all within 280 sweeps. The "spatially oscillatory converged state"
+and the claim of *two* spurious fixed points are withdrawn; one spurious fixed
+point is established, and the from-rest behaviour is simply non-convergence.
 
 **What the two spurious states look like.**
 `figs/cavity_steady_spurious_streamlines.png`
@@ -568,22 +595,24 @@ Ghia's (0.5313, 0.5625):
 
 | | primary vortex centre | offset from Ghia | RMS u |
 |---|---|---|---|
-| steady, from rest | (0.317, 0.727) | **0.270** | 2.52e−01 |
-| steady, restarted on the correct field | (0.526, 0.569) | **0.008** | 1.28e−01 |
+| steady, from rest, LS **stalled** | (0.317, 0.727) | **0.270** | 2.52e−01 |
+| steady, from correct field, **no LS** | (0.526, 0.570) | **0.010** | 1.52e−01 |
 | time-accurate `dt` = 0.05, AC on | (0.534, 0.567) | 0.005 | 1.57e−02 |
 
-The from-rest state is *visibly* wrong: an extra band of counter-rotating cells
-sits under the lid and the primary vortex is pushed to (0.32, 0.73).
+The stalled from-rest state is *visibly* wrong — an extra band of
+counter-rotating cells under the lid, primary vortex pushed to (0.32, 0.73) —
+which is a useful picture of what a stalled line search leaves behind, but it is
+not a solution of anything.
 
-**The restarted state is the dangerous one.** It has the correct topology — one
+**The middle panel is the dangerous one, and it is a genuine fixed point**
+(`|dU|` = 0 exactly, no line search involved). It has the correct topology — one
 primary vortex, both bottom corner eddies — and its vortex centre is within
-**0.008** of Ghia's, i.e. 0.8% of the cavity width, essentially as good as the
-correct run's 0.005. It would pass a visual inspection, a topology check *and* a
-vortex-position check. Only the full centreline profile exposes it: RMS u is
-1.28e−01, eight times worse than the correct solution, because the velocity
-magnitudes are inflated throughout (u = 0.58 at y = 0.85 against Ghia's 0.33).
-**Streamline plots and integral diagnostics are not sufficient validation for
-this solver; the profile comparison is.**
+**0.010** of Ghia's, i.e. 1% of the cavity width, against the correct run's
+0.005. It passes visual inspection, a topology check *and* a vortex-position
+check. Only the full centreline profile exposes it: RMS u = 1.52e−01, ten times
+worse than the correct solution, because the velocity magnitudes are inflated
+throughout. **Streamline plots and integral diagnostics are not sufficient
+validation for this solver; the profile comparison is.**
 
 **The functional cannot detect this either, which is the part worth
 remembering.**
@@ -591,8 +620,8 @@ Comparing the from-rest steady field against the transient one on the same mesh:
 
 | | rms momentum | rms div u | rms vorticity |
 |---|---|---|---|
-| steady, `w_mass` = 0 | 2.067e−01 | 1.259e−01 | 6.601e−02 |
-| transient, `dt` = 0.05 | 2.001e−01 | 1.443e−01 | 6.609e−02 |
+| steady fixed point (no LS) | 2.044e−01 | 1.299e−01 | 6.650e−02 |
+| transient, `dt` = 0.05 | 2.025e−01 | 1.435e−01 | 6.756e−02 |
 
 Indistinguishable — the steady field is even *better* on `div u`. The lid corner
 singularities dominate the domain integral at 6×6 N = 10, so J is not a usable
@@ -607,8 +636,18 @@ restart sweep is far above that floor, so the conclusion does not rest on it. It
 is consistent with, and may explain, the steady-form-versus-unsteady gap left
 open in `GARTLING_VALIDATION.md`.
 
-Reproduce: `scratch/cavity_ac.py 1.0 off 0.0` and
-`scratch/cavity_ac.py 1.0 off 0.0 scratch/_ic_converged.npz`.
+Reproduce: `scratch/cavity_steady_ls.py <on|off> <rest|restart>` — the
+line-search comparison, which is the version to trust. The original
+line-searched runs were `scratch/cavity_ac.py 1.0 off 0.0` and
+`... 1.0 off 0.0 scratch/_ic_converged.npz`; both stall.
+
+**Caveat on scope.** One mesh (6×6, N = 10), one Reynolds number, one linear
+solver setting (`cgsfac` = 1e−3, `cg_tol` = 1e−8). Undamped Newton from rest does
+not converge here at all, so "the steady form has a spurious fixed point" is
+established *from a good initial guess only*. Whether a better globalisation
+(trust region, proper Armijo with a failure branch, continuation in Re) would
+find the physical solution is untested — and is now the more interesting
+question.
 
 ---
 
@@ -662,6 +701,15 @@ st.dtau_p = 2.0/a_mass          # kappa_p = a_mass/2
 * A numba implementation, so AC is usable at production mesh sizes.
 * Whether the N-independence of §5.2b survives past N = 14, or under h- rather
   than p-refinement.
+* Whether a better globalisation than the current backtracking line search —
+  trust region, Armijo with a genuine failure branch, or continuation in Re —
+  lets the steady form reach the physical solution. §5.3 shows only that plain
+  undamped Newton from a good guess lands on a spurious fixed point, and that
+  the current line search stalls rather than converging.
+* Whether `_ls_exhausted` should *raise* rather than record. Taking the step
+  after 25 failed halvings is the pre-existing behaviour and other studies in
+  this repo were run under it, so it is flagged rather than changed — but every
+  line-searched result in this repo is now suspect until its alpha is checked.
 
 ---
 
@@ -741,8 +789,8 @@ one:
 
 | | rms momentum | rms div u | rms vorticity | RMS u vs Ghia |
 |---|---|---|---|---|
-| steady, `w_mass` = 0 | 2.067e−01 | 1.259e−01 | 6.601e−02 | **2.52e−01** |
-| transient, `dt` = 0.05 | 2.001e−01 | 1.443e−01 | 6.609e−02 | **1.79e−02** |
+| steady fixed point (`w_mass` = 0, no line search) | 2.044e−01 | 1.299e−01 | 6.650e−02 | **1.52e−01** |
+| transient, `dt` = 0.05 | 2.025e−01 | 1.435e−01 | 6.756e−02 | **1.57e−02** |
 
 Indistinguishable in J — the *wrong* solution is even better on `∇·u` — while the
 actual error differs 14×. The lid corner singularities dominate the domain
