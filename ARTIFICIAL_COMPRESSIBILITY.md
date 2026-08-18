@@ -13,7 +13,8 @@ Drivers: `scratch/pois_ac.py` (channel), `scratch/gartling_run.py` (BFS),
 `scratch/cavity_ac.py` (cavity), `scratch/cavity_ac_plot.py`,
 `scratch/cavity_ac_cgiters.py` + `scratch/cavity_ac_cgplot.py` (CG cost),
 `scratch/cavity_ac_pconv.py` + `scratch/cavity_ac_pconv_plot.py` (pressure
-convergence), `scratch/gartling_ac_streamlines.py`.
+convergence), `scratch/cavity_ac_nsweep.py` + `scratch/cavity_ac_nsweep_plot.py`
+and `scratch/cavity_n_profiles.py` (order N), `scratch/gartling_ac_streamlines.py`.
 
 Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
 `FORTRAN_POISEUILLE_OUTFLOW.md` (the outflow-BC side of the same problem),
@@ -460,6 +461,74 @@ which AC does not touch. That ceiling is `3.860/0.0848` ≈ **45×** at `dt` = 0
 Two consequences: CG iteration count is the honest metric here, and wall time
 *understates* what AC does to the linear solve.
 
+### 5.2b Does the benefit scale with polynomial order N?
+
+Every other result in this document was measured at a **single order per flow** —
+N = 10 on the cavity and channel, N = 6 on the BFS — and those two differ in
+flow, mesh and boundary conditions as well, so nothing about N could be extracted
+from them. This sweep varies N alone: mesh fixed at 6×6 elements, `dt` = 0.05
+(`a_mass` = 30), 40 steps from rest, the same protocol as §5.2.
+
+It matters because the `κ_p` ≈ `a_mass` rule balances `κ_p` against `a_mass`,
+which carries **no N dependence at all**, while the operator norms it is
+balancing against certainly do. If the optimum drifted with N, §6 would only be
+valid at N = 10.
+
+| N | dof | AC off | `κ_p` = `a/2` | `κ_p` = `a` | gain at `a/2` | gain at `a` |
+|---|---|---|---|---|---|---|
+| 4 | 3 600 | 405.7 | 22.1 | 14.1 | 18.4× | 28.8× |
+| 6 | 7 056 | 722.4 | 37.8 | 24.5 | 19.1× | 29.5× |
+| 8 | 11 664 | 1051.7 | 55.5 | 37.0 | 18.9× | 28.4× |
+| 10 | 17 424 | 1379.0 | 74.4 | 50.1 | 18.5× | 27.5× |
+| 12 | 24 336 | 1713.4 | 94.7 | 64.9 | 18.1× | 26.4× |
+| 14 | 32 400 | 2108.3 | 116.0 | 79.8 | 18.2× | 26.4× |
+
+*(CG iterations per solve, 200 solves per case.
+`figs/cavity_ac_n_sweep.png`, from `scratch/cavity_ac_nsweep.py` and
+`scratch/cavity_ac_nsweep_plot.py`.)*
+
+**The benefit is essentially N-independent.** `κ_p` = `a_mass` gives 26.4–29.5×
+(mean 27.8×) and `κ_p` = `a_mass`/2 gives 18.1–19.1× (mean 18.5×) across the
+whole range. Both AC-off and AC-on iteration counts grow **roughly linearly in
+N** — AC-off by ~330 iterations per 2 orders, near-constant — so the ratio stays
+flat. There is a slight decline at `κ_p` = `a_mass` (28.8× → 26.4×, about 8%
+over N = 4 … 14); at `a_mass`/2 even that is absent.
+
+**So §6's recommendation is not an artefact of N = 10**, and `κ_p` needs no N
+scaling over this range. Whether that survives to N ≫ 14, or on a mesh refined in
+h rather than p, is untested.
+
+**These 18 runs were launched in parallel**, which is legitimate here and worth
+recording why: CG iteration counts are deterministic and load-independent. The
+N = 10 column came back at 275 791 / 14 879 / 10 026 — **bit-identical** to the
+serial §5.2 measurement. The `wall` column from a parallel launch is *not*
+comparable and is deliberately not tabulated above.
+
+**Accuracy across N, on converged runs.** The 18 fields above are 40 steps
+(t = 2) and are a *conditioning* measurement only — their profiles would show
+early-transient shape, not discretisation error. Re-running each N to the stall
+exit at `κ_p` = `a_mass` gives the p-convergence picture
+(`figs/cavity_n_profiles.png`, `scratch/cavity_n_profiles.py`):
+
+| N | dof | steps to converge | RMS u | RMS v |
+|---|---|---|---|---|
+| 4 | 3 600 | 550 | 7.189e−02 | 1.053e−01 |
+| 6 | 7 056 | 540 | 3.275e−02 | 4.760e−02 |
+| 8 | 11 664 | 523 | 2.013e−02 | 2.847e−02 |
+| 10 | 17 424 | 512 | 1.568e−02 | 2.079e−02 |
+| 12 | 24 336 | 504 | 1.360e−02 | 1.674e−02 |
+| 14 | 32 400 | 490 | 1.343e−02 | 1.529e−02 |
+
+Both components converge monotonically toward Ghia and both profiles are visually
+on the benchmark by N = 10. **AC is on for all six**, so this also demonstrates
+that AC does not interfere with p-convergence — the sequence is clean.
+
+Note RMS u **plateaus near 1.34e−02** between N = 12 and 14 while RMS v is still
+falling. That flattening is not the AC term: at fixed 6×6 elements the remaining
+error is h-limited, and it is also approaching the accuracy of Ghia's own
+tabulated 129×129 finite-difference data. Do not read the last two rows as a
+spectral-convergence rate.
+
 ### 5.3 The steady form (`w_mass` = 0) does not have the physical solution as a fixed point
 
 `w_mass` = 0 makes `s = w_mass/dt = 0` in `ls_coeffs`, so `a_mass` and
@@ -560,3 +629,92 @@ st.dtau_p = 2.0/a_mass          # kappa_p = a_mass/2
   outflow condition. §5.1 shows the closed cavity is exempt at `a_mass` = 30,
   which is suggestive but is one point.
 * A numba implementation, so AC is usable at production mesh sizes.
+* Whether the N-independence of §5.2b survives past N = 14, or under h- rather
+  than p-refinement.
+
+---
+
+## 9. Related work
+
+> **Provenance.** This section rests on web searches over abstracts and one
+> overview page, not on full texts — the key sources (Pontaza & Reddy's penalty
+> paper, Bochev & Gunzburger's *Least-Squares Finite Element Methods* (2009),
+> Jiang's *The Least-Squares Finite Element Method* (1998)) are paywalled or
+> unfetched. Treat what follows as **where this work plausibly sits**, not as a
+> verified placement, and read the primary sources before claiming novelty.
+
+**Our own reference implementation does not do this.** Chan & Mittal (1996), the
+VVP LSSEM this code reproduces, uses preconditioned CG, BDF and sub-iterations,
+with no artificial-compressibility or penalty term on the continuity row.
+
+### What the literature establishes
+
+1. **Why the formulation exists.** LSFEM yields a **symmetric positive-definite**
+   system from a non-symmetric PDE and **avoids the inf-sup/LBB condition**, so
+   `u`, `p`, `ω` can share equal-order interpolation — which is what this code
+   does. Boundary-condition residuals can also be folded into the functional.
+
+2. **Poor mass conservation is the known Achilles heel.** Continuity is enforced
+   only in a least-squares sense, so `∇·u` is *traded off* against momentum.
+   Reported to become severe with certain boundary conditions and on
+   high-aspect-ratio domains. Published remedies: weighting the functional,
+   Lagrange multipliers on continuity, piecewise divergence-free bases, and
+   **strengthening the pressure–velocity coupling**.
+
+3. **Penalty / pseudo-compressibility.** The penalty formulation replaces
+   `∇·u = 0` with `∇·u = −p/Λ`, and there is a spectral/hp penalty least-squares
+   NS formulation (Pontaza & Reddy). Classic dilemma: smaller Λ enforces
+   incompressibility better but worsens conditioning and adds consistency error.
+
+4. **Space–time coupled LSFEM** (Pontaza & Reddy, JCP 2004) has no time-step
+   stability restriction and is spectrally accurate in time.
+
+5. **Diagonal preconditioning** is reported to reduce the LSFEM condition number
+   substantially.
+
+### How the results here map onto that
+
+* **§4's `a_mass` limit is the mass-conservation defect in a new guise.** The
+  literature treats the continuity weight as a free parameter to be chosen — and
+  chooses it *large*. In a time-marching VVP code it is not free: the constraint
+  rows carry weight exactly 1 while `a_mass = w_mass·fac1/dt` grows, so
+  **refining `dt` silently down-weights continuity.** We have not seen it stated
+  that the weight is set by the time step.
+
+* **AC is "strengthening the pressure–velocity coupling", item 2's named
+  remedy** — it puts `p` into a row that otherwise contains only velocities. Our
+  data agrees quantitatively: rms `∇·u` on Poiseuille improved 1.19e−07 →
+  1.69e−09 (§3).
+
+* **Our term is formally the penalty row, but behaves nothing like it.**
+  `κ_p·p + ∇·u = 0` is item 3 with `κ_p = 1/Λ`. The difference is decisive:
+  penalty is consistency-breaking — at convergence the solution really does
+  satisfy `∇·u = −p/Λ`, an O(1/Λ) error, so Λ must be large. Ours uses
+  `(p − p_prev)` in **pseudo**-time, so the term vanishes identically at
+  sub-iteration convergence and the perturbation is O(`κ_p`·R), not O(`κ_p`).
+  §3 is the proof: at `κ_p` = 15 we measure `Δp` = 1.44000 (exact) and rms
+  `∇·u` = 1.69e−09, where a penalty with Λ = 1/15 would be imposing
+  `∇·u = −15p`. That is why `κ_p` can be as large as `a_mass` rather than
+  vanishingly small.
+
+* **Item 5 is consistent with §5.2, and we identify the missing entry.** Jacobi
+  helps, but has **no `a33`** because pressure enters only through `∇p`. AC
+  supplies exactly that diagonal.
+
+### Where our measurements contradict a standard claim
+
+The functional is routinely advertised as a **built-in local and global error
+estimator**, used to drive adaptivity. **§5.3 is a counterexample.** On the
+cavity it could not distinguish the correct solution from a spurious oscillatory
+one:
+
+| | rms momentum | rms div u | rms vorticity | RMS u vs Ghia |
+|---|---|---|---|---|
+| steady, `w_mass` = 0 | 2.067e−01 | 1.259e−01 | 6.601e−02 | **2.52e−01** |
+| transient, `dt` = 0.05 | 2.001e−01 | 1.443e−01 | 6.609e−02 | **1.79e−02** |
+
+Indistinguishable in J — the *wrong* solution is even better on `∇·u` — while the
+actual error differs 14×. The lid corner singularities dominate the domain
+integral and swamp the signal. The error-estimator property is therefore
+conditional on the functional not being dominated by a singularity, which is a
+real caveat for adaptivity on a driven cavity.

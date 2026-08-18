@@ -70,7 +70,7 @@ def centreline_u(mesh, U, n):
     return ys[k], us[k]
 
 
-def run(dt, kspec, w_mass=1.0, ic=None):
+def run(dt, kspec, w_mass=1.0, ic=None, N=N):
     """w_mass = 0 is the PURE STEADY FORM.  ls_coeffs returns s = w_mass/dt = 0,
     so a_mass and hist_scale both vanish and the functional collapses to
 
@@ -109,6 +109,7 @@ def run(dt, kspec, w_mass=1.0, ic=None):
     # (GARTLING_VALIDATION.md sec 11).
     tag = '' if w_mass == 1.0 else f'_wm{w_mass:g}'
     tag += '' if ic is None else '_restart'
+    tag += '' if N == 10 else f'_N{N}'          # N=10 keeps the historical names
     out = f'{SC}/cavity_ac_dt{dt:g}_{kspec}{tag}.npz'
 
     def save(U, status, steps, dU, trace):
@@ -122,7 +123,7 @@ def run(dt, kspec, w_mass=1.0, ic=None):
             rms = float(np.sqrt(np.mean((np.interp(GH['ghia_y'], ys, us)
                                          - GH['ghia_u'])**2)))
             umax = float(np.abs(U[..., 0]).max())
-        np.savez(out, U=U, xnod=mesh.xnod, ynod=mesh.ynod, dt=dt,
+        np.savez(out, U=U, xnod=mesh.xnod, ynod=mesh.ynod, dt=dt, N=N,
                  kappa_p=(0.0 if kap is None else kap), a_mass=a_mass,
                  w_mass=w_mass, status=status, steps=steps, dU=dU, rms=rms,
                  trace=np.array(trace))
@@ -185,8 +186,9 @@ def run(dt, kspec, w_mass=1.0, ic=None):
 if __name__ == '__main__':
     dt = float(sys.argv[1]); kspec = sys.argv[2]
     w_mass = float(sys.argv[3]) if len(sys.argv) > 3 else 1.0
-    ic = sys.argv[4] if len(sys.argv) > 4 else None
-    r = run(dt, kspec, w_mass, ic)
+    ic = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != '-' else None
+    Nord = int(sys.argv[5]) if len(sys.argv) > 5 else N
+    r = run(dt, kspec, w_mass, ic, Nord)
     print(f"{kspec:>7}{r['dt']:>8g}{r['w_mass']:>8g}{r['a_mass']:>8.4g}"
           f"{r['kap']:>9.4g}{r['status']:>14}{r['steps']:>7}{r['wall']:>7.0f}s"
           f"{r['umax']:>8.4f}{r['dU']:>11.2e}{r['rms']:>11.4e}", flush=True)
