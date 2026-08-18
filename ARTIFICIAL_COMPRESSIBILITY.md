@@ -15,7 +15,8 @@ Drivers: `scratch/pois_ac.py` (channel), `scratch/gartling_run.py` (BFS),
 `scratch/cavity_ac_pconv.py` + `scratch/cavity_ac_pconv_plot.py` (pressure
 convergence), `scratch/cavity_ac_nsweep.py` + `scratch/cavity_ac_nsweep_plot.py`
 and `scratch/cavity_n_profiles.py` (order N),
-`scratch/cavity_steady_streamlines.py` (§5.3 figure),
+`scratch/cavity_steady_ls.py` + `scratch/cavity_steady_streamlines.py` +
+`scratch/cavity_steady_profiles.py` (§5.3),
 `scratch/gartling_ac_streamlines.py`.
 
 Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
@@ -606,7 +607,24 @@ counter-rotating cells under the lid, primary vortex pushed to (0.32, 0.73) —
 which is a useful picture of what a stalled line search leaves behind, but it is
 not a solution of anything.
 
-**The middle panel is the dangerous one, and it is a genuine fixed point**
+**On the centrelines, they separate immediately**
+(`figs/cavity_steady_profiles.png`, `scratch/cavity_steady_profiles.py`):
+
+| | RMS u | RMS v | max u | max \|v\| |
+|---|---|---|---|---|
+| steady fixed point (no LS) | 1.516e−01 | 1.337e−01 | 1.0000 | **0.6235** |
+| time-accurate, AC on | 1.568e−02 | 2.079e−02 | 1.0000 | 0.4894 |
+| *Ghia (tabulated)* | — | — | 1.0000 | *0.5155* |
+
+The spurious fixed point **overshoots Ghia everywhere**: `max|v|` = 0.62 against
+0.52 (+21%), the v peak at x ≈ 0.2 reaches 0.565 against 0.37 (+53%), and u dips
+to −0.56 against −0.38. The correct run slightly *under*shoots (0.489 vs 0.516),
+which is the ordinary N = 10 discretisation error. Its u profile also carries a
+visible kink near y ≈ 0.65, at an element boundary — the field is C⁰ but its
+derivative jumps there, which no integral diagnostic in §5.3 registered.
+
+**The middle panel of the streamline figure is the dangerous one, and it is a
+genuine fixed point**
 (`|dU|` = 0 exactly, no line search involved). It has the correct topology — one
 primary vortex, both bottom corner eddies — and its vortex centre is within
 **0.010** of Ghia's, i.e. 1% of the cavity width, against the correct run's
