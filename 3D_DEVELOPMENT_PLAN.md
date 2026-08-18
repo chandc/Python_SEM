@@ -62,6 +62,41 @@ one. Two further gaps: the largest `a_mass` ever measured on any channel here is
 `pois_ac.py` sweep that nominally reaches `a_mass` = 60 only ever had its
 `dt` = 0.1 runs saved, so that range is unmeasured rather than clean.
 
+### 0.3 Measured 2026-08-18: the exemption does not survive, but AC rescues it
+
+The 2D proxy for the Stage 5 question, run before writing any 3D code
+(`scratch/chan_amass_sweep.py`). Same 12×2 N=10 grid, `Re` = 100, P+Z outlet,
+`w_mom` = `w_mass` = 1, nsub = 5, to t = 15 from rest. Only the inlet differs:
+**parabolic** = exact solution representable, residual ≈ 0; **uniform** = flow
+must develop, rms `div u` ≈ 8e−02, i.e. the BFS regime.
+
+| inlet | `a_mass` | `κ_p` | outcome | max\|u\| | wall |
+|---|---|---|---|---|---|
+| uniform | 60 | 0 (off) | **BLEWUP @ t = 0.83** (33 steps, max\|u\| 22.2) | 22.2 | 503 s |
+| uniform | 60 | 30 | ok to t = 15 | 2.28 | 58 s |
+| uniform | 120 | 60 | ok to t = 15 | 2.26 | 97 s |
+| uniform | 300 | 150 | **ok to t = 15** | 2.24 | 219 s |
+
+**Two results, and they point in opposite directions.**
+
+1. **The laminar exemption is confirmed to be about the residual, and it does not
+   transfer.** The same grid that is perfectly stable at `a_mass` = 30 with a
+   parabolic inlet blows up at `a_mass` = 60 within 33 steps once the inlet is
+   uniform and the residual becomes non-zero. §0.2's concern is real and now
+   measured, not inferred.
+
+2. **AC extends the window to at least `a_mass` = 300 on this flow** — further
+   than on the BFS, where `a_mass` = 120 failed at *every* `κ_p` tried
+   (`ARTIFICIAL_COMPRESSIBILITY.md` §4). 300 is inside the 150–1500 band that CFL
+   implies at `Re_τ` = 180. That is materially better news for the plan than §0.2
+   assumed.
+
+> **Scope, stated plainly.** "ok" here means *did not diverge by t = 15 from
+> rest*, not *converged to the right answer*: max\|u\| ≈ 2.24–2.28 against ≈ 1.5
+> for the developed profile, so these are still transient. This is a stability
+> result only. It also does not test the Stokes-like operator of §0.1 — convection
+> is still inside the functional here. Stage 5 remains a gate.
+
 Three ways out, none free, and the plan must pick one *with measurements* at
 Stage 5:
 
@@ -344,7 +379,8 @@ expensive. Once Stage 4 passes:
 
 | risk | likelihood | mitigation |
 |---|---|---|
-| **`a_mass`/CFL windows do not overlap** | **high** | Stage 5 is a gate before turbulence work; fallback is semi-implicit convection |
+| **`a_mass`/CFL windows do not overlap** | **medium** (was high) | §0.3 measures AC holding to `a_mass` = 300 on a non-zero-residual 2D channel, inside the 150–1500 band. Stage 5 still a gate — that test used the full NS operator, not the Stokes-like one |
+| AC-off at large `a_mass` is unusably slow even when stable | high | §0.3: 503 s for 33 steps at `a_mass` = 60. AC is not optional at these `a_mass`, it is the enabling technology |
 | 2D stability results assumed to transfer | high | §0.1; Stage 5 re-measures from scratch |
 | Python loop over modes | medium | §1.1; Stage 4 scaling test catches it |
 | `fft` used where `rfft` belongs | medium | Stage 0 asserts Hermitian symmetry; 2× cost otherwise |
