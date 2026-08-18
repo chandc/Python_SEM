@@ -45,12 +45,20 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
    in `a_mass` with a minimum near 6; the AC-on cost is monotone in `dt` and
    lower everywhere. (15 runs, `figs/cavity_ac_cg_iterations.png`)
 
-4. **The mechanism is a missing preconditioner diagonal.** Pressure appears only
+4. **On the Ghia Re = 1000 cavity it is accuracy-neutral, and the two velocity
+   components are what establish that.** RMS u improves with AC at every `dt`
+   (8–13%) but RMS v does **not** move consistently (±2%, both directions) — a
+   real improvement would move both. The `dt` effect is ~4× larger than the AC
+   effect, and 12 of 13 runs sit at slightly different convergence states, which
+   accounts for the u figure. All 13 lie at the 6×6 N=10 discretisation floor of
+   ~2% of the lid speed. (§5.1)
+
+5. **The mechanism is a missing preconditioner diagonal.** Pressure appears only
    in the momentum rows of the VVP system, so the pressure block of `LᵀL` scales
    as `a_flux²` and `compute_jacobi` has **no `a33` entry at all** without AC.
    AC supplies `a33 = κ_p·P`, which is exactly the block that was unscaled.
 
-5. **On pressure specifically — the field AC acts on — it is better on both
+6. **On pressure specifically — the field AC acts on — it is better on both
    axes at once.** At `a_mass` = 30, `κ_p` = `a_mass` reaches a *further*
    converged pressure than AC off (`max|Δp|` 1.88e−04 vs 2.54e−04) for **30×
    fewer CG iterations and 18× less wall time**. Not a speed/accuracy trade.
@@ -59,7 +67,7 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
    understates it. `κ_p` = `a_mass` is the optimum: 2·`a_mass` is cheaper but
    converges the pressure *less* well. (§5.2a)
 
-6. **The time-derivative term is load-bearing for correctness, not just
+7. **The time-derivative term is load-bearing for correctness, not just
    stability.** At the other end of the same sweep, `w_mass` = 0 (the pure
    steady form, `a_mass` = 0) is both the most expensive setting measured —
    **6747** CG iterations per solve, 5× the worst transient point — and it
@@ -68,7 +76,7 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
    immediately, so this is not a basin problem. Neither the functional nor
    `|dU|` detects it. (§5.3)
 
-7. **Scoping correction: the `a_mass` threshold does not transfer to the closed
+8. **Scoping correction: the `a_mass` threshold does not transfer to the closed
    cavity.** `GARTLING_VALIDATION.md` measured stable ≤ 6.05 / divergent ≥ 12.1
    on the BFS. The cavity at `a_mass` = 30 converges *without* AC
    (`|dU|` = 5.4e−10 after 518 steps). The threshold is a property of flows with
@@ -251,7 +259,7 @@ where the weighting actually bites. Benchmark: Ghia, Ghia & Shin (1982).
 | `dt` | `a_mass` | `κ_p` | steps | \|dU\| | RMS u | RMS v |
 |---|---|---|---|---|---|---|
 | 0.05 | 30 | 0 (off) | 518 (conv) | 5.37e−10 | 1.792e−02 | 2.040e−02 |
-| 0.05 | 30 | 15 | 513 (conv) | 6.55e−10 | **1.554e−02** | **2.025e−02** |
+| 0.05 | 30 | 15 | 513 (conv) | 6.55e−10 | 1.554e−02 | 2.025e−02 |
 | 0.05 | 30 | 30 | 512 (conv) | 7.75e−10 | 1.568e−02 | 2.079e−02 |
 | 0.1 | 15 | 0 (off) | 3000 | 1.24e−09 | 1.826e−02 | 2.123e−02 |
 | 0.1 | 15 | 7.5 | 3000 | 1.18e−09 | 1.602e−02 | 2.072e−02 |
@@ -259,17 +267,47 @@ where the weighting actually bites. Benchmark: Ghia, Ghia & Shin (1982).
 | 0.25 | 6 | 0 (off) | 3000 | 2.66e−09 | 1.924e−02 | 2.289e−02 |
 | 0.25 | 6 | 3 | 3000 | 2.60e−09 | 1.773e−02 | 2.261e−02 |
 | 0.25 | 6 | 6 | 3000 | 2.62e−09 | 1.719e−02 | 2.256e−02 |
-| 1.0 | 1.5 | 0 (off) | 3000 | 9.26e−09 | 2.154e−02 | — |
-| 1.0 | 1.5 | 0.75 | 3000 | 9.24e−09 | 2.096e−02 | — |
+| 1.0 | 1.5 | 0 (off) | 3000 | 9.26e−09 | 2.154e−02 | 2.535e−02 |
+| 1.0 | 1.5 | 0.75 | 3000 | 9.24e−09 | 2.096e−02 | 2.567e−02 |
 | 1.0 | 1.5 | 1.5 | 3000 | 7.86e−09 | 1.964e−02 | 2.548e−02 |
-| **steady** (`w_mass` = 0) | **0** | 0 (off) | 36 (stalled) | 6.94e−08 | **2.525e−01** | — |
-| **steady**, restarted on the converged field | **0** | 0 (off) | 11 (stalled) | 7.90e−08 | **1.280e−01** | — |
+| 2.0 | 0.75 | 0 (off) | 3000 | 1.40e−08 | 2.045e−02 | 2.143e−02 |
+| **steady** (`w_mass` = 0) | **0** | 0 (off) | 36 (stalled) | 6.94e−08 | **2.525e−01** | **2.147e−01** |
+| **steady**, restarted on the converged field | **0** | 0 (off) | 11 (stalled) | 7.90e−08 | **1.280e−01** | **1.111e−01** |
 
-All ten are at `|dU|` ≈ 1e−9, i.e. steady in all but name (the 3000-step rows hit
-the step cap rather than the 1e−9 test). Every profile overlays Ghia; the spread
-across the whole table is 1.55e−02 … 1.96e−02 in u, about 1% of the lid speed,
-which is the N = 10 / 6×6 discretisation error, not an AC effect. If anything AC
-is very slightly *better* at every `dt`, consistent with §3.
+Grouped by `dt` so the two components can be read against each other:
+
+| `dt` | `a_mass` | RMS u: off → `a/2` → `a` | RMS v: off → `a/2` → `a` |
+|---|---|---|---|
+| 0.05 | 30 | 1.792 → 1.554 → 1.568 (−13%, −12%) | 2.040 → 2.025 → 2.079 (−1%, **+2%**) |
+| 0.1 | 15 | 1.826 → 1.602 → 1.627 (−12%, −11%) | 2.123 → 2.072 → 2.137 (−2%, **+1%**) |
+| 0.25 | 6 | 1.924 → 1.773 → 1.719 (−8%, −11%) | 2.289 → 2.261 → 2.256 (−1%, −1%) |
+| 1.0 | 1.5 | 2.154 → 2.096 → 1.964 (−3%, −9%) | 2.535 → 2.567 → 2.548 (**+1%**, **+1%**) |
+
+*(all ×1e−02)*
+
+The 13 transient runs are all at `|dU|` ≈ 1e−9, i.e. steady in all but name (the
+3000-step rows hit the step cap rather than the 1e−9 test). Every profile
+overlays Ghia (`figs/cavity_ac_centrelines.png`); the whole table sits at
+1.55e−02 … 2.15e−02 in u and 2.02e−02 … 2.57e−02 in v — about 2% of the lid
+speed, which is the N = 10 / 6×6 discretisation floor, not an AC effect.
+
+**AC is accuracy-neutral here, and the two velocity components together are what
+show it.** RMS u improves with AC at every `dt` (8–13%), but **RMS v shows no
+consistent direction** — ±2%, better at some `dt`, worse at others. A genuine
+improvement would move both the same way. Two further checks put the u figure in
+its place:
+
+* **The `dt` effect is ~4× larger than the AC effect.** RMS u runs 1.55e−02 at
+  `dt` = 0.05 to 2.15e−02 at `dt` = 1.0 — a 39% spread from temporal error
+  alone, against ~10% from AC.
+* **12 of 13 runs hit the step cap rather than the convergence test**, at `|dU|`
+  from 1.2e−09 to 9.3e−09, so they sit at slightly different convergence states.
+  A ~10% difference in one component is about what that alone produces.
+
+So the defensible statement is the one in §7: AC does not improve the
+discretisation — it reaches the same answer faster. For contrast, an actual
+accuracy failure on this mesh looks like the two steady rows above: 2.5e−01 and
+1.3e−01, 14× and 7× worse, visibly off the benchmark.
 
 **Scoping correction.** The `a_mass` = 30 row converged with AC **off**. The
 6.05 / 12.1 threshold of `GARTLING_VALIDATION.md` therefore does **not** transfer
@@ -501,10 +539,12 @@ st.dtau_p = 2.0/a_mass          # kappa_p = a_mass/2
 * **It does not remove the `a_mass` limit**, it moves it. On the BFS the usable
   range went from `a_mass` ≤ 6.05 to `a_mass` ≤ 60 — one decade — and 120 fails
   at every `κ_p` tried.
-* **It does not improve the converged accuracy** in any way that matters. The
-  cavity RMS improves from 1.79e−02 to 1.55e−02, but that is a change in *how
-  well converged* the run is, not in the discretisation. The honest statement is
-  that AC is accuracy-*neutral* and gets you to the same answer faster.
+* **It does not improve the converged accuracy.** The cavity RMS u improves from
+  1.79e−02 to 1.55e−02, but RMS **v** over the same runs does not move
+  consistently at all (±2%, both directions), and a real improvement would move
+  both. What the u column reflects is *how well converged* the run is, not the
+  discretisation. The honest statement is that AC is accuracy-*neutral* and gets
+  you to the same answer faster. (§5.1)
 * **It does not help exactly-representable flows.** Poiseuille has R ≈ 0, so
   there is nothing for AC to fix; the 2.4e−07 → 1.7e−09 divergence improvement is
   the only visible effect and it is below any meaningful tolerance.
