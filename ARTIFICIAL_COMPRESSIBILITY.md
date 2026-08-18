@@ -11,7 +11,9 @@ Implementation: `lssem2d/lssem.py` (`ls_pseudo_p`, `_apply_L_numpy`,
 `compute_jacobi`).
 Drivers: `scratch/pois_ac.py` (channel), `scratch/gartling_run.py` (BFS),
 `scratch/cavity_ac.py` (cavity), `scratch/cavity_ac_plot.py`,
-`scratch/cavity_ac_cgplot.py`, `scratch/gartling_ac_streamlines.py`.
+`scratch/cavity_ac_cgiters.py` + `scratch/cavity_ac_cgplot.py` (CG cost),
+`scratch/cavity_ac_pconv.py` + `scratch/cavity_ac_pconv_plot.py` (pressure
+convergence), `scratch/gartling_ac_streamlines.py`.
 
 Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
 `FORTRAN_POISEUILLE_OUTFLOW.md` (the outflow-BC side of the same problem),
@@ -48,7 +50,16 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
    as `a_flux²` and `compute_jacobi` has **no `a33` entry at all** without AC.
    AC supplies `a33 = κ_p·P`, which is exactly the block that was unscaled.
 
-5. **The time-derivative term is load-bearing for correctness, not just
+5. **On pressure specifically — the field AC acts on — it is better on both
+   axes at once.** At `a_mass` = 30, `κ_p` = `a_mass` reaches a *further*
+   converged pressure than AC off (`max|Δp|` 1.88e−04 vs 2.54e−04) for **30×
+   fewer CG iterations and 18× less wall time**. Not a speed/accuracy trade.
+   A cost-model fit puts per-iteration cost at 0.480 ms with AC and 0.483 ms
+   without — identical — so AC is free per iteration and the wall figure
+   understates it. `κ_p` = `a_mass` is the optimum: 2·`a_mass` is cheaper but
+   converges the pressure *less* well. (§5.2a)
+
+6. **The time-derivative term is load-bearing for correctness, not just
    stability.** At the other end of the same sweep, `w_mass` = 0 (the pure
    steady form, `a_mass` = 0) is both the most expensive setting measured —
    **6747** CG iterations per solve, 5× the worst transient point — and it
@@ -57,7 +68,7 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
    immediately, so this is not a basin problem. Neither the functional nor
    `|dU|` detects it. (§5.3)
 
-6. **Scoping correction: the `a_mass` threshold does not transfer to the closed
+7. **Scoping correction: the `a_mass` threshold does not transfer to the closed
    cavity.** `GARTLING_VALIDATION.md` measured stable ≤ 6.05 / divergent ≥ 12.1
    on the BFS. The cavity at `a_mass` = 30 converges *without* AC
    (`|dU|` = 5.4e−10 after 518 steps). The threshold is a property of flows with
@@ -340,6 +351,76 @@ beats `a_mass/2` on iterations at every time step (50 vs 74, 97 vs 145, 228 vs
 BFS at `a_mass` = 60, `κ_p = a_mass` **diverges** and only `a_mass/2` survives.
 Choose for stability first; the iteration count at `a_mass/2` is still within
 50% of the best.
+
+### 5.2a Pressure convergence per unit cost
+
+AC acts *on* the continuity row, so pressure is the field it should move most.
+300 steps from rest, nsub = 5, `cg_tol` = 1e−8, AC-off plus `κ_p` at four
+fractions of `a_mass`, run **serially on an idle machine** so the wall column is
+comparable. `max|Δp|` is tracked separately from `max|Δu|`: the combined `|dU|`
+used elsewhere is dominated by vorticity, whose magnitude here is ~300× the
+pressure's, and hides the effect entirely.
+
+`figs/cavity_ac_pressure_convergence.png`, from `scratch/cavity_ac_pconv.py`
+(measure) and `scratch/cavity_ac_pconv_plot.py` (plot). Both axes are
+cost — CG iterations and wall seconds — not step number: **AC changes what a step
+costs far more than how many steps are needed**, so a per-step plot shows almost
+nothing.
+
+**`dt` = 0.25 (`a_mass` = 6).** All five reach the *same* fixed point
+(`|Δp|` = 2–5e−11) at step 150; only the cost differs.
+
+| `κ_p` | CG its (300 steps) | wall | CG to `\|Δp\|` < 1e−6 | wall to 1e−6 | speed-up |
+|---|---|---|---|---|---|
+| 0 (off) | 1 070 937 | 543 s | 355 627 | 180 s | — |
+| 1.5 = `a/4` | 740 343 | 389 s | 268 490 | 141 s | 1.3× |
+| 3 = `a/2` | 536 932 | 289 s | 189 289 | 101 s | 1.9× |
+| 6 = `a` | 368 711 | 207 s | 125 575 | 70 s | 2.8× |
+| 12 = `2a` | 358 179 | 201 s | 115 635 | 65 s | **3.1×** |
+
+**`dt` = 0.05 (`a_mass` = 30).** 300 steps is only t = 15 here, so these have not
+yet reached the fixed point — compare the rows against each other, *not* against
+the `dt` = 0.25 block.
+
+| `κ_p` | CG its | wall | `\|Δp\|` at step 300 | `\|Δu\|` at step 300 |
+|---|---|---|---|---|
+| 0 (off) | 2 345 907 | 1158 s | 2.54e−04 | 1.32e−03 |
+| 7.5 = `a/4` | 224 885 | 135 s | 2.43e−04 | 1.32e−03 |
+| 15 = `a/2` | 118 008 | 83 s | 2.10e−04 | 1.31e−03 |
+| **30 = `a`** | **78 669** | **63 s** | **1.88e−04** | 1.32e−03 |
+| 60 = `2a` | 67 117 | 56 s | 3.03e−04 | 1.29e−03 |
+
+**AC is better on both axes at once — this is not a speed/accuracy trade.** At
+`κ_p` = `a_mass` the pressure is *further* converged than AC off (1.88e−04 vs
+2.54e−04) for **30× fewer CG iterations** and **18× less wall time**.
+
+**Pressure convergence has an optimum near `κ_p` = `a_mass`.** Going on to
+2·`a_mass` is marginally cheaper (67k vs 79k iterations) but ends *worse* in
+`|Δp|` (3.03e−04 vs 1.88e−04). The plain iteration-count metric of §5.2 showed
+no such turn — more `κ_p` simply looked better there — so this is the sharper
+criterion of the two, and it agrees with the `κ_p` ≲ `a_mass` accuracy window
+of §3.
+
+**AC does not alter the trajectory, only its cost.** `max|Δu|` at step 300 is
+1.32, 1.32, 1.31, 1.32, 1.29 (×1e−03) across all five — indistinguishable — and
+at `dt` = 0.25 all five land on the same fixed point. Consistent with §3 and
+§5.1.
+
+**Why the wall speed-up (18×) is smaller than the CG speed-up (30×).** Fitting
+`wall/step = c·(its/step) + h` over all ten runs:
+
+| | `c` (per CG iteration) | `h` (fixed per step) | max fit residual |
+|---|---|---|---|
+| `dt` = 0.25 | 0.480 ms | 101.7 ms | 8.9 ms |
+| `dt` = 0.05 | 0.483 ms | 84.8 ms | 4.5 ms |
+
+`c` is the **same to three digits** at both `dt` and across every `κ_p`,
+including AC off. So **AC adds no measurable per-iteration cost** — the extra
+`a33` term and its transpose are free at this scale — and the wall speed-up is
+capped only by the fixed per-step overhead `h` (assembly, line search, BCs),
+which AC does not touch. That ceiling is `3.860/0.0848` ≈ **45×** at `dt` = 0.05.
+Two consequences: CG iteration count is the honest metric here, and wall time
+*understates* what AC does to the linear solve.
 
 ### 5.3 The steady form (`w_mass` = 0) does not have the physical solution as a fixed point
 
