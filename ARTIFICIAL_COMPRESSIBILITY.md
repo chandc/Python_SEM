@@ -616,18 +616,26 @@ worse than the correct solution, because the velocity magnitudes are inflated
 throughout. **Streamline plots and integral diagnostics are not sufficient
 validation for this solver; the profile comparison is.**
 
-**The functional cannot detect this either, which is the part worth
-remembering.**
-Comparing the from-rest steady field against the transient one on the same mesh:
+**What the functional does and does not detect.** All five fields, same mesh
+(`figs/cavity_steady_spurious_streamlines.png`):
 
-| | rms momentum | rms div u | rms vorticity |
-|---|---|---|---|
-| steady fixed point (no LS) | 2.044e−01 | 1.299e−01 | 6.650e−02 |
-| transient, `dt` = 0.05 | 2.025e−01 | 1.435e−01 | 6.756e−02 |
+| | rms momentum | rms div u | RMS u vs Ghia | J flags it? |
+|---|---|---|---|---|
+| from rest, LS on — *stalled* | 2.067e−01 | 1.259e−01 | 2.525e−01 | **no** |
+| from rest, no LS — *diverging* | **6.536e−01** | 1.208e−01 | 2.475e−01 | **yes, 3×** |
+| from correct, LS on — *stalled* | 2.043e−01 | 1.300e−01 | 1.342e−01 | **no** |
+| from correct, no LS — *spurious fixed point* | 2.044e−01 | 1.299e−01 | 1.516e−01 | **no** |
+| time-accurate `dt` = 0.05 — correct | 2.025e−01 | 1.435e−01 | 1.568e−02 | — |
 
-Indistinguishable — the steady field is even *better* on `div u`. The lid corner
-singularities dominate the domain integral at 6×6 N = 10, so J is not a usable
-correctness test on this problem, and neither is `|dU|`. Both runs reported
+The functional **does** catch the one run that is openly failing to converge —
+rms momentum 6.5e−01 against ~2.0e−01 for everything else, a clear 3× signal.
+It catches **neither line-search stall nor the spurious fixed point**: those sit
+at 2.043–2.067e−01 against the correct solution's 2.025e−01, a 1–2% difference,
+and all three are *better* than the correct solution on `div u`.
+
+So J is a usable divergence detector and **not** a usable correctness test here.
+The lid corner singularities dominate the domain integral at 6×6 N = 10 and swamp
+the 10× difference in actual error. Neither is `|dU|`: two of these four reported
 convergence in good faith. **Any steady-form result in this repo needs checking
 against a benchmark profile, not against its own residual.**
 
@@ -794,8 +802,14 @@ one:
 | steady fixed point (`w_mass` = 0, no line search) | 2.044e−01 | 1.299e−01 | 6.650e−02 | **1.52e−01** |
 | transient, `dt` = 0.05 | 2.025e−01 | 1.435e−01 | 6.756e−02 | **1.57e−02** |
 
-Indistinguishable in J — the *wrong* solution is even better on `∇·u` — while the
-actual error differs 14×. The lid corner singularities dominate the domain
-integral and swamp the signal. The error-estimator property is therefore
-conditional on the functional not being dominated by a singularity, which is a
-real caveat for adaptivity on a driven cavity.
+Indistinguishable in J — 1% apart, and the *wrong* solution is even better on
+`∇·u` — while the actual error differs 10×. The lid corner singularities dominate
+the domain integral and swamp the signal.
+
+The claim needs stating precisely, because J is not useless here: on the same
+mesh it *does* flag a run that is openly diverging (rms momentum 6.5e−01 against
+~2.0e−01, §5.3). What it cannot do is separate a converged-but-wrong solution
+from a converged-and-right one. So the error-estimator property survives as a
+**divergence detector** but fails as a **correctness test** whenever the
+functional is dominated by a singularity — a real caveat for adaptivity on a
+driven cavity.
