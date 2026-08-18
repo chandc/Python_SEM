@@ -352,9 +352,16 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
         # barely moves, and a caller watching |U - U_prev| sees a tiny change and
         # concludes "converged".  That is exactly how a stalled line search got
         # written up as a converged steady fixed point in
-        # ARTIFICIAL_COMPRESSIBILITY.md sec 5.3.  Record it so callers can tell
-        # the two apart; state._ls_exhausted is the flag to check before
-        # believing any small |dU| from a line-searched run.
+        # ARTIFICIAL_COMPRESSIBILITY.md sec 5.3.
+        #
+        # CAVEAT: exhaustion is NOT by itself a failure.  At a minimum of the
+        # merit no step can satisfy the Armijo test either -- J(U+a*dU) ~ J_ref
+        # while the target is strictly below it -- so a fully CONVERGED run
+        # exhausts the backtracking on every step too (measured: the converged
+        # transient cavity does exactly this, 36 times in 8 steps, while
+        # matching Ghia to 1.6e-02).  The flag says "the line search declined to
+        # move", which is right at a solution and wrong at a stall.  The
+        # RESIDUAL, not alpha, is what tells them apart.
         state._last_alpha = alpha
         state._ls_exhausted = not accepted
         if not accepted:

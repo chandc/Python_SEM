@@ -561,8 +561,18 @@ step **anyway**, with no failure signal:
 at sweep 26 and never recovers, so the state stops moving:
 `|dU|` = alpha·|step| ≈ 2.98e−08 × 2.3 = **6.9e−08, constant** — precisely the
 number originally quoted as a converged fixed point. `lssem2d/solver.py` now sets
-`state._ls_exhausted` when this happens; **check it before believing any small
-`|dU|` from a line-searched run.**
+`state._ls_exhausted` when this happens.
+
+> **But exhaustion alone is not a bug signal.** The *converged transient* run
+> exhausts it too — restarted on its own converged field, `dt` = 0.05 with AC on
+> gives alpha = 2.98e−08 and `_ls_exhausted` on every step, 36 times in 8 steps —
+> and that run matches Ghia to 1.57e−02. The reason is benign: at a minimum of
+> the merit no step can satisfy `J(U+αdU) ≤ (1−1e−4·α)·J_ref`, because
+> `J(U+αdU) ≈ J_ref` while the target is strictly below it. The line search
+> correctly refuses to move. So `_ls_exhausted` fires at genuine convergence and
+> at a genuine stall alike, and **the residual, not alpha, is what separates
+> them.** An earlier version of this section treated the flag as a stall
+> detector; it is not one on its own.
 
 Re-run with the line search off (`scratch/cavity_steady_ls.py`):
 
@@ -581,6 +591,28 @@ operator — and that fixed point has RMS u = 1.516e−01, **ten times** the
 transient solution's 1.568e−02. So the physical solution genuinely is **not** a
 fixed point of the steady form on this mesh, and it is not a basin problem
 either: the iteration walks off the correct answer and lands elsewhere.
+
+**Why it walks off, and it is not pathology.** The steady and transient forms are
+*different least-squares problems* whenever the residual cannot be driven to
+zero — which is the case here: rms momentum ≈ 2.0e−01, set by the lid corner
+singularities at 6×6 N = 10. The mass terms cancel at steady state
+(`fac1 = Σ α_m`), so both forms see the *same residual vector* `r`, but the
+operator `L` differs, and `Lᵀ_transient·r = 0` does **not** imply
+`Lᵀ_steady·r = 0` when `r ≠ 0`. Different weightings therefore minimise different
+things and land on different minimisers.
+
+This is the same mechanism as `GARTLING_VALIDATION.md` §8, where Poiseuille is
+exactly representable (`J` = 5.94e−27) so the weighting is irrelevant, while a
+flow with a real residual lets the weights decide which row is sacrificed.
+`w_mass` = 0 is simply the most extreme weighting available — the momentum row
+loses its time-derivative term outright — and it buys the worst compromise of
+any setting measured in this document.
+
+So the defensible statement is narrower than "the steady form has spurious fixed
+points": **on a flow whose residual cannot be driven to zero, the steady and
+transient forms converge to different answers, and here the transient one is the
+one that matches Ghia.** The steady form is not failing to solve its own problem;
+it is solving a different one.
 
 **What must be withdrawn.** The from-rest case is *not* a converged spurious
 state. With the line search it stalls; without it the iteration ran the full
@@ -734,10 +766,10 @@ st.dtau_p = 2.0/a_mass          # kappa_p = a_mass/2
   lets the steady form reach the physical solution. §5.3 shows only that plain
   undamped Newton from a good guess lands on a spurious fixed point, and that
   the current line search stalls rather than converging.
-* Whether `_ls_exhausted` should *raise* rather than record. Taking the step
-  after 25 failed halvings is the pre-existing behaviour and other studies in
-  this repo were run under it, so it is flagged rather than changed — but every
-  line-searched result in this repo is now suspect until its alpha is checked.
+* A stall test that actually works. `_ls_exhausted` alone does not distinguish a
+  stall from convergence — a converged run exhausts the backtracking too (§5.3) —
+  so the useful test is exhaustion **together with** a residual still well above
+  the achievable floor. Nothing in the repo currently computes that pairing.
 
 ---
 
