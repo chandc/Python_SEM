@@ -67,6 +67,7 @@ worth re-deriving rather than inheriting:
 | "iterations should fall with `k_z`; flat means a bad preconditioner" | Flat is *correct* at production `a_mass`: `ν·k_z²` = 1.42 against `a_mass` = 1200. Competing would need `k_z` ≈ 465; the largest available is 64 (§6) |
 | "M5 feasibility closed in the affirmative" | Closed on **2D** evidence, for a plan whose own risk register rates that transfer as *high* risk. Re-measured in 3D, it does pass — but it did not before (§7) |
 | "AC is the enabling technology" | True for the 2D **outflow** case; in the 3D periodic channel AC-off is stable at `a_mass` = 600–6000. AC buys affordability, not stability (§7.5) |
+| "`κ_p` = `a_mass`" (inherited from the 2D steady studies) | Carries a **12.5% error in the Stokes decay rate**, at every `dt`. AC is exact only at a steady state; the choice does not transfer to unsteady runs. κ_p ≈ 1 is 5× more accurate for 1.36× the cost (§7B) |
 
 ### L4. Measure the mechanism, not just the symptom
 
@@ -710,7 +711,114 @@ setup" rather than a proven asymptotic rate. A start from a developed field woul
 settle it. The comparison *between* `nsub` = 1 and 3 is unaffected — both share
 the same initial condition.
 
-### 7A.4 What is still open
+### 7A.4 Superseded by §7B
+
+The order measured above (~0.92) is real but describes convergence to the
+*scheme's own limit*. §7B shows that limit is wrong by 12.5%, which is the
+finding that actually matters. Self-convergence could not have revealed it —
+see L5.
+
+---
+
+## 7B. Stokes decay: AC biases a physical decay rate by 12.5%, at every `dt`
+
+`scratch/stokes3d.py`. The decisive test, and it needed a case with an **exact
+unsteady solution** rather than self-convergence.
+
+**Why this case.** Chan (1996) Fig. 1 — Stokes decay in a periodic channel — is
+already reproduced by the 2D solver (`figs/chan_fig1_pref.png`, σ = 9.313955
+measured against 9.313740 analytic, slope 1.94–1.99). It gives an analytic decay
+rate, so the error is **absolute**; it is unsteady with a decaying pressure,
+which is exactly where AC is suspect; and dropping convection makes it **exactly
+linear**, so the reference rate is exact rather than amplitude-limited. In 3D the
+same eigenproblem applies with `a` → `k` = √(α²+`k_z`²), giving
+σ = ν(`k`²+β²) — verified: the `k_z` = 0 mode and a spanwise `k_z` = 1 mode both
+return σ = 9.3137399, as symmetry demands.
+
+### 7B.1 The error does not converge — it is zeroth order
+
+`t` = 0.05, N = 8, 2×4 elements, Nz = 8, σ_exact = 9.3137399:
+
+| `dt` | 0.005 | 0.0025 | 0.00125 | 0.000625 | order |
+|---|---|---|---|---|---|
+| AC, `nsub`=1 | 1.252e−01 | 1.252e−01 | 1.253e−01 | 1.254e−01 | **0.00** |
+| AC, `nsub`=3 | 1.108e−01 | 1.084e−01 | 1.073e−01 | 1.067e−01 | 0.01–0.03 |
+| AC, `nsub`=10 | 1.270e−01 | 1.239e−01 | 1.209e−01 | — | ~0 |
+
+**A flat 12.5% error in the decay rate, independent of `dt`.** Refining the time
+step does not help at all, and **`nsub` = 10 is no better than `nsub` = 1**.
+
+This supersedes §7A.3's "first order". That measurement was correct about the
+*rate* — the scheme does approach its own limit at ~O(`dt`) — but the limit is
+wrong by 12.5%. Self-convergence is structurally incapable of seeing this (L5);
+only a case with a known answer can.
+
+### 7B.2 Why `nsub` cannot rescue it
+
+With κ_p large, the continuity row
+
+```
+κ_p·(p − p_prev) + div u = 0
+```
+
+is satisfiable by a *tiny* pressure change, `p − p_prev = −div u/κ_p`, for
+**any** `div u`. Incompressibility is therefore not effectively enforced, and the
+sub-iteration that would restore it converges at a rate that degrades as κ_p
+grows. At κ_p = `a_mass` = 1200 that rate is hopeless — hence nsub = 10 buying
+nothing.
+
+### 7B.3 κ_p is the knob, and the current value is ~1000× too large
+
+Sweeping κ_p at fixed `dt` = 0.005 (`a_mass` = 1200), `nsub` = 1:
+
+| κ_p | κ_p/`a_mass` | rel err in σ | CG iters |
+|---|---|---|---|
+| 1200 | 1.0 **(current)** | **1.252e−01** | 10686 |
+| 300 | 0.25 | 1.183e−01 | 11003 |
+| 75 | 0.0625 | 1.235e−01 | 11407 |
+| 18.8 | 0.0156 | 1.070e−01 | 11985 |
+| 4.7 | 0.0039 | 7.807e−02 | 14868 |
+| **1.2** | **0.001** | **2.546e−02** | 14521 |
+| 0 | 0 | *unconverged, discarded* | 1.8e6 (capped) |
+
+**Reducing κ_p by 1000× cuts the error 5× for 1.36× the CG cost.** The
+conditioning benefit that justified κ_p = `a_mass` — 63× in the 2D *steady*
+studies — is largely absent here, while the accuracy cost is severe. The choice
+was inherited from steady-state work, where AC is exact (`p` = `p_prev`), and it
+does not transfer to an unsteady run.
+
+### 7B.4 Two numbers retracted, and the honest limits
+
+**The AC-off "control" is discarded.** Two AC-off runs at identical settings
+returned σ = 9.384 and σ = 14.279 — both with the CG iteration cap saturated
+(1.2e6 and 1.8e6). They are unconverged, mutually inconsistent, and neither may
+be used. An earlier claim in conversation that "AC-off gives 0.76% error, so the
+12.5% is AC's fault" **rested on one of these and is withdrawn.**
+
+The conclusions that stand do not depend on it: the flat 12.5% at κ_p = `a_mass`
+comes from well-converged solves (10686 CG over 10 steps), and the κ_p trend is
+internally consistent across six values.
+
+What the discarded endpoint *does* establish: at κ_p = 0 the linear system is not
+solvable in any practical iteration count. **That is why AC exists**, and it is
+the real constraint — the question is not whether to use AC but how small κ_p can
+be made while remaining solvable. On this case that is somewhere near κ_p ≈ 1,
+three orders below the current setting.
+
+### 7B.5 What this changes
+
+* **`κ_p` = `a_mass` should not be used for unsteady 3D runs.** It is an
+  inherited steady-state choice carrying a 12.5% error in a physical rate.
+* **M7 statistics would be corrupted** at the current setting, and no amount of
+  `dt` refinement or sub-iteration would reveal it — the error is `dt`-independent
+  and the scheme self-converges cleanly.
+* **The `κ_p` operating point must be chosen by measurement**, on this Stokes
+  case, before M7. The trade is accuracy against solvability, not accuracy
+  against speed.
+* Stage 5's stability verdict is untouched — that was a stability result, and
+  this is an accuracy one.
+
+### 7A.4b What is still open
 
 * **How many sub-iterations restore second order?** `nsub` = 3 does not.
   Finding the number that does — and its cost — is the decision that determines
