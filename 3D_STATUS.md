@@ -507,18 +507,105 @@ finest grid tested. Turbulence will tighten `dt_CFL` further (larger velocity
 gradients), so this margin should be re-checked at the M7 resolution rather than
 extrapolated — but there is no sign of a collision.
 
-### 7.5 AC is not optional — it is the enabling technology
+### 7.5 AC buys affordability here, not stability — a correction
 
-AC-off runs at the same settings are **~11× slower per step** (≈1 min/step
-against 5.3 s/step with AC), for the same 200-step budget. That reproduces in 3D
-what plan §0.3 measured in 2D, and confirms the risk register's wording: AC is
-not a convenience, it is what makes these `a_mass` values reachable at all.
+AC-off at the same settings costs **~10× more per step** (≈1 min against 5.3 s).
+But the completed AC-off sweep does **not** support the stronger claim:
 
-*Status: the AC-off sweep was still running at the time of writing (stable
-through step 50 at every `dt`); the cost ratio above is measured, the AC-off
-stability ceiling is not yet established. **This is the one part of Stage 5 that
-remains open** — it affects whether AC is required or merely much faster, not
-whether the gate passes.*
+| `dt` | `a_mass` | CFL | AC-off outcome |
+|---|---|---|---|
+| 0.05 | 120 | 1.303 | **DIVERGED at step 184** |
+| 0.01 | 600 | 0.261 | OK, 200 steps |
+| 0.0025 | 2400 | 0.065 | OK, 200 steps |
+| 0.001 | 6000 | 0.026 | OK, 200 steps |
+| 0.001 (laminar) | 6000 | 0.021 | OK, 200 steps |
+
+**AC-off is stable across the whole `a_mass` range**, and the single failure is at
+the *largest* step, where CFL = 1.303 sits near the RKW3 limit of √3 — i.e. it
+points at CFL, not at `a_mass`.
+
+So in this 3D periodic channel **AC is required for affordability, not for
+stability.** The "AC is the enabling technology" framing came from the 2D
+*outflow* case (plan §0.3), where AC-off genuinely blew up, and it should not be
+carried over to the periodic channel unqualified. This does not change the Stage
+5 verdict, which passes either way; it changes *why* AC is in the scheme.
+
+---
+
+## 7A. AC in unsteady flow: it does inject error, and sub-iteration only partly repairs it
+
+Raised in review, and correct: **AC is a steady-state device unless it is
+sub-iterated.** The continuity row solves
+
+```
+κ_p·p + div u = κ_p·p_prev     ⇒     div u = −κ_p·(p − p_prev)
+```
+
+With `nsub` = 1 and `p_prev` from the previous time level, `Δp ~ (dp/dt)·dt`
+while `κ_p ~ 1/dt`, so the product is **O(1) in `dt`** — it does not vanish under
+time refinement. At a steady state `p = p_prev` and it is exact, which is why
+the M2 cavity gate could never see this. The 3D driver had **no sub-iterations at
+all**, and that configuration had never been tested in this project, 2D or 3D.
+
+### 7A.1 The error is real — measured two independent ways
+
+`scratch/ac_unsteady_divergence.py`, `scratch/ac_subiter.py`. Same physical time,
+same grid, `dt` = 0.008:
+
+| config | rms\|div u\| | vs AC-off floor | CG iters |
+|---|---|---|---|
+| AC off | 6.1163e−03 | 1.00 (floor) | — |
+| **AC on, `nsub` = 1** (the driver today) | 1.4599e−02 | **2.39×** | 3458 |
+| **AC on, `nsub` = 3** | 1.0722e−02 | **1.75×** | 6566 |
+
+AC-off is the **floor, not zero**: continuity is a weighted row of a least-squares
+functional, never a hard constraint, so a finite `div u` is carried regardless.
+The target is a ratio near 1.0.
+
+The **`κ_p` scaling contrast** confirms the mechanism rather than merely the
+symptom — same runs, `dt` refined:
+
+| | `dt` = 0.008 | 0.004 | 0.002 | 0.001 |
+|---|---|---|---|---|
+| `κ_p` ∝ 1/`dt` (production) | 1.4599e−02 | 1.4737e−02 | 1.4817e−02 | 1.4860e−02 |
+| `κ_p` **fixed** | 1.4599e−02 | 1.1639e−02 | 1.0277e−02 | — |
+
+Flat when `κ_p` ∝ 1/`dt`, falling when `κ_p` is fixed — precisely the O(1)-vs-O(`dt`)
+split the algebra predicts. Flatness alone would have been ambiguous (a spatial
+residual is also `dt`-independent); this pair is not.
+
+### 7A.2 Sub-iteration works, and is not free
+
+`nsub` = 3 closes ~27% of the gap to the floor for **1.9×** the CG iterations.
+It is a *partial* repair — 1.75× the floor is still visibly above it, so three
+sub-iterations buy some of the accuracy, not all. The practical consequence for
+M7: **AC's per-step cheapness erodes roughly linearly as one sub-iterates toward
+accuracy**, and the AC-vs-AC-off cost comparison must be made at equal accuracy,
+which no measurement in this project has yet done.
+
+Implementation (`scratch/channel3d.py`, `stage(..., nsub=)`): only the continuity
+row is refreshed between sub-iterations. The momentum rows encode the physical
+time derivative and the explicit terms at the *start* of the stage; rebuilding
+them would move the time level being solved for.
+
+### 7A.3 Temporal order on the 3D stepper — still open, and why
+
+Stage 4's temporal gate was restated onto a *scalar* model problem to separate
+the coefficient table from CN. That problem has no pressure and no continuity
+row, so **it is blind to AC**, and no temporal-order measurement of the real 3D
+stepper with AC on exists.
+
+An attempt (`scratch/ac_temporal_order.py`, Richardson self-convergence) returned
+**negative orders** — successive refinements moving apart. That result is
+**discarded as confounded, not reported as a property of the scheme**: the initial
+condition sets `p` = 0, which is inconsistent with the velocity field, so the
+pressure relaxes over a fixed number of *steps*. Confirmed directly — at fixed
+physical time `t` = 0.08, `max|p|` = 2.94e−03 → 3.93e−03 → 4.69e−03 as `dt` is
+refined, i.e. still climbing rather than converged.
+
+To do it properly the run must start from a **pressure-consistent** state
+(sub-iterate the initial condition to convergence, or start from a developed
+field). Outstanding.
 
 ---
 
@@ -528,7 +615,20 @@ In priority order. The ordering is driven by one fact: **Stage 5 is a go/no-go
 gate that has not actually been run in 3D**, and everything expensive downstream
 depends on its answer.
 
-### 8.1 Stage 5 for real, in 3D — the decision gate ⚑
+### 8.0 AC accuracy — the open item ⚑
+
+§7A shows AC injects a real divergence error unsteady, and that `nsub` = 3 only
+partly repairs it. Two things remain:
+* a **pressure-consistent** temporal-order run on the 3D stepper (§7A.3), which
+  is the only way to know whether the O(1) divergence error also costs time
+  accuracy in the velocity;
+* an **equal-accuracy** cost comparison of AC+sub-iterations against AC-off. The
+  ~10× per-step advantage of AC (§7.5) was measured at `nsub` = 1, i.e. at the
+  *lower* accuracy; the honest comparison has not been made.
+
+Both bear directly on M7 statistics.
+
+### 8.1 Stage 5 for real, in 3D — the decision gate ⚑ *(DONE — §7)*
 
 The plan is explicit that if the `a_mass`-stability and CFL windows do not
 overlap, *the formulation is infeasible as specified* and the fallback is

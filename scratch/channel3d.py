@@ -115,13 +115,34 @@ def _set_vorticity(s, Uc):
 
 
 def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
-          Minv=None):
+          Minv=None, nsub=1, sub_tol=1e-10):
     """One RKW3/CN stage with AC and the body force.
 
     The body force is a constant, so it rides in the EXPLICIT term: per stage the
     weights are gamma_k + zeta_k, which sum to 1 over the three stages, giving
     exactly dt*f per step.  Putting it in the implicit term instead would weight
     it by alpha+beta and quietly rescale the driving.
+
+    SUB-ITERATIONS (nsub > 1) -- dual time stepping, which is what makes AC
+    legitimate for an UNSTEADY problem.  The continuity row solves
+
+        kappa_p*p + div u = kappa_p*p_prev   =>   div u = -kappa_p*(p - p_prev)
+
+    so with nsub = 1 and p_prev taken from the previous time level, div u is
+    driven not to zero but to -kappa_p*dp/dt*O(dt), and since kappa_p ~ 1/dt
+    that error is O(1) in dt -- it does NOT vanish under time refinement.  At a
+    steady state p = p_prev and it is exact, which is why the M2 cavity gate
+    could never see this.
+
+    Sub-iterating fixes it at its root: p_prev is refreshed from the previous
+    SUB-ITERATE, and on convergence p = p_prev makes the AC term vanish
+    identically, recovering div u = 0 at the current time level.
+
+    Only the continuity row is refreshed.  The momentum rows encode the physical
+    time derivative and the explicit terms at the START of the stage, so they
+    are built once, outside the loop -- updating them would move the time level
+    the stage is solving for.  Convection is explicit, so the system is linear
+    and each sub-iteration is one solve, warm-started from the last.
     """
     m, D, kz, mask, nu, nz = s['m'], s['D'], s['kz'], s['mask'], s['nu'], s['nz']
     c = T.implicit_coeff(dt, k)
@@ -131,24 +152,36 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
     R0 = OP.apply_L0_complex(Uc, D, m.facx, m.facy, kz, nu, 0.0, kap)
     Lk = -R0[..., 4:7, :]
 
+    # momentum rows: fixed for the whole stage
     fc = np.zeros(Uc.shape[:-2] + (OP.NROW, Uc.shape[-1]), dtype=complex)
     for row, fld in ((4, OP.U_), (5, OP.V_), (6, OP.W_)):
         i = row - 4
         fc[..., row, :] = c*(Uc[..., fld, :] + dt*(
             T.GAMMA[k]*Nk[..., i, :] + T.ZETA[k]*Nprev[..., i, :]
             + T.ALPHA[k]*Lk[..., i, :]))
-    fc[..., 0, :] = kap*Uc[..., OP.P_, :]
-    f = np.concatenate([fc.real, fc.imag], axis=-2)
 
     wqR = m.wq[..., None, None]
-    r = OP.apply_LT(
-        OP.apply_L(U, D, m.facx, m.facy, kz, nu, c, m.wq, kap) - f*wqR,
-        D, m.facx, m.facy, kz, nu, c, kap)
-    b = -S3.gs(m, r)*mask
-    dU, it, _ = PAR.pcg(b, D, m.facx, m.facy, kz, nu, c, mesh=m, mask=mask,
-                        M_inv=None if Minv is None else Minv[k], tol=tol,
-                        max_iter=max_iter, wq=m.wq, kap=kap, workers=workers)
-    return U + dU, Nk, it
+    p_prev = Uc[..., OP.P_, :]          # sub-iterate 0: previous time level
+    Uit, its, nit = U, 0, 0
+    for _ in range(max(1, nsub)):
+        fc[..., 0, :] = kap*p_prev
+        f = np.concatenate([fc.real, fc.imag], axis=-2)
+        r = OP.apply_LT(
+            OP.apply_L(Uit, D, m.facx, m.facy, kz, nu, c, m.wq, kap) - f*wqR,
+            D, m.facx, m.facy, kz, nu, c, kap)
+        b = -S3.gs(m, r)*mask
+        dU, it, _ = PAR.pcg(b, D, m.facx, m.facy, kz, nu, c, mesh=m, mask=mask,
+                            M_inv=None if Minv is None else Minv[k], tol=tol,
+                            max_iter=max_iter, wq=m.wq, kap=kap, workers=workers)
+        Uit = Uit + dU
+        its += it
+        nit += 1
+        p_new = OP.to_complex(Uit)[..., OP.P_, :]
+        dp = np.abs(p_new - p_prev).max()/max(np.abs(p_new).max(), 1e-30)
+        p_prev = p_new
+        if kap == 0.0 or dp < sub_tol:   # AC off => nothing to sub-iterate
+            break
+    return Uit, Nk, its
 
 
 def make_precond(s, dt, kap):
@@ -168,6 +201,17 @@ def step(s, U, Nprev, dt, kap, **kw):
         U, Nprev, it = stage(s, U, Nprev, k, dt, kap, **kw)
         its = max(its, it)
     return U, Nprev, its
+
+
+def divergence(s, U):
+    """rms |div u| = |u_x + v_y + i k w|.  The quantity AC is suspected of
+    corrupting when it is used without sub-iterations."""
+    m, D, kz = s['m'], s['D'], s['kz']
+    Uc = OP.to_complex(U)
+    d = (DV.ddx(Uc[..., OP.U_, :], D, m.facx)
+         + DV.ddy(Uc[..., OP.V_, :], D, m.facy)
+         + 1j*kz*Uc[..., OP.W_, :])
+    return float(np.sqrt(np.mean(np.abs(d)**2)))
 
 
 # ------------------------------------------------------------- diagnostics
