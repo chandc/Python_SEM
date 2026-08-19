@@ -2,6 +2,7 @@ import numpy as np
 from .lssem import apply_L, apply_LT, ls_pseudo, ls_pseudo_p
 from .assembly import gather_scatter
 from .bc import apply_mask, apply_bc
+from . import obc
 
 def apply_A(state, dU, fu, fv, pin_p=False):
     """
@@ -18,7 +19,14 @@ def apply_A(state, dU, fu, fv, pin_p=False):
     
     # 3. Transpose VVP operator L^T
     c = apply_LT(state, su, fu, fv)
-    
+
+    # 3.5. Dong OBC boundary rows (bc == 6): A gains B^T B on the outflow
+    # edges.  apply_B is linear in dU (the lagged E term lives in the RHS),
+    # so the same routine serves the increment here and the state in
+    # newton_step.  No-op when the mesh has no bc == 6 edge.
+    if obc.obc_active(state):
+        obc.apply_BT(state, obc.apply_B(state, dU_m), c)
+
     # 4. Direct stiffness summation Q^T Q
     c_gs = gather_scatter(state.mesh, c)
     
@@ -108,13 +116,20 @@ def compute_jacobi(state, fu, fv, pin_p=False):
     diag_A[..., 2] = np.sum((a13**2 + a23**2 + a33**2) * w, axis=(3, 4))
     diag_A[..., 3] = np.sum((a14**2 + a24**2 + a44**2) * w, axis=(3, 4))
                 
+    # Dong OBC (bc == 6): the boundary rows' diagonal, kept in step with
+    # apply_A's B^T B term -- same contract as the pseudo-time coefficients
+    # above: scale the operator without scaling this diagonal and the
+    # preconditioner degrades exactly on the flows the condition targets.
+    if obc.obc_active(state):
+        obc.jacobi_add(state, diag_A)
+
     diag_A = gather_scatter(state.mesh, diag_A)
     mask_field = state.get_global_mask(pin_p=pin_p)
-    
+
     M_inv = np.zeros_like(diag_A)
     valid = mask_field > 0.5
     M_inv[valid] = 1.0 / diag_A[valid]
-    
+
     return M_inv
 
 def pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=False, max_iter=5000, tol=1e-6, cgsfac=0.0, precond=None):
@@ -242,7 +257,13 @@ def _ls_merit(state, U, su_history, f_known=None):
     wq = state.mesh.wq[..., None]
     if f_known is not None:
         r = r - f_known * wq
-    return float(np.sum(r * r / wq))
+    J = float(np.sum(r * r / wq))
+    # Dong OBC: the boundary term w_obc^2 int_edge R^2 ds is part of the
+    # functional the line search protects; leaving it out would let a step
+    # that grows the boundary residual pass as a descent step.
+    if obc.obc_active(state):
+        J += obc.merit_B(state, obc.residual_B(state, U))
+    return J
 
 
 def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, cg_tol=1e-6, line_search=False, max_backtrack=25, ls_memory=10):
@@ -286,6 +307,11 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
     
     # 2. Form RHS: b = - Q^T Q L^T (R)
     c = apply_LT(state, su_nl, fu, fv)
+    # Dong OBC: add B^T (B U - bhist), the boundary rows' share of the
+    # gradient.  bhist (built once per time step by step_bdf) carries the BDF
+    # history of the nu*D0*du/dt term and the lagged backflow term E(n, u*).
+    if obc.obc_active(state):
+        obc.apply_BT(state, obc.residual_B(state, U), c)
     c_gs = gather_scatter(state.mesh, c)
     b = -c_gs * mask_global
     
@@ -402,6 +428,12 @@ def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_f
     for m in range(len(alpha)):
         su_history[..., 0] += hist_scale * alpha[m] * U_history[m][..., 0] * state.mesh.wq
         su_history[..., 1] += hist_scale * alpha[m] * U_history[m][..., 1] * state.mesh.wq
+
+    # Dong OBC: per-step RHS of the boundary rows (BDF history + lagged E).
+    # Rebuilt every step like su_history; fac1/alpha are already set for the
+    # BDF order this step actually takes.
+    if obc.obc_active(state):
+        obc.build_bhist(state, U_history, alpha)
         
     # Compute and cache multiplicity weights for the PCG solver inner product
     if not hasattr(state, 'multiplicity_weight'):

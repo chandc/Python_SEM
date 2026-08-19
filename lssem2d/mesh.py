@@ -21,7 +21,9 @@ class Mesh:
         # W, E, S, N neighbour element (-1 = boundary)
         self.neighbour = -np.ones((nelem, 4), dtype=int)
         
-        # Edge BC codes (0=interior, 1=no-slip, 2=lid, 3=inlet profile, 4=outlet, 5=symmetry, 6=free)
+        # Edge BC codes (0=interior/free, 1=no-slip, 2=lid, 3=inlet profile,
+        # 4=outlet p=0, 5=symmetry, 6=Dong OBC -- see lssem2d/obc.py and
+        # DONG_OBC_RESULTS.md; East edges only)
         self.bc = np.zeros((nelem, 4), dtype=int)
         
         # Derived
