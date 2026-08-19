@@ -32,6 +32,77 @@ did not before.
 
 ---
 
+## Lessons so far — the transferable part
+
+Details live in the numbered sections; this is what generalises beyond this
+project.
+
+### L1. Tests that compare the operator to itself cannot find a wrong operator
+
+Four missing factors of `A = M Qᵀ Q L₀ᵀ W L₀ M` (§2.1) survived a full suite of
+symmetry, adjointness and convergence tests, because **`L₀ᵀL₀` is symmetric
+whether or not `W` is there**, and CG converges happily on a mis-weighted inner
+product. Only two kinds of test caught them: comparison against an *independent
+implementation* (Stage 1, vs `lssem2d`) and against a *hand-derived analytic
+forcing* (Stage 2). Every project should own at least one of each.
+
+### L2. Nine bugs, zero exceptions
+
+Not one of the nine (§2, §5) raised an error — each produced a correctly-shaped,
+plausible array. Three returned a *sensible number for field 0* and were found
+only when an index finally went out of range. The mitigations that actually work
+are cheap: **assert the layout on entry** to anything taking the 5-D state, and
+**write the negative control** (a test that must fail when the thing under test
+is disabled).
+
+### L3. Four gates and diagnostics were wrong *as written* — and each would have
+### condemned correct code
+
+This is the most surprising pattern in the project, and the reason gates are
+worth re-deriving rather than inheriting:
+
+| stated criterion | what measurement showed |
+|---|---|
+| "RKW3 temporal slope 3.0 ± 0.15" | Unachievable. Explicit-only **3.025**, CN-only **2.002**, mixed **2.189** — the table is right and CN is the limiter. No correct implementation could pass (§4.2) |
+| "iterations should fall with `k_z`; flat means a bad preconditioner" | Flat is *correct* at production `a_mass`: `ν·k_z²` = 1.42 against `a_mass` = 1200. Competing would need `k_z` ≈ 465; the largest available is 64 (§6) |
+| "M5 feasibility closed in the affirmative" | Closed on **2D** evidence, for a plan whose own risk register rates that transfer as *high* risk. Re-measured in 3D, it does pass — but it did not before (§7) |
+| "AC is the enabling technology" | True for the 2D **outflow** case; in the 3D periodic channel AC-off is stable at `a_mass` = 600–6000. AC buys affordability, not stability (§7.5) |
+
+### L4. Measure the mechanism, not just the symptom
+
+A symptom is usually consistent with several stories. Three times the ambiguity
+was resolved by finding a knob that separates them:
+
+- **flat `div u` under `dt` refinement** could be an AC error *or* an ordinary
+  spatial residual (also `dt`-independent). Fixing `κ_p` instead of scaling it as
+  1/`dt` made it fall — O(1) vs O(`dt`), diagnosis settled (§7A.1).
+- **threads plateauing at 6.7×** could be the GIL *or* memory bandwidth.
+  Processes are immune to the GIL and tied threads exactly ⇒ bandwidth (§3.3).
+- **flat `k_z` iteration profile** could be a bad preconditioner *or* `a_mass`
+  swamping the `k_z²` term. Sweeping `a_mass` made the trend appear (§6).
+
+### L5. Know your floor before calling something an error
+
+`div u` is never zero in a least-squares formulation — continuity is a weighted
+row, not a constraint. The meaningful quantity was **2.39× the AC-off floor**,
+not the raw 1.46e−02. Likewise the M2 gate's target was the *2D curve*, not
+Ghia's numbers, because 2D and 3D share a discretisation error that Ghia does not.
+
+### L6. Discard confounded results out loud — and re-check the diagnosis too
+
+The Richardson temporal-order run returned negative orders, and was discarded
+rather than reported. But the *first* explanation offered for it — an
+inconsistent `p` = 0 initial condition — was **also wrong**. The real cause was
+holding `κ_p` fixed while refining `dt`, which makes the pressure evolve at a rate
+∝ 1/`dt` (§7A.3). A wrong diagnosis of a discarded result is still a wrong
+diagnosis, and it survived a step longer than the result did.
+
+Earlier casualties of the same kind: "AC reverses the sign of the `dt`
+dependence" (a two-point sample of a U-shaped curve) and "the exemption is about
+the residual" (refuted by a parabolic control failing at the identical step).
+
+---
+
 ## 1. The M2 gate: 3D at `k_z` = 0 reproduces the 2D solution
 
 The gate is *not* "does it match Ghia". It is **"does the 3D code at `k_z` = 0
@@ -588,24 +659,68 @@ row is refreshed between sub-iterations. The momentum rows encode the physical
 time derivative and the explicit terms at the *start* of the stage; rebuilding
 them would move the time level being solved for.
 
-### 7A.3 Temporal order on the 3D stepper — still open, and why
+### 7A.3 Temporal order on the 3D stepper: AC costs an order — measured
 
-Stage 4's temporal gate was restated onto a *scalar* model problem to separate
-the coefficient table from CN. That problem has no pressure and no continuity
-row, so **it is blind to AC**, and no temporal-order measurement of the real 3D
-stepper with AC on exists.
+**Result: the scheme runs at first order in time with AC on, where Stage 4 says
+it should be ~2.** Richardson self-convergence from the analytic state,
+`t` = 0.032, `dt` = 0.008 → 0.001, κ_p = `a_mass` (the production scaling):
 
-An attempt (`scratch/ac_temporal_order.py`, Richardson self-convergence) returned
-**negative orders** — successive refinements moving apart. That result is
-**discarded as confounded, not reported as a property of the scheme**: the initial
-condition sets `p` = 0, which is inconsistent with the velocity field, so the
-pressure relaxes over a fixed number of *steps*. Confirmed directly — at fixed
-physical time `t` = 0.08, `max|p|` = 2.94e−03 → 3.93e−03 → 4.69e−03 as `dt` is
-refined, i.e. still climbing rather than converged.
+| config | velocity order | pressure order |
+|---|---|---|
+| AC on, `nsub` = 1 | 0.90, 0.94 | 0.91, 0.96 |
+| AC on, `nsub` = 3 | 0.86, 0.92 | 0.86, 0.91 |
 
-To do it properly the run must start from a **pressure-consistent** state
-(sub-iterate the initial condition to convergence, or start from a developed
-field). Outstanding.
+Two things follow, and the second is the uncomfortable one:
+
+1. **AC halves the temporal order**, 2 → 1. Stage 4's scalar model gives 2.189
+   for the mixed scheme; the real stepper with AC delivers ~0.92. That is a
+   concrete accuracy cost for M7, and it was invisible to every test that
+   existed — the scalar model has no pressure and no continuity row.
+2. **`nsub` = 3 does not fix it.** It reduced the *divergence* error (2.39× →
+   1.75× the floor, §7A.2) but left the order unchanged. Three sub-iterations
+   are nowhere near converged; until the sub-iteration drives `p → p_prev`
+   properly, the AC term still caps the order at 1.
+
+#### The scaling insight that got here — and a retracted diagnosis
+
+The first attempt (`ac_temporal_order.py`) held **κ_p fixed** across `dt` on the
+reasoning that a convergence study must refine one fixed scheme. It returned
+*negative* orders. The stated cause at the time — an inconsistent `p` = 0 initial
+condition — **was wrong**. The real cause is that holding κ_p fixed is itself
+inconsistent:
+
+```
+κ_p·(p − p_prev) = −div u     ⇒     p drifts by  (T/dt)·(div u / κ_p)
+```
+
+so with κ_p fixed the pressure evolves at a rate ∝ 1/`dt` — arbitrarily fast
+under refinement, which is why successive solutions moved apart, and why the
+"warm-up" never equilibrated (`max|p|` climbed 10× and was still drifting 9.3%).
+
+With the production scaling κ_p = `K`/`dt` the row becomes `K·dp/dt = −div u`, a
+genuine `dt`-independent PDE — **artificial compressibility with artificial bulk
+modulus β = 1/`K` = 1/6**, against a flow speed ~1.5. So κ_p ∝ 1/`dt` is the
+*consistent* choice, and the scheme converges — but to an AC system, at first
+order, not to incompressible Navier–Stokes at second order.
+
+**Caveat, stated because it bounds the claim.** These runs start from the
+analytic state, whose pressure is not equilibrated. An initial pressure layer can
+depress an observed order, so ~0.92 should be read as "first order, on this
+setup" rather than a proven asymptotic rate. A start from a developed field would
+settle it. The comparison *between* `nsub` = 1 and 3 is unaffected — both share
+the same initial condition.
+
+### 7A.4 What is still open
+
+* **How many sub-iterations restore second order?** `nsub` = 3 does not.
+  Finding the number that does — and its cost — is the decision that determines
+  whether AC is usable for M7 at all.
+* **An equal-accuracy cost comparison** of AC + sub-iterations against AC-off.
+  The ~10× per-step advantage of AC (§7.5) was measured at `nsub` = 1, i.e. at
+  first order; against a second-order AC-off run it is not a like-for-like
+  number.
+* **Confirm the order from a developed field**, removing the initial-pressure
+  layer caveat above.
 
 ---
 
