@@ -51,6 +51,16 @@ to which AC was measured to hold in §0.3.
 > stage is **4× larger at the same `dt`** (§0.4). An implementation that budgets
 > against `1.5/dt` will under-estimate its own `a_mass` by a factor of four.
 
+**On paper the windows do NOT currently overlap.** `a_mass_worst = 6/dt` needs
+`dt` ≥ 0.02 to stay under the `a_mass` = 300 that AC was measured to reach
+(§0.3), while CFL implies `dt` ≈ 1e−3 … 1e−2 — a shortfall of **2× to 20×**.
+That ceiling was measured for the *linearised Navier–Stokes* operator though,
+and §0.1 says the Stokes-like operator must be re-measured. **The cheapest
+decisive experiment is in 2D and needs no 3D code and no change to `lssem2d`:
+zero the linearisation (`fu = fv = 0`) so `apply_L` becomes the Stokes operator,
+and measure its `a_mass` threshold.** Do that before committing to explicit
+convection.
+
 **Do not take reassurance from the 2D channel.** The periodic channel ran
 happily at `a_mass` = 1.5, 3 and **30** (`TEMPORAL_ACCURACY_STUDY.md`, bit-exact
 fixed points) and at 15 (`ARTIFICIAL_COMPRESSIBILITY.md` §3, exact `Δp`), with no
@@ -231,6 +241,8 @@ their imaginary parts asserted zero in debug builds — a nonzero imaginary part
                      Hermitian-symmetry assertions          [BUILT, tested]
       timestep.py    RKW3/Crank-Nicolson coefficients, implicit_coeff(dt, stage),
                      a_mass_worst(dt)                       [BUILT, tested]
+      operator.py    per-mode L / L^T, 7 complex fields -> 8 rows, split-real
+                     facade so the real CG applies unchanged [BUILT, tested]
       lssem3d.py     apply_L / apply_LT for the 7-field (14 real) per-mode system
       convect.py     physical-space u·grad u, 3/2-rule dealiasing, CFL estimate
       solver3d.py    BDF + per-mode batched PCG, reusing lssem2d.solver where it
