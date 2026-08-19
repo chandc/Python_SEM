@@ -320,7 +320,20 @@ accuracy failure on this mesh looks like the two steady rows above: 2.5e−01 an
 **Scoping correction.** The `a_mass` = 30 row converged with AC **off**. The
 6.05 / 12.1 threshold of `GARTLING_VALIDATION.md` therefore does **not** transfer
 to a closed domain — it is a property of the interaction between the
-weighting imbalance and an outflow boundary. Earlier text in this repo that
+weighting imbalance and an outflow boundary.
+
+> **Confirmed directly, 2026-08-18** (`scratch/chan_amass_sweep.py`,
+> `3D_DEVELOPMENT_PLAN.md` §0.3). A plane channel with a P+Z **outflow** and a
+> *parabolic* inlet — whose exact solution is representable, residual ≈ 0 —
+> blows up at `a_mass` = 60, 120 and 300, at **exactly the same step and time**
+> as the same channel with a uniform inlet and a residual of 8e−02 (t = 0.83,
+> 33 steps, both). Zero residual with an outflow gives no protection at all.
+> This is direct evidence that the **outflow boundary**, not the residual, is
+> the discriminator, and it makes `GARTLING_VALIDATION.md` §8's residual
+> explanation unresolved rather than established — periodic channels lack an
+> outflow *and* have a zero residual, so its evidence could not separate the two.
+
+Earlier text in this repo that
 states the threshold without that qualifier is over-general.
 
 ### 5.2 CG iterations — the actual pay-off

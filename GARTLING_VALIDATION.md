@@ -52,7 +52,14 @@ proceedings**, and fig. 2 there is the profile comparison, not the grid.
    `w_mom ∈ [0.25, 2.0]`, but −4.6% at `w_mom` = 0.1 (−11.6% for the steady
    form). The two constraints close on each other at **dt ≈ 0.06**.
 
-4. **The periodic-channel cases are exempt, and the reason is the residual.**
+4. **The periodic-channel cases are exempt — but the reason is now in doubt.**
+   *(Flagged 2026-08-18: a plane channel with an outflow and a parabolic inlet —
+   residual ≈ 0 — diverges at `a_mass` = 60/120/300 identically to the same
+   channel with a residual of 8e−02. Zero residual with an outflow gives no
+   protection, so the discriminator looks like the **outflow boundary**, not the
+   residual. Periodic channels lack both, so the evidence below cannot separate
+   them. See `3D_DEVELOPMENT_PLAN.md` §0.3 and `ARTIFICIAL_COMPRESSIBILITY.md`
+   §5.1.)* The original argument was:
    `TEMPORAL_ACCURACY_STUDY.md` ran the channel at `a_mass` = 30 with no trouble,
    where the BFS diverges. Poiseuille/Stokes are exactly representable
    (`J = 5.94e-27`), so all four rows vanish together and the weighting is

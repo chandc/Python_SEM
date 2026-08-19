@@ -70,26 +70,45 @@ The 2D proxy for the Stage 5 question, run before writing any 3D code
 **parabolic** = exact solution representable, residual ≈ 0; **uniform** = flow
 must develop, rms `div u` ≈ 8e−02, i.e. the BFS regime.
 
-| inlet | `a_mass` | `κ_p` | outcome | max\|u\| | wall |
-|---|---|---|---|---|---|
-| uniform | 60 | 0 (off) | **BLEWUP @ t = 0.83** (33 steps, max\|u\| 22.2) | 22.2 | 503 s |
-| uniform | 60 | 30 | ok to t = 15 | 2.28 | 58 s |
-| uniform | 120 | 60 | ok to t = 15 | 2.26 | 97 s |
-| uniform | 300 | 150 | **ok to t = 15** | 2.24 | 219 s |
+| inlet | residual | `a_mass` | `κ_p` | outcome | max\|u\| | wall |
+|---|---|---|---|---|---|---|
+| uniform | ~8e−02 | 60 | 0 (off) | **BLEWUP @ t = 0.83** (33 steps) | 22.2 | 503 s |
+| uniform | ~8e−02 | 120 | 0 (off) | **BLEWUP @ t = 0.58** (46 steps) | 20.4 | 731 s |
+| uniform | ~8e−02 | 300 | 0 (off) | **BLEWUP @ t = 0.35** (71 steps) | 23.9 | 913 s |
+| **parabolic** | **≈ 0** | 60 | 0 (off) | **BLEWUP @ t = 0.83** (33 steps) | 22.9 | 531 s |
+| **parabolic** | **≈ 0** | 120 | 0 (off) | **BLEWUP @ t = 0.58** (46 steps) | 20.6 | 616 s |
+| **parabolic** | **≈ 0** | 300 | 0 (off) | **BLEWUP @ t = 0.29** (59 steps) | 45.1 | 659 s |
+| uniform | ~8e−02 | 60 | 30 | ok to t = 15 | 2.28 | 58 s |
+| uniform | ~8e−02 | 120 | 60 | ok to t = 15 | 2.26 | 97 s |
+| uniform | ~8e−02 | 300 | 150 | **ok to t = 15** | 2.24 | 219 s |
 
-**Two results, and they point in opposite directions.**
+**The residual is NOT the discriminator — the outflow boundary is.** The
+parabolic inlet, whose exact solution *is* representable and whose residual is
+≈ 0, blows up at `a_mass` = 60 **at the same step and the same time as the
+uniform inlet** (t = 0.83, 33 steps, in both). The two inlets are
+indistinguishable in failure. Whatever protects the periodic channel at
+`a_mass` = 30 (`TEMPORAL_ACCURACY_STUDY.md`), it is not the smallness of its
+residual.
 
-1. **The laminar exemption is confirmed to be about the residual, and it does not
-   transfer.** The same grid that is perfectly stable at `a_mass` = 30 with a
-   parabolic inlet blows up at `a_mass` = 60 within 33 steps once the inlet is
-   uniform and the residual becomes non-zero. §0.2's concern is real and now
-   measured, not inferred.
+What these runs share, and what the periodic channel lacks, is a **P+Z outflow
+boundary**. That matches `ARTIFICIAL_COMPRESSIBILITY.md` §5.1's scoping
+correction — the closed cavity converges at `a_mass` = 30 with no remedy at all,
+and the threshold was already flagged there as *"a property of flows with an
+outflow boundary, not of `a_mass` alone."* These runs are direct evidence for
+that reading and against the residual reading in `GARTLING_VALIDATION.md` §8.
 
-2. **AC extends the window to at least `a_mass` = 300 on this flow** — further
-   than on the BFS, where `a_mass` = 120 failed at *every* `κ_p` tried
-   (`ARTIFICIAL_COMPRESSIBILITY.md` §4). 300 is inside the 150–1500 band that CFL
-   implies at `Re_τ` = 180. That is materially better news for the plan than §0.2
-   assumed.
+> `GARTLING_VALIDATION.md` §8 attributes the periodic channel's exemption to its
+> near-zero residual. That is consistent with its own evidence (periodic channels
+> have no outflow *and* a zero residual, so the two explanations were
+> confounded), but the parabolic runs above separate them: zero residual **with**
+> an outflow gives no protection whatsoever. §8 should be read as unresolved on
+> this point.
+
+**AC extends the window to at least `a_mass` = 300** — further than on the BFS,
+where `a_mass` = 120 failed at *every* `κ_p` tried
+(`ARTIFICIAL_COMPRESSIBILITY.md` §4). 300 is inside the 150–1500 band that CFL
+implies at `Re_τ` = 180. That is materially better news than §0.2 assumed, and it
+is the finding the plan actually depends on.
 
 > **Scope, stated plainly.** "ok" here means *did not diverge by t = 15 from
 > rest*, not *converged to the right answer*: max\|u\| ≈ 2.24–2.28 against ≈ 1.5
