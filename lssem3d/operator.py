@@ -30,7 +30,7 @@ adjoint machinery apply unchanged -- 3D_DEVELOPMENT_PLAN.md sec 1.2.  The
 split/join pair is trivial and is tested as a round trip.
 """
 import numpy as np
-from lssem2d.operators import dUdx, dUdy, DxT, DyT
+from .deriv import ddx as dUdx, ddy as dUdy, ddxT as DxT, ddyT as DyT
 
 NVAR = 7                 # u v w ox oy oz p          (complex)
 NROW = 8                 # residual rows             (complex)

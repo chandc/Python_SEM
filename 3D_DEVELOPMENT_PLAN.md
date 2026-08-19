@@ -326,8 +326,14 @@ their imaginary parts asserted zero in debug builds — a nonzero imaginary part
                      Hermitian-symmetry assertions          [BUILT, tested]
       timestep.py    RKW3/Crank-Nicolson coefficients, implicit_coeff(dt, stage),
                      a_mass_worst(dt)                       [BUILT, tested]
+      deriv.py       (x,y) derivatives + adjoints carrying arbitrary trailing
+                     axes.  lssem2d.operators is shape-locked to (nelem,n,n)
+                     -- facx[:,None,None] -- so it cannot batch over modes;
+                     pinned bitwise to it on 3-D input   [BUILT, tested]
       operator.py    per-mode L / L^T, 7 complex fields -> 8 rows, split-real
                      facade so the real CG applies unchanged [BUILT, tested]
+      convect.py     explicit u.grad u with 3/2 dealiasing in z, CFL estimate
+                     and max_dt_for_cfl                     [BUILT, tested]
       lssem3d.py     apply_L / apply_LT for the 7-field (14 real) per-mode system
       convect.py     physical-space u·grad u, 3/2-rule dealiasing, CFL estimate
       solver3d.py    BDF + per-mode batched PCG, reusing lssem2d.solver where it
