@@ -354,10 +354,19 @@ annihilates the discontinuous part, so a random *local* array is not recoverable
 `solver3d.make_continuous` projects onto that subspace.
 
 **Standard array layout, fixed:** `U[e, i, j, var, k]` — the field axis is
-**second to last** and z-modes are **last**. Two separate bugs came from
-indexing `U[..., f]` (which selects a *mode*) instead of `U[..., f, :]`, in
-`convect.py` and again in `operator.py`'s split-real facade. Both were silent —
-they produce correctly-shaped arrays.
+**second to last** and z-modes are **last**. **Four** separate bugs have come
+from getting this wrong, all silent:
+
+| where | wrong | effect |
+|---|---|---|
+| `convect.convective` | `U[..., f]` | selects a *mode*, not a field |
+| `operator` split-real facade | `Ur[..., :NVAR]` | splits the *mode* axis |
+| `convect.cfl` velocities | `U[..., OP.V_]` | selects a mode; passed its own test because field 0 still returned a plausible number |
+| `convect.cfl` order | `shape[-2]` | reads `NVAR`=7 as the polynomial order, making the CFL limit **independent of N** — silently over-permissive |
+
+Each produces a correctly-shaped array, so nothing raises. `cfl` now asserts its
+input layout explicitly. **Any new routine taking the 5-D state should do the
+same.**
       lssem3d.py     apply_L / apply_LT for the 7-field (14 real) per-mode system
       convect.py     physical-space u·grad u, 3/2-rule dealiasing, CFL estimate
       solver3d.py    BDF + per-mode batched PCG, reusing lssem2d.solver where it

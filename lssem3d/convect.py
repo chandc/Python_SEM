@@ -79,16 +79,26 @@ def cfl(U_phys, D, facx, facy, lz, nz, dt):
     minimum GLL node gap, which is the O(1/N^2) spacing near element edges --
     the correct and restrictive measure for a spectral element, not h/N.
     """
-    n = U_phys.shape[-2] if U_phys.ndim >= 2 else 1
+    # n from axis 1, NOT shape[-2] -- with the (nelem, n, n, var, mode) layout
+    # shape[-2] is NVAR = 7, so the original made the reference spacing
+    # independent of the polynomial order, which is how it was spotted (CFL came
+    # out identical at N = 6, 8 and 10).  Fourth instance of this layout bug.
+    assert U_phys.ndim == 5 and U_phys.shape[1] == U_phys.shape[2], \
+        f'expected (nelem, n, n, var, mode), got {U_phys.shape}'
+    n = U_phys.shape[1]
     # minimum node spacing on the reference element, mapped by facx/facy
     xg = np.polynomial.legendre.leggauss(max(n - 1, 2))[0]
     dref = np.min(np.diff(np.sort(np.concatenate(([-1.0], xg, [1.0])))))
     dx = dref/np.max(np.abs(facx))
     dy = dref/np.max(np.abs(facy))
     dz = lz/nz
-    umax = np.abs(U_phys[..., OP.U_]).max()
-    vmax = np.abs(U_phys[..., OP.V_]).max()
-    wmax = np.abs(U_phys[..., OP.W_]).max()
+    # [..., f, :] not [..., f]: the field axis is -2 and z is -1.  The wrong
+    # form selects a MODE and is silent -- it even returns a plausible number
+    # for field 0, which is how it survived its own unit test.  Third instance
+    # of this bug in this module; see 3D_DEVELOPMENT_PLAN.md sec 1.1.
+    umax = np.abs(U_phys[..., OP.U_, :]).max()
+    vmax = np.abs(U_phys[..., OP.V_, :]).max()
+    wmax = np.abs(U_phys[..., OP.W_, :]).max()
     return float(dt*(umax/dx + vmax/dy + wmax/dz))
 
 

@@ -124,6 +124,41 @@ def test_cfl_scales_linearly_with_dt_and_velocity(geom):
     assert abs(CV.cfl(U, D, m.facx, m.facy, LZ, NZ, 0.01) - 2*c1) < 1e-12
 
 
+def test_cfl_reads_the_right_FIELD_not_a_mode(geom):
+    """Each of u, v, w must contribute, and nothing else may.
+
+    The original cfl() wrote U_phys[..., OP.V_], which indexes the MODE axis --
+    the field axis is -2.  That is silent, and for field 0 it even returns a
+    plausible number, so the test above passed while the function was wrong.
+    Caught only when a single-mode array made the index go out of bounds.
+    """
+    m, D, _ = geom
+    base = np.zeros((m.nelem, N+1, N+1, OP.NVAR, NZ))
+    ref = None
+    for f in (OP.U_, OP.V_, OP.W_):
+        U = base.copy(); U[..., f, :] = 1.0
+        c = CV.cfl(U, D, m.facx, m.facy, LZ, NZ, 0.01)
+        assert c > 0, f'field {f} did not contribute to the CFL'
+        if f != OP.W_:                      # x,y share the same spacing
+            if ref is None:
+                ref = c
+            else:
+                assert abs(c - ref) < 1e-12
+    # a NON-velocity field must contribute nothing
+    U = base.copy(); U[..., OP.P_, :] = 100.0
+    assert CV.cfl(U, D, m.facx, m.facy, LZ, NZ, 0.01) == 0.0
+
+
+def test_cfl_works_with_a_single_mode(geom):
+    """nmode = 1 is the k_z = 0 case the M2 gate runs; the mode-axis bug made
+    this raise IndexError rather than return a wrong answer, which is the only
+    reason it was noticed."""
+    m, D, _ = geom
+    U = np.zeros((m.nelem, N+1, N+1, OP.NVAR, 1))
+    U[..., OP.U_, :] = 1.0
+    assert CV.cfl(U, D, m.facx, m.facy, LZ, 1, 0.01) > 0
+
+
 def test_max_dt_inverts_cfl(geom):
     m, D, _ = geom
     U = np.zeros((m.nelem, N+1, N+1, OP.NVAR, NZ))
@@ -138,3 +173,30 @@ def test_zero_velocity_gives_unbounded_dt(geom):
     m, D, _ = geom
     U = np.zeros((m.nelem, N+1, N+1, OP.NVAR, NZ))
     assert CV.max_dt_for_cfl(U, D, m.facx, m.facy, LZ, NZ, 1.0) == float('inf')
+
+
+def test_cfl_tightens_with_polynomial_order():
+    """Min GLL spacing shrinks as ~1/N^2, so the CFL-limited dt must fall with N.
+
+    The original cfl() took the order from shape[-2], which is NVAR = 7 in the
+    standard layout, making the limit INDEPENDENT of N -- it reported the same
+    dt at N = 6, 8 and 10.  That is a silently over-permissive time step.
+    """
+    prev = None
+    for NN in (4, 6, 8, 10):
+        m = build_channel(1.0, 1.0, 2, 2, NN, bcs=(1, 1, 1, 2))
+        D = diff_matrix(NN)
+        U = np.zeros((m.nelem, NN+1, NN+1, OP.NVAR, 1))
+        U[..., OP.U_, :] = 1.0
+        dt = CV.max_dt_for_cfl(U, D, m.facx, m.facy, LZ, 1, 1.0)
+        if prev is not None:
+            assert dt < prev, f'N={NN}: dt {dt:.3e} not below N-1 value {prev:.3e}'
+        prev = dt
+
+
+def test_cfl_rejects_a_wrong_shaped_array():
+    """The layout assertion fires rather than silently using the wrong axis."""
+    m = build_channel(1.0, 1.0, 2, 2, 4, bcs=(1, 1, 1, 2))
+    D = diff_matrix(4)
+    with pytest.raises(AssertionError):
+        CV.cfl(np.zeros((m.nelem, 5, 5, OP.NVAR)), D, m.facx, m.facy, LZ, 1, 0.01)
