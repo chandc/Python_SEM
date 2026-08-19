@@ -43,20 +43,26 @@ U_, V_, W_, OX_, OY_, OZ_, P_ = range(NVAR)
 # ----------------------------------------------------------- real <-> complex
 
 def to_complex(Ur):
-    """(..., 14) real -> (..., 7) complex.  Real parts first, then imaginary."""
-    return Ur[..., :NVAR] + 1j*Ur[..., NVAR:]
+    """(..., 14, nmode) real -> (..., 7, nmode) complex.
+
+    LAYOUT: the field axis is -2 and z-modes are -1 throughout this module, per
+    3D_DEVELOPMENT_PLAN.md sec 1.1.  Slicing the LAST axis instead -- the
+    natural-looking `Ur[..., :NVAR]` -- silently splits the mode axis and was a
+    real bug here.
+    """
+    return Ur[..., :NVAR, :] + 1j*Ur[..., NVAR:, :]
 
 
 def to_real(Uc):
-    """(..., 7) complex -> (..., 14) real."""
-    return np.concatenate([Uc.real, Uc.imag], axis=-1)
+    """(..., 7, nmode) complex -> (..., 14, nmode) real."""
+    return np.concatenate([Uc.real, Uc.imag], axis=-2)
 
 
 # ------------------------------------------------------------------ operator
 
 def apply_L_complex(U, D, facx, facy, kz, nu, c):
     """8 complex residual rows from 7 complex fields.  U is (..., n, n, 7)."""
-    g = lambda f: (dUdx(U[..., f], D, facx), dUdy(U[..., f], D, facy))
+    g = lambda f: (dUdx(U[..., f, :], D, facx), dUdy(U[..., f, :], D, facy))
     ux, uy = g(U_)
     vx, vy = g(V_)
     wx, wy = g(W_)
@@ -64,20 +70,20 @@ def apply_L_complex(U, D, facx, facy, kz, nu, c):
     oyx, oyy = g(OY_)
     ozx, ozy = g(OZ_)
     px, py = g(P_)
-    u, v, w = U[..., U_], U[..., V_], U[..., W_]
-    ox, oy, oz = U[..., OX_], U[..., OY_], U[..., OZ_]
-    p = U[..., P_]
+    u, v, w = U[..., U_, :], U[..., V_, :], U[..., W_, :]
+    ox, oy, oz = U[..., OX_, :], U[..., OY_, :], U[..., OZ_, :]
+    p = U[..., P_, :]
     ik = 1j*kz
 
-    R = np.empty(U.shape[:-1] + (NROW,), dtype=complex)
-    R[..., 0] = ux + vy + ik*w
-    R[..., 1] = wy - ik*v - ox
-    R[..., 2] = ik*u - wx - oy
-    R[..., 3] = vx - uy - oz
-    R[..., 4] = c*u + px + nu*(ozy - ik*oy)
-    R[..., 5] = c*v + py + nu*(ik*ox - ozx)
-    R[..., 6] = c*w + ik*p + nu*(oyx - oxy)
-    R[..., 7] = oxx + oyy + ik*oz
+    R = np.empty(U.shape[:-2] + (NROW, U.shape[-1]), dtype=complex)
+    R[..., 0, :] = ux + vy + ik*w
+    R[..., 1, :] = wy - ik*v - ox
+    R[..., 2, :] = ik*u - wx - oy
+    R[..., 3, :] = vx - uy - oz
+    R[..., 4, :] = c*u + px + nu*(ozy - ik*oy)
+    R[..., 5, :] = c*v + py + nu*(ik*ox - ozx)
+    R[..., 6, :] = c*w + ik*p + nu*(oyx - oxy)
+    R[..., 7, :] = oxx + oyy + ik*oz
     return R
 
 
@@ -101,29 +107,29 @@ def apply_LT_complex(R, D, facx, facy, kz, nu, c):
     dxT = lambda f: DxT(f, D, facx)
     dyT = lambda f: DyT(f, D, facy)
     mik = -1j*kz                                     # conjugate of i*k
-    r0, r1, r2, r3, r4, r5, r6, r7 = (R[..., i] for i in range(NROW))
+    r0, r1, r2, r3, r4, r5, r6, r7 = (R[..., i, :] for i in range(NROW))
 
-    C = np.empty(R.shape[:-1] + (NVAR,), dtype=complex)
-    C[..., U_] = dxT(r0) + mik*r2 - dyT(r3) + c*r4
-    C[..., V_] = dyT(r0) - mik*r1 + dxT(r3) + c*r5
-    C[..., W_] = mik*r0 + dyT(r1) - dxT(r2) + c*r6
-    C[..., OX_] = -r1 + nu*mik*r5 - nu*dyT(r6) + dxT(r7)
-    C[..., OY_] = -r2 - nu*mik*r4 + nu*dxT(r6) + dyT(r7)
-    C[..., OZ_] = -r3 + nu*dyT(r4) - nu*dxT(r5) + mik*r7
-    C[..., P_] = dxT(r4) + dyT(r5) + mik*r6
+    C = np.empty(R.shape[:-2] + (NVAR, R.shape[-1]), dtype=complex)
+    C[..., U_, :] = dxT(r0) + mik*r2 - dyT(r3) + c*r4
+    C[..., V_, :] = dyT(r0) - mik*r1 + dxT(r3) + c*r5
+    C[..., W_, :] = mik*r0 + dyT(r1) - dxT(r2) + c*r6
+    C[..., OX_, :] = -r1 + nu*mik*r5 - nu*dyT(r6) + dxT(r7)
+    C[..., OY_, :] = -r2 - nu*mik*r4 + nu*dxT(r6) + dyT(r7)
+    C[..., OZ_, :] = -r3 + nu*dyT(r4) - nu*dxT(r5) + mik*r7
+    C[..., P_, :] = dxT(r4) + dyT(r5) + mik*r6
     return C
 
 
 # --------------------------------------------------------- split-real facade
 
 def apply_L(Ur, D, facx, facy, kz, nu, c):
-    """(..., 14) real -> (..., 16) real."""
+    """(..., 14, nmode) real -> (..., 16, nmode) real."""
     return to_real(apply_L_complex(to_complex(Ur), D, facx, facy, kz, nu, c))
 
 
 def apply_LT(Rr, D, facx, facy, kz, nu, c):
-    """(..., 16) real -> (..., 14) real."""
-    Rc = Rr[..., :NROW] + 1j*Rr[..., NROW:]
+    """(..., 16, nmode) real -> (..., 14, nmode) real."""
+    Rc = Rr[..., :NROW, :] + 1j*Rr[..., NROW:, :]
     return to_real(apply_LT_complex(Rc, D, facx, facy, kz, nu, c))
 
 

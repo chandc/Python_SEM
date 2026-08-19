@@ -334,6 +334,14 @@ their imaginary parts asserted zero in debug builds — a nonzero imaginary part
                      facade so the real CG applies unchanged [BUILT, tested]
       convect.py     explicit u.grad u with 3/2 dealiasing in z, CFL estimate
                      and max_dt_for_cfl                     [BUILT, tested]
+      solver3d.py    batched per-mode normal_op / PCG / probed Jacobi, and the
+                     RKW3-CN stage driver                   [BUILT, tested]
+
+**Standard array layout, fixed:** `U[e, i, j, var, k]` — the field axis is
+**second to last** and z-modes are **last**. Two separate bugs came from
+indexing `U[..., f]` (which selects a *mode*) instead of `U[..., f, :]`, in
+`convect.py` and again in `operator.py`'s split-real facade. Both were silent —
+they produce correctly-shaped arrays.
       lssem3d.py     apply_L / apply_LT for the 7-field (14 real) per-mode system
       convect.py     physical-space u·grad u, 3/2-rule dealiasing, CFL estimate
       solver3d.py    BDF + per-mode batched PCG, reusing lssem2d.solver where it
@@ -561,7 +569,7 @@ expensive. Once Stage 4 passes:
 | M1 | `fourier.py` + Stage 0 | transform and derivative tests |
 | M2 | `lssem3d.py` operator + Stage 1 | **reproduces Ghia RMS u = 1.568e−02 at `k_z`=0** |
 | M3 | Stages 2–3 | single-mode exact; dealiasing with negative control |
-| M4 | `solver3d.py` + Stage 4 | MMS spectral + BDF2 order 2.0 |
+| M4 | `solver3d.py` + Stage 4 | MMS spectral + **RKW3 order 3.0** (solver core built and tested; MMS still to do) |
 | M5 | **Stage 5 decision gate** | documented feasible `(dt, w_mass, κ_p)` |
 | M6 | numba backend | Stage 1–4 re-pass, scaling targets met |
 | M7 | Stage 6 | `Re_τ`=180 statistics within tolerance of KMM |
