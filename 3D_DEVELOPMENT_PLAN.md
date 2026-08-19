@@ -530,11 +530,40 @@ be invisible later.
 Method of manufactured solutions with all fields `z`-dependent and a non-trivial
 forcing.
 
-| test | criterion |
+| test | criterion | state |
+|---|---|---|
+| spatial convergence in `N` | spectral in `(x,y)`: error falls faster than any algebraic rate | **passed** — `test_stage4_mms.py` |
+| spectral convergence in `Nz` | exponential until round-off | **passed** — exponential fit beats algebraic |
+| temporal order | see the correction below | **passed as corrected** — `test_stage4_temporal.py` |
+
+#### Correction, measured 2026-08-19: the temporal gate as originally written was unachievable
+
+This gate used to read "**RKW3 slope 3.0 ± 0.15** … measuring 2.0 means the
+`α/β/γ/ζ` table is mis-transcribed *or* Crank–Nicolson is limiting". Those are
+two different diagnoses and one convergence run cannot separate them, so the
+scalar model problem `u' = (λ_e + λ_i)u` was run three ways:
+
+| configuration | measured order |
 |---|---|
-| spatial convergence in `N` | spectral in `(x,y)`: error falls faster than any algebraic rate |
-| spectral convergence in `Nz` | exponential until round-off |
-| temporal order | **RKW3 slope 3.0 ± 0.15** on `dt` refinement (not 2.0 — the scheme is 3rd order; measuring 2.0 means the `α/β/γ/ζ` table is mis-transcribed or Crank–Nicolson is limiting) |
+| explicit only — the `γ/ζ` table alone | **3.025** |
+| implicit only — Crank–Nicolson alone | **2.002** |
+| **mixed — the configuration actually run** | **2.189** |
+
+**The table is correct and CN is the limiter.** So the second disjunct was the
+true one, and *no correct implementation can score 3.0 on the mixed scheme* —
+the original gate would have failed working code and sent us to re-derive a
+coefficient table that was right all along.
+
+**Restated gate:** explicit-only order **3.0 ± 0.15** (this is the real test of
+the coefficient table, and it is what the consistency relation
+`α_k + β_k = γ_k + ζ_k` buys), with the mixed scheme expected at **≈ 2**. The
+scheme's argument was never 3rd-order accuracy overall — it is the imaginary-axis
+stability interval that AB2 lacks entirely (§0.4). Nothing about the design
+choice changes; only the acceptance criterion was wrong.
+
+Third-order overall would require replacing CN on the viscous term. Not worth
+it: viscous error is not what limits a DNS at these step sizes, and CN is
+unconditionally stable, which is the property the stiff `a_mass` term needs.
 
 ### Stage 5 — the `a_mass` / CFL collision ⚑ **decision gate**
 
@@ -557,6 +586,19 @@ laminar case is exactly the one §0.2 says will look deceptively healthy.
 **Exit criterion: a documented, measured `(dt, w_mass, κ_p)` operating point that
 is simultaneously CFL-stable and `a_mass`-stable at the resolution Stage 6 needs.**
 If no such point exists, escalate to semi-implicit convection and re-plan.
+
+**MET, measured 2026-08-19** (`3D_STATUS.md` §7, `scratch/channel3d_stage5.py`).
+Re = 180, N = 6, 3×3, Nz = 16, 200 steps, AC on with `κ_p` = `a_mass`: stable and
+decaying at **every** `a_mass` from 120 to **6000**, laminar control and perturbed
+alike. With `dt_CFL` = 0.0665 the CFL side needs only `a_mass` > 90, so the
+feasible window spans a factor ~66 in `dt`. The escalation to semi-implicit
+convection is **not** required. Required `a_mass` = 6/`dt_CFL` grows with
+resolution (90 / 204 / 466 at N=6,8,10 grids), leaving ~13× headroom at the
+finest grid tested — re-check at the M7 resolution rather than extrapolating.
+
+Still open: the AC-**off** stability ceiling. AC-off is ~11× slower per step, so
+those runs were still in progress; this affects whether AC is *required* or
+merely much faster, not whether the gate passes.
 
 ### Stage 6 — turbulent channel, `Re_τ` = 180
 
@@ -586,15 +628,50 @@ Sub-stages, each a gate:
 Correctness first; this project has repeatedly shown that fast wrong answers are
 expensive. Once Stage 4 passes:
 
-1. **Profile before optimising.** Expect the split to be PCG matvec ≫ FFT >
-   convection. If FFT dominates, the layout is wrong.
+1. **Profile before optimising.** ~~Expect the split to be PCG matvec ≫ FFT >
+   convection.~~ **Measured 2026-08-19** (`scratch/prof3d.py`), and the split is
+   far more lopsided than expected — `normal_op` **99.4%**, convection **0.6%**,
+   FFT and gather-scatter ~0.6 ms each against a 95 ms matvec. The layout is
+   right; the FFT and gather-scatter are **not worth optimising at all**.
+
+   Two further results, both contradicting the natural guess — see
+   `3D_STATUS.md` §3 and `scratch/prof3d_modes.py`, `prof3d_procs.py`:
+
+   * **BLAS threading buys nothing**: 95.51 → 94.84 ms from 1 to 8 threads. Use
+     one BLAS thread per worker and parallelise across modes instead.
+   * **Threads tie processes** (6.7× vs 6.5× at Nz=128), so the ceiling is
+     **memory bandwidth, not the GIL**. More cores will not help; the next gain
+     must come from *reducing memory traffic per matvec*. Do not re-litigate this
+     with multiprocessing — it was tried and it tied.
+
+   `lssem3d/parallel.py` implements the mode-parallel solve (threads,
+   whole-PCG-per-chunk). ~6.7× at Nz=128 on 12 P-cores. **Caveat: this does
+   nothing for a `k_z` = 0 run**, which has one mode — the M2 case gains from the
+   zero-structure fast path below, not from cores.
 2. **Numba kernels** for `apply_L`/`apply_LT`, mirroring the 2D backend split.
+   Re-aimed by the bandwidth finding above: the target is **fusing passes over
+   the data**, not merely compiling the existing ones. Compiling a
+   bandwidth-bound kernel in place buys little.
    Note `_check_ac_backend` already guards the numpy-only AC path — the 3D code
    needs the same guard, or AC will silently vanish in numba runs.
-3. **Batched-mode efficiency**: measure iterations-per-solve as a function of
+3. ~~**Batched-mode efficiency**: measure iterations-per-solve as a function of
    `k_z`. High-`k_z` modes are better conditioned (the `k_z²` term is
    diagonally dominant), so a *uniform* iteration count across modes is evidence
-   the preconditioner is not using `k_z`.
+   the preconditioner is not using `k_z`.~~
+
+   **Measured 2026-08-19 and the inference does not hold** — `3D_STATUS.md` §6,
+   `scratch/kz_iterations.py`. The `k_z²` term enters scaled by viscosity: at
+   `Re` = 180 and `Nz` = 32, `ν·k_z²` = **1.42** against `a_mass` = **1200**, so
+   it cannot shift the conditioning at all. Measured profile at production
+   `a_mass` is flat (0.905× from `k_z` = 0 to `k_z`max) — and an `a_mass` sweep
+   confirms the cause: the `k_z` trend appears only as `a_mass` shrinks
+   (0.905 → 0.997 → 0.763 → **0.249** at `a_mass` = 1200, 100, 10, 1).
+
+   Competing at production settings would need `k_z ~ √(a_mass/ν)` ≈ **465**; at
+   `Nz` = 128 the largest `k_z` is 64. **A flat profile is therefore expected and
+   correct, not evidence of a bad preconditioner**, and tuning the
+   preconditioner's `k_z` handling buys nothing. `a_mass`, not `k_z`, is what
+   limits conditioning.
 4. **Only then** consider MLX. Re-run the full ladder on any backend change.
 
 ### Scaling targets to record
@@ -602,7 +679,7 @@ expensive. Once Stage 4 passes:
 | metric | why |
 |---|---|
 | wall/step vs `Nz` | should be ~linear; super-linear means a Python mode loop |
-| CG its/solve vs `k_z` | should *fall* with `k_z`; flat means a bad preconditioner |
+| CG its/solve vs `k_z` | ~~should *fall* with `k_z`; flat means a bad preconditioner~~ **flat is correct at production `a_mass`** — see item 3 above. Informative only when `a_mass` ≲ 10 |
 | memory high-water | `Nz`× the 2D footprint, ×2 for split-real, ×1.5 for dealias padding |
 | **CG iteration counts** | deterministic and load-independent (verified in this project) — the honest cross-machine metric. Wall time is not. |
 
@@ -631,8 +708,8 @@ expensive. Once Stage 4 passes:
 | M1 | `fourier.py` + Stage 0 | transform and derivative tests |
 | M2 | `lssem3d.py` operator + Stage 1 | **reproduces Ghia RMS u = 1.568e−02 at `k_z`=0** |
 | M3 | Stages 2–3 | single-mode exact; dealiasing with negative control |
-| M4 | `solver3d.py` + Stage 4 | MMS spectral + **RKW3 order 3.0** (solver core built and tested; MMS still to do) |
-| M5 | **Stage 5 decision gate** | documented feasible `(dt, w_mass, κ_p)` |
+| M4 | `solver3d.py` + Stage 4 | **PASSED** — MMS spectral in `N` and `Nz`; explicit-only order 3.025, mixed 2.189 (CN-limited; gate restated above) |
+| M5 | **Stage 5 decision gate** | **PASSED in 3D 2026-08-19** — laminar+perturbed channel stable to `a_mass` = 6000 with AC; `dt_CFL` = 0.0665 needs only `a_mass` > 90, so the window spans ~66× in `dt`. `3D_STATUS.md` §7 |
 | M6 | numba backend | Stage 1–4 re-pass, scaling targets met |
 | M7 | Stage 6 | `Re_τ`=180 statistics within tolerance of KMM |
 

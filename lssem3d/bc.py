@@ -29,6 +29,7 @@ domain with a `bc == 4` outflow already fixes p and needs no pin.
 """
 import numpy as np
 from . import operator as OP
+from . import fourier as FR
 
 VEL = (OP.U_, OP.V_, OP.W_)
 WALLISH = (1, 2, 3)
@@ -42,7 +43,26 @@ def _edges(mesh, e):
             (mesh.bc[e, 3], (e, slice(None), -1)))       # N
 
 
-def build_mask(mesh, nmode, pin_p=False):
+def real_mode_columns(nmode, nz=None):
+    """Mode columns whose coefficients must be real, clipped to `nmode`.
+
+    Single source of truth for `build_mask`, `apply_values` and
+    `prescribed_entries`: those three must agree on which DOFs are prescribed,
+    and the 2D code's original bug was exactly a disagreement between the mask
+    and the value-writer.
+
+    nz defaults to the even count implied by nmode (`2*(nmode-1)`), the standard
+    rfft layout.  nmode == 1 means k = 0 alone, where the entire imaginary half
+    is unphysical.
+    """
+    if nmode == 1:
+        return (0,)
+    if nz is None:
+        nz = 2*(nmode - 1)
+    return tuple(k for k in FR.real_mode_indices(nz) if k < nmode)
+
+
+def build_mask(mesh, nmode, pin_p=False, nz=None):
     """(nelem, n, n, 14, nmode) with 1 on free DOFs and 0 on prescribed ones.
 
     Both the real and imaginary halves of a prescribed field are frozen: a
@@ -51,9 +71,36 @@ def build_mask(mesh, nmode, pin_p=False):
     unimposed at every non-zero mode, and is invisible at k_z = 0 where the
     imaginary part is zero anyway -- so it would pass a Stage 1 test and fail
     only in 3D.
+
+    THE REAL MODES ARE ALSO CONSTRAINED, everywhere, not just on boundaries.
+    For real physical data `fourier.real_mode_indices` gives the modes whose
+    coefficients must be real: k = 0 always, and the Nyquist mode when nz is
+    even.  `irfft` DISCARDS the imaginary part of those modes, so any content
+    the solver puts there is invisible in physical space -- an unconstrained,
+    non-physical direction that CG will happily fill.  Measured in
+    `test_integration_multimode.py`: the Nyquist imaginary part reached 1.5e-03
+    against a real part of 6.1e-03 after three steps, i.e. comparable size, and
+    `fourier.assert_hermitian_ok` -- the library's own stated invariant --
+    would have failed on the solver's state.
+
+    Freezing them is what makes the state and the physical field the same
+    object.  With nmode = 1 the entire imaginary half is prescribed, which is
+    exactly right, since at k = 0 every imaginary component is unphysical.
+
+    This is a CORRECTNESS fix, not the k_z = 0 fast path.  It removes those DOFs
+    from the solve, but the arrays keep their full width, so the matvec costs
+    what it did before.  Actually skipping the zero block needs the operator to
+    branch on it -- still open (3D_STATUS.md sec 5).
+
+    nz: physical z-point count, needed only to know whether a Nyquist mode
+        exists (it does iff nz is even).  Defaults to the even value implied by
+        nmode, `2*(nmode-1)`, which is the standard rfft layout.
     """
     n = mesh.N + 1
     mask = np.ones((mesh.nelem, n, n, OP.NVAR_R, nmode))
+
+    for k in real_mode_columns(nmode, nz):
+        mask[..., OP.NVAR:, k] = 0.0                  # whole imaginary half
 
     def freeze(idx, fields):
         for f in fields:
@@ -74,7 +121,7 @@ def build_mask(mesh, nmode, pin_p=False):
     return mask
 
 
-def apply_values(mesh, U, nmode, lid_speed=0.0, pin_p=False):
+def apply_values(mesh, U, nmode, lid_speed=0.0, pin_p=False, nz=None):
     """Write prescribed values into U, in place, and return it.
 
     Touches exactly the entries build_mask zeroes -- see the module docstring on
@@ -104,9 +151,14 @@ def apply_values(mesh, U, nmode, lid_speed=0.0, pin_p=False):
     if pin_p:
         U[0, 0, 0, OP.P_, :] = 0.0
         U[0, 0, 0, OP.NVAR + OP.P_, :] = 0.0
+    # The modes that must be real are prescribed to zero in their imaginary
+    # half EVERYWHERE, not just on boundaries -- see build_mask.  Written after
+    # the edge loop; the lid lives in the real half, so nothing is undone.
+    for k in real_mode_columns(nmode, nz):
+        U[..., OP.NVAR:, k] = 0.0
     return U
 
 
-def prescribed_entries(mesh, nmode, pin_p=False):
+def prescribed_entries(mesh, nmode, pin_p=False, nz=None):
     """Boolean array, True where a DOF is prescribed.  = (build_mask == 0)."""
-    return build_mask(mesh, nmode, pin_p) == 0.0
+    return build_mask(mesh, nmode, pin_p, nz) == 0.0

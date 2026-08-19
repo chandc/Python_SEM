@@ -36,10 +36,48 @@ def test_both_real_and_imaginary_halves_are_frozen(cav):
     in 3D.
     """
     mask = BC.build_mask(cav, NK)
+    real_k = BC.real_mode_columns(NK)
+    free_k = [k for k in range(NK) if k not in real_k]
+    assert free_k, 'no non-real modes -- test would be vacuous'
     for f in BC.VEL:
         re = (mask[..., f, :] == 0.0)
         im = (mask[..., OP.NVAR + f, :] == 0.0)
-        assert np.array_equal(re, im), f'field {f}: real/imag masks differ'
+        # On the modes that carry a genuine imaginary part the two halves must
+        # match exactly.  They CANNOT match on k = 0 or Nyquist, whose whole
+        # imaginary half is prescribed everywhere (build_mask), so those columns
+        # are excluded here and checked by the test below instead.
+        assert np.array_equal(re[..., free_k], im[..., free_k]), (
+            f'field {f}: real/imag masks differ on a complex mode')
+        assert im[..., real_k].all(), (
+            f'field {f}: imaginary half of a real mode is not fully frozen')
+
+
+def test_imaginary_half_of_real_modes_is_frozen_everywhere(cav):
+    """k = 0 and Nyquist must be real, so their imaginary half is prescribed at
+    INTERIOR points too, not merely on boundaries.
+
+    irfft discards those components, so anything the solver puts there is
+    invisible in physical space -- an unconstrained direction CG will fill.
+    Measured before this was enforced: the Nyquist imaginary part reached
+    1.5e-03 against a real part of 6.1e-03 after three steps, which would have
+    failed fourier.assert_hermitian_ok on the solver's own state.
+    """
+    mask = BC.build_mask(cav, NK)
+    for k in BC.real_mode_columns(NK):
+        assert (mask[..., OP.NVAR:, k] == 0.0).all(), f'mode {k} imag not frozen'
+    # and an interior point of a complex mode is still free, or the mask is
+    # simply zeroing everything
+    interior = mask[0, 1, 1, OP.NVAR + OP.U_, :]
+    assert (interior != 0.0).any(), 'every mode frozen -- mask is too aggressive'
+
+
+def test_kz0_only_run_prescribes_the_entire_imaginary_half(cav):
+    """nmode = 1 is the M2 cavity case: k = 0 alone, where every imaginary
+    component is unphysical.  Freezing them is also the k_z = 0 fast path --
+    those DOFs stop being solved for at all."""
+    mask = BC.build_mask(cav, 1)
+    assert (mask[..., OP.NVAR:, :] == 0.0).all()
+    assert (mask[..., :OP.NVAR, :] != 0.0).any(), 'real half must stay live'
 
 
 def test_vorticity_stays_free(cav):

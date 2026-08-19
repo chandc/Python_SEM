@@ -188,3 +188,98 @@ def test_pcg_converges_with_weights(geom):
     r = b - S3.normal_op(xs, D, m.facx, m.facy, kz, NU, C, wq=m.wq)
     rel = np.sqrt(np.sum(r*r))/np.sqrt(np.sum(b*b))
     assert rel < 1e-7, f'relative residual {rel:.3e} after {it} iters'
+
+
+# --------------------------------------------- the assembled Jacobi diagonal
+
+def _jac_geom():
+    """A mesh with genuinely shared nodes, and BCs, so the assembly matters."""
+    from lssem3d import bc as BC
+    m = build_channel(1.0, 1.0, 2, 2, 4, bcs=(1, 1, 1, 2))
+    nz = 8
+    nk = nz//2 + 1
+    kz = FR.wavenumbers(nz, LZ)
+    mask = BC.build_mask(m, nk, pin_p=True, nz=nz)
+    return m, diff_matrix(4), kz, mask, (m.nelem, 5, 5, OP.NVAR_R, nk)
+
+
+def test_jacobi_diagonal_is_the_assembled_diagonal():
+    """diag(A) at a shared node is the SUM over the elements that own it.
+
+    Checked against an exact single-DOF probe: `gs` of a one-hot local array is
+    precisely the global basis function (1 at every copy of that node, 0
+    elsewhere), so `normal_op` of it, read back at the node, IS the assembled
+    diagonal entry -- no thresholding and no multiplicity bookkeeping to get
+    wrong.
+    """
+    m, D, kz, mask, shape = _jac_geom()
+    nu, c, kap = 0.01, 50.0, 50.0
+    diag = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, nu, c, m, mask,
+                              m.wq, kap)
+    f, k = OP.U_, 1
+    checked = 0
+    for (e, i, j) in [(0, 2, 2), (0, 4, 2), (0, 2, 4), (0, 4, 4), (3, 0, 0)]:
+        if mask[e, i, j, f, k] == 0.0:
+            continue
+        ed = np.zeros(shape)
+        ed[e, i, j, f, k] = 1.0
+        Eg = S3.gs(m, ed)                     # exact global basis function
+        want = S3.normal_op(Eg, D, m.facx, m.facy, kz, nu, c, m, mask, m.wq,
+                            kap)[e, i, j, f, k]
+        got = diag[e, i, j, f, k]
+        assert abs(got - want) <= 1e-9*abs(want), (
+            f'node (e={e},i={i},j={j}): got {got:.6f}, assembled {want:.6f}')
+        checked += 1
+    assert checked >= 4, 'too few live nodes checked'
+
+
+def test_unassembled_diagonal_is_wrong_at_shared_nodes():
+    """Negative control: the old behaviour really was wrong, and by the factor
+    claimed.  On this uniform mesh the raw probe returns diag/multiplicity --
+    1/2 on an edge, 1/4 at a corner -- so 1/diag over-weighted every
+    element-boundary node.  Without this, the test above could pass against an
+    assembly that does nothing.
+    """
+    m, D, kz, mask, shape = _jac_geom()
+    nu, c, kap = 0.01, 50.0, 50.0
+    kw = dict(mesh=m, mask=mask, wq=m.wq, kap=kap)
+    asm = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, nu, c, **kw)
+    raw = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, nu, c,
+                             assemble=False, **kw)
+    mult = S3.gs(m, np.ones(shape))
+    live = (mask != 0.0) & (np.abs(asm) > 1e-12)
+    ratio = np.where(live, raw/np.where(asm == 0, 1, asm), 1.0)
+    interior = live & (mult < 1.5)
+    edge = live & (mult > 1.5) & (mult < 2.5)
+    corner = live & (mult > 3.5)
+    assert interior.any() and edge.any() and corner.any()
+    # Interior nodes have one owner, so assembly is a no-op there: exact.
+    assert np.abs(ratio[interior] - 1.0).max() < 1e-9, 'interior must be equal'
+    # Shared nodes are 1/multiplicity only when the owning elements contribute
+    # EQUALLY.  They nearly do on a uniform mesh, but not exactly: a boundary
+    # element carries a different mask, so its contribution differs slightly.
+    # Hence a tolerance on the ratio, plus the exact statement that assembly
+    # strictly increases the diagonal wherever a node is shared.
+    assert np.abs(ratio[edge] - 0.5).max() < 1e-2, 'edge should be ~half'
+    assert np.abs(ratio[corner] - 0.25).max() < 1e-2, 'corner should be ~quarter'
+    shared = live & (mult > 1.5)
+    assert (raw[shared] < asm[shared]).all(), (
+        'assembly must strictly increase the diagonal at every shared node')
+
+
+def test_assembled_diagonal_reduces_cg_iterations():
+    """The correction is not cosmetic: it buys ~1.4x fewer iterations."""
+    m, D, kz, mask, shape = _jac_geom()
+    nu, c, kap = 0.01, 50.0, 50.0
+    kw = dict(mesh=m, mask=mask, wq=m.wq, kap=kap)
+    b = S3.gs(m, np.random.default_rng(0).standard_normal(shape)*mask)*mask
+    its = {}
+    for lab, asm in (('raw', False), ('assembled', True)):
+        d = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, nu, c,
+                               assemble=asm, **kw)
+        Mi = 1.0/np.maximum(d, 1e-30)
+        _, it, _ = S3.pcg(b, D, m.facx, m.facy, kz, nu, c, m, mask, Mi,
+                          1e-8, 20000, None, m.wq, kap)
+        its[lab] = it
+    assert its['assembled'] < its['raw'], (
+        f"assembled {its['assembled']} not better than raw {its['raw']}")
