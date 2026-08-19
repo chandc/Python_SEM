@@ -47,7 +47,7 @@ def test_adjoint_identity(geom, kz):
     m, D = geom
     a = _rand((m.nelem, N+1, N+1, OP.NVAR_R, NK), 1)
     b = _rand((m.nelem, N+1, N+1, OP.NROW_R, NK), 2)
-    La = OP.apply_L(a, D, m.facx, m.facy, kz, NU, C)
+    La = OP.apply_L(a, D, m.facx, m.facy, kz, NU, C)   # wq=None -> L0
     LTb = OP.apply_LT(b, D, m.facx, m.facy, kz, NU, C)
     lhs = float(np.sum(La*b))
     rhs = float(np.sum(a*LTb))
@@ -61,10 +61,26 @@ def test_LtL_symmetric(geom, kz):
     m, D = geom
     a = _rand((m.nelem, N+1, N+1, OP.NVAR_R, NK), 3)
     b = _rand((m.nelem, N+1, N+1, OP.NVAR_R, NK), 4)
-    f = lambda x: OP.apply_LT(OP.apply_L(x, D, m.facx, m.facy, kz, NU, C),
+    f = lambda x: OP.apply_LT(OP.apply_L(x, D, m.facx, m.facy, kz, NU, C, m.wq),
                               D, m.facx, m.facy, kz, NU, C)
     s1, s2 = float(np.sum(b*f(a))), float(np.sum(a*f(b)))
-    assert abs(s1 - s2)/max(abs(s1), 1e-300) < 1e-12
+    assert abs(s1 - s2)/max(abs(s1), 1e-300) < 1e-12, \
+        'L0^T W L0 must stay symmetric with the quadrature weights in place'
+
+
+@pytest.mark.parametrize('kz', KZS)
+def test_weighting_actually_changes_the_operator(kz):
+    """Negative control: without wq this would be a different functional.
+
+    Guards against the weights being silently dropped again -- the failure is
+    invisible otherwise, since the unweighted operator is also symmetric.
+    """
+    m = build_channel(1.0, 1.0, EX, EX, N, bcs=(1, 1, 1, 2))
+    D = diff_matrix(N)
+    a = _rand((m.nelem, N+1, N+1, OP.NVAR_R, NK), 8)
+    plain = OP.apply_L(a, D, m.facx, m.facy, kz, NU, C)
+    wtd = OP.apply_L(a, D, m.facx, m.facy, kz, NU, C, m.wq)
+    assert np.abs(wtd - plain).max() > 1e-6
 
 
 # ------------------------------------------------------- the k_z = 0 structure
@@ -85,14 +101,14 @@ def test_kz0_decouples_into_2d_plus_transverse(geom):
     U = np.zeros(shape, dtype=complex)
     for f in transverse:                       # excite ONLY transverse fields
         U[..., f, :] = _rand(shape[:-2] + (NK,), 10 + f)
-    R = OP.apply_L_complex(U, D, m.facx, m.facy, 0.0, NU, C)
+    R = OP.apply_L0_complex(U, D, m.facx, m.facy, 0.0, NU, C)
     leak = max(np.abs(R[..., r, :]).max() for r in rows_2d)
     assert leak < 1e-13, f'transverse fields leaked into the 2D rows: {leak:.2e}'
 
     U = np.zeros(shape, dtype=complex)
     for f in inplane:                          # excite ONLY in-plane fields
         U[..., f, :] = _rand(shape[:-2] + (NK,), 20 + f)
-    R = OP.apply_L_complex(U, D, m.facx, m.facy, 0.0, NU, C)
+    R = OP.apply_L0_complex(U, D, m.facx, m.facy, 0.0, NU, C)
     leak = max(np.abs(R[..., r, :]).max() for r in rows_tr)
     assert leak < 1e-13, f'in-plane fields leaked into the transverse rows: {leak:.2e}'
 
@@ -101,7 +117,7 @@ def test_kz0_real_input_stays_real(geom):
     """No i*k terms at k_z = 0, so a real state must give a real residual."""
     m, D = geom
     U = _rand((m.nelem, N+1, N+1, OP.NVAR, NK), 5).astype(complex)
-    R = OP.apply_L_complex(U, D, m.facx, m.facy, 0.0, NU, C)
+    R = OP.apply_L0_complex(U, D, m.facx, m.facy, 0.0, NU, C)
     assert np.abs(R.imag).max() < 1e-300
 
 
@@ -109,8 +125,8 @@ def test_kz_sign_flips_only_the_imaginary_coupling(geom):
     """+k and -k give conjugate residuals for a real state (Hermitian symmetry)."""
     m, D = geom
     U = _rand((m.nelem, N+1, N+1, OP.NVAR, NK), 6).astype(complex)
-    Rp = OP.apply_L_complex(U, D, m.facx, m.facy, 2.5, NU, C)
-    Rm = OP.apply_L_complex(U, D, m.facx, m.facy, -2.5, NU, C)
+    Rp = OP.apply_L0_complex(U, D, m.facx, m.facy, 2.5, NU, C)
+    Rm = OP.apply_L0_complex(U, D, m.facx, m.facy, -2.5, NU, C)
     assert np.abs(Rp - np.conj(Rm)).max() < 1e-13
 
 
@@ -123,7 +139,7 @@ def test_c_enters_only_the_momentum_rows(geom):
     m, D = geom
     U = _rand((m.nelem, N+1, N+1, OP.NVAR, NK), 7).astype(complex)
     args = (D, m.facx, m.facy, 1.3, NU)
-    d = OP.apply_L_complex(U, *args, 5.0) - OP.apply_L_complex(U, *args, 2.0)
+    d = OP.apply_L0_complex(U, *args, 5.0) - OP.apply_L0_complex(U, *args, 2.0)
     for r in (0, 1, 2, 3, 7):
         assert np.abs(d[..., r, :]).max() < 1e-300, f'c leaked into row {r}'
     for r, f in ((4, OP.U_), (5, OP.V_), (6, OP.W_)):

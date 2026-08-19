@@ -166,3 +166,25 @@ def test_rkw3_uses_beta_for_the_implicit_coefficient():
                  solve_stage=lambda rhs, c, k: (seen.append(c), rhs)[1])
     assert seen == [1.0/(b*0.01) for b in BETA]
     assert max(seen) == pytest.approx(6.0/0.01)
+
+
+def test_normal_op_symmetric_with_quadrature_weights(geom):
+    """The operator CG actually solves -- L0^T W L0 -- must stay symmetric."""
+    m, D, kz = geom
+    rng = np.random.default_rng(11)
+    a, b = (rng.standard_normal(_shape(m, len(kz))) for _ in range(2))
+    f = lambda v: S3.normal_op(v, D, m.facx, m.facy, kz, NU, C, wq=m.wq)
+    s1, s2 = float(np.sum(b*f(a))), float(np.sum(a*f(b)))
+    assert abs(s1 - s2)/abs(s1) < 1e-12
+
+
+def test_pcg_converges_with_weights(geom):
+    """CG on the weighted operator still drives its residual down."""
+    m, D, kz = geom
+    x = np.random.default_rng(12).standard_normal(_shape(m, len(kz)))
+    b = S3.normal_op(x, D, m.facx, m.facy, kz, NU, C, wq=m.wq)
+    xs, it, _ = S3.pcg(b, D, m.facx, m.facy, kz, NU, C, tol=1e-10,
+                       max_iter=8000, wq=m.wq)
+    r = b - S3.normal_op(xs, D, m.facx, m.facy, kz, NU, C, wq=m.wq)
+    rel = np.sqrt(np.sum(r*r))/np.sqrt(np.sum(b*b))
+    assert rel < 1e-7, f'relative residual {rel:.3e} after {it} iters'

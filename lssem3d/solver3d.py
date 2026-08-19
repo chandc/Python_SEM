@@ -27,20 +27,26 @@ def _dot(a, b):
     return np.sum(a*b, axis=SPATIAL).sum(axis=0)[None, None, None, None, :]
 
 
-def normal_op(Ur, D, facx, facy, kz, nu, c, mask=None):
-    """A = L^T L applied to a split-real state, optionally masked.
+def normal_op(Ur, D, facx, facy, kz, nu, c, mask=None, wq=None):
+    """A = L0^T W L0 applied to a split-real state, optionally masked.
+
+    wq are the quadrature weights (mesh.wq).  They belong in the FORWARD
+    operator only -- apply_LT is the unweighted transpose -- so that the product
+    is the normal operator of J = int R^2 dOmega.  See operator.apply_L_complex.
+    Passing wq=None solves a different (unweighted, nodal) least-squares problem
+    and is for tests only.
 
     mask is 1 where a degree of freedom is free and 0 where it is prescribed;
     applying it on both sides keeps A symmetric, which is what CG needs.
     """
     if mask is not None:
         Ur = Ur*mask
-    out = OP.apply_LT(OP.apply_L(Ur, D, facx, facy, kz, nu, c),
+    out = OP.apply_LT(OP.apply_L(Ur, D, facx, facy, kz, nu, c, wq),
                       D, facx, facy, kz, nu, c)
     return out*mask if mask is not None else out
 
 
-def jacobi_diagonal(shape, D, facx, facy, kz, nu, c, mask=None):
+def jacobi_diagonal(shape, D, facx, facy, kz, nu, c, mask=None, wq=None):
     """diag(L^T L) by probing with unit vectors.
 
     REFERENCE QUALITY, NOT PRODUCTION.  This costs one operator application per
@@ -58,12 +64,12 @@ def jacobi_diagonal(shape, D, facx, facy, kz, nu, c, mask=None):
                 e = np.zeros(shape)
                 e[:, i, j, f, :] = 1.0
                 diag[:, i, j, f, :] = normal_op(
-                    e, D, facx, facy, kz, nu, c, mask)[:, i, j, f, :]
+                    e, D, facx, facy, kz, nu, c, mask, wq)[:, i, j, f, :]
     return diag
 
 
 def pcg(b, D, facx, facy, kz, nu, c, mask=None, M_inv=None, tol=1e-10,
-        max_iter=2000, x0=None):
+        max_iter=2000, x0=None, wq=None):
     """Preconditioned CG on A x = b, batched over modes.
 
     Returns (x, iters, resid) with resid the per-mode final residual norm.
@@ -74,7 +80,7 @@ def pcg(b, D, facx, facy, kz, nu, c, mask=None, M_inv=None, tol=1e-10,
     if mask is not None:
         b = b*mask
         x = x*mask
-    A = lambda v: normal_op(v, D, facx, facy, kz, nu, c, mask)
+    A = lambda v: normal_op(v, D, facx, facy, kz, nu, c, mask, wq)
     P = (lambda r: r) if M_inv is None else (lambda r: r*M_inv)
 
     r = b - A(x)

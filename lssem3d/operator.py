@@ -60,8 +60,12 @@ def to_real(Uc):
 
 # ------------------------------------------------------------------ operator
 
-def apply_L_complex(U, D, facx, facy, kz, nu, c):
-    """8 complex residual rows from 7 complex fields.  U is (..., n, n, 7)."""
+def apply_L0_complex(U, D, facx, facy, kz, nu, c):
+    """UNWEIGHTED residual rows: the raw differential operator L0.
+
+    apply_LT_complex is the exact transpose of THIS, not of the weighted form
+    below -- see the note on the weighting convention there.
+    """
     g = lambda f: (dUdx(U[..., f, :], D, facx), dUdy(U[..., f, :], D, facy))
     ux, uy = g(U_)
     vx, vy = g(V_)
@@ -120,11 +124,33 @@ def apply_LT_complex(R, D, facx, facy, kz, nu, c):
     return C
 
 
+def apply_L_complex(U, D, facx, facy, kz, nu, c, wq=None):
+    """Quadrature-WEIGHTED rows: W * L0, matching lssem2d's convention.
+
+    THE CONVENTION, and it is not the obvious one.  lssem2d's apply_L multiplies
+    every row by wq = jac*w_i*w_j, while its apply_LT is the UNWEIGHTED
+    transpose.  The pair is built so that
+
+        apply_LT(apply_L(x))  =  L0^T W L0 x
+
+    which is the normal operator for the least-squares functional J = int R^2 dOmega
+    -- symmetric because W is diagonal.  Neither routine is the plain adjoint of
+    the other, and testing them as if they were is a mistake (this module did
+    exactly that until the weights were added: without W the operator minimises
+    the unweighted NODAL sum of squares, which is a different functional on a
+    GLL grid, where the node spacing varies as 1/N^2 near element edges).
+
+    wq is (nelem, n, n); pass None only for the unweighted operator in tests.
+    """
+    R = apply_L0_complex(U, D, facx, facy, kz, nu, c)
+    return R if wq is None else R*wq[..., None, None]
+
+
 # --------------------------------------------------------- split-real facade
 
-def apply_L(Ur, D, facx, facy, kz, nu, c):
-    """(..., 14, nmode) real -> (..., 16, nmode) real."""
-    return to_real(apply_L_complex(to_complex(Ur), D, facx, facy, kz, nu, c))
+def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None):
+    """(..., 14, nmode) real -> (..., 16, nmode) real.  Weighted if wq given."""
+    return to_real(apply_L_complex(to_complex(Ur), D, facx, facy, kz, nu, c, wq))
 
 
 def apply_LT(Rr, D, facx, facy, kz, nu, c):
