@@ -29,76 +29,7 @@ To solve the full 3D domain at runtime, the numerical pipeline consists of three
 2. **Solve 2D Modes (Embarrassingly Parallel):** For every discrete wavenumber $k_z$, solve its corresponding 2D Helmholtz equation. Because no information needs to be shared between different $k_z$ modes during the solve, all modes can be solved simultaneously via batched tensor operations on a GPU.
 3. **Inverse FFT:** Once the Fourier coefficients $\hat{u}(x,y,k_z)$ are resolved for all modes, perform an Inverse 1D FFT along the $z$-axis to recover the final 3D physical solution field $u(x,y,z)$.
 
-## 3. Time integration: low-storage RK3 for the convective terms
-
-The Fourier decoupling in §2 only holds if the convective term $\mathbf{u}\cdot\nabla\mathbf{u}$ is **explicit** — a linearised-implicit treatment makes the coefficients $z$-dependent, which is a convolution in $k_z$ and couples every mode. So the time integrator must be **IMEX**: explicit for convection, implicit for the stiff viscous/pressure/vorticity part that the per-mode solve handles.
-
-### 3.1 Choice: 3-stage low-storage RK3 (Spalart–Moser–Rogers)
-
-Use the **RKW3 / Crank–Nicolson** scheme of Spalart, Moser & Rogers (1991), the standard integrator for exactly this class of problem (spectral channel DNS with one wall-normal and periodic directions). Per stage $k = 1,2,3$:
-
-$$ \hat{u}^{k} = \hat{u}^{k-1} + \Delta t\left[\gamma_k \hat{N}^{k-1} + \zeta_k \hat{N}^{k-2} + \alpha_k \hat{L}^{k-1} + \beta_k \hat{L}^{k}\right] $$
-
-where $\hat{N}$ is the (explicit) convective term and $\hat{L}$ the (implicit) linear operator.
-
-| $k$ | $\gamma_k$ | $\zeta_k$ | $\alpha_k$ | $\beta_k$ |
-|---|---|---|---|---|
-| 1 | 8/15 | 0 | 29/96 | 37/160 |
-| 2 | 5/12 | −17/60 | −3/40 | 5/24 |
-| 3 | 3/4 | −5/12 | 1/6 | 1/6 |
-
-Consistency requires $\alpha_k + \beta_k = \gamma_k + \zeta_k$ at every stage, which these satisfy exactly (8/15, 2/15, 1/3). **Assert this in code** — it is a one-line check that catches the most common transcription error in the table.
-
-### 3.2 Why this one
-
-**Storage is the binding constraint in 3D.** The state is $N_z\times$ the 2D footprint. RKW3 is a **2-register** scheme: it needs only the current field and one previous convective term $\hat{N}^{k-2}$. Classical RK4 needs four stage derivatives — at $N_z$ = 128 and 7 fields that is the difference between fitting in memory and not.
-
-**A larger CFL limit directly relieves the `a_mass` problem.** This is the decisive argument here and is specific to this solver. Explicit convection is CFL-limited, and `a_mass = w_mass·fac1/Δt` grows as $\Delta t$ shrinks — the instability documented in `GARTLING_VALIDATION.md` and `3D_DEVELOPMENT_PLAN.md` §0.2. RKW3 has a stability limit of $\mathrm{CFL} \approx \sqrt{3} \approx 1.73$ on the imaginary axis against $\approx 0.5$ for Adams–Bashforth 2, so it permits a step **~3.5× larger** — which lowers `a_mass` by the same factor. Given that measured runs blow up at `a_mass` = 60 and AC holds only to ~300 (`3D_DEVELOPMENT_PLAN.md` §0.3), a 3.5× reduction is not a micro-optimisation; it is a meaningful part of the feasibility margin.
-
-**The cost accounting still favours it, even at three implicit solves per step.** The implicit solve dominates everything (thousands of CG iterations per solve), so three stages per step is a real 3× penalty on the dominant kernel. Against that: the step is ~3.5× larger, so the solve count per unit physical time is *slightly lower*, the scheme is 3rd-order rather than 2nd, and `a_mass` falls by 3.5×. Net: favourable, with the accuracy and stability gains effectively free.
-
-> **Verify this claim rather than inheriting it.** The 3.5× is the textbook imaginary-axis ratio; the realised gain depends on this operator. Measure both the achievable CFL and the per-step solve cost at `3D_DEVELOPMENT_PLAN.md` Stage 5, and if the solve count per unit time comes out worse than AB2, fall back — the scheme choice is not load-bearing for correctness.
-
-**Rejected alternatives**
-
-| scheme | why not |
-|---|---|
-| AB2 / AB3 | 1 solve per step, but CFL ≈ 0.5 → the smallest $\Delta t$ and therefore the *largest* `a_mass`, straight into the measured failure band |
-| Classical RK4 | better efficiency per stage on the imaginary axis (CFL 2.83/4 vs 1.73/3), but 4 registers and 4 implicit solves; storage is the constraint |
-| Low-storage RK4 (Carpenter–Kennedy 2N, 5 stages) | 2 registers and good efficiency, but 5 implicit solves per step — the dominant kernel decides, and 5 > 3 |
-| SSP-RK3 | strong-stability-preserving matters for shocks, not for smooth incompressible DNS; no benefit here, same stage count |
-
-### 3.3 Storage and pseudocode
-
-Two registers. `N_prev` carries $\hat{N}^{k-2}$ across stages; nothing else persists.
-
-```python
-GAMMA = (8/15, 5/12, 3/4)
-ZETA  = (0.0, -17/60, -5/12)
-ALPHA = (29/96, -3/40, 1/6)
-BETA  = (37/160, 5/24, 1/6)
-assert all(abs(a + b - (g + z)) < 1e-14
-           for a, b, g, z in zip(ALPHA, BETA, GAMMA, ZETA))
-
-N_prev = zeros_like(U_hat)                  # register 2
-for k in range(3):
-    u = irfft(U_hat, axis=-1)               # modes -> physical
-    N = convective(u)                       # dealiased, 3/2 rule in z
-    N_hat = rfft(N, axis=-1)                # physical -> modes
-    rhs = U_hat + dt*(GAMMA[k]*N_hat + ZETA[k]*N_prev + ALPHA[k]*L(U_hat))
-    U_hat = implicit_solve(rhs, coeff=dt*BETA[k])   # per-mode, batched
-    N_prev = N_hat                          # only state carried between stages
-```
-
-Each stage costs one iFFT/FFT pair and one batched implicit solve over all modes. **The implicit solve must stay batched across $k_z$** — a Python loop over modes inside an RK stage multiplies the cost of §2's decoupling by three.
-
-### 3.4 Note on the stage-wise implicit coefficient
-
-The implicit operator changes between stages: stage $k$ solves with $\beta_k \Delta t$, not $\Delta t$. Since `a_mass` $\propto 1/\Delta t_\text{eff}$, the *effective* `a_mass` differs per stage — with $\beta = (37/160, 5/24, 1/6)$ the stage steps are $0.231\Delta t$, $0.208\Delta t$, $0.167\Delta t$, so every stage sees an `a_mass` roughly **4–6× larger** than $1.5/\Delta t$ would suggest. Budget for that when checking against the measured stability window: the relevant quantity is $\max_k\, \mathrm{fac}_1/(\beta_k \Delta t)$, not $\mathrm{fac}_1/\Delta t$. This partially offsets the CFL gain above and must be measured, not assumed.
-
----
-
-## 4. Integration into the Object-Oriented Architecture
+## 3. Integration into the Object-Oriented Architecture
 
 Because of the matrix-free tensor contraction design in `sem_2d_oo.py`, extending this to the 2.5D Fourier domain requires minimal architectural disruption.
 
@@ -121,8 +52,6 @@ v_local = (K_x @ u @ M_y.T) + (M_x @ u @ K_y.T) + kz_squared * (M_x @ u @ M_y.T)
 
 ### Complex Arithmetic Support
 Because Fourier coefficients are natively complex numbers, the tensor `dtype` in NumPy or PyTorch must be switched from `float64` to `complex128`. Both frameworks natively support broadcasting complex arithmetic, meaning the Conjugate Gradient (CG) algorithm implementation does not need to be rewritten.
-
-> **Caveat — this holds for the symmetric Poisson/Helmholtz operator above, and not for the least-squares VVP system.** For a Hermitian positive-definite $A$, CG needs conjugated inner products ($r^H z$, not $r^T z$); NumPy's `@`/`sum` will not do that for you, and the omission is silent — it produces plausible-looking iterates that converge to the wrong thing. For the LSSEM solver, $L^{H}L$ is Hermitian rather than symmetric and the adjoint test, the Jacobi diagonal and the line-search merit all need the same treatment. `3D_DEVELOPMENT_PLAN.md` §1.2 therefore recommends **splitting real and imaginary parts into real fields** for that solver, so the existing verified real-valued CG is reused unmodified. Use `complex128` here only if the operator really is the plain Helmholtz one.
 
 ### Preconditioner Updates
 The inverse diagonal preconditioner (`inv_D`) must be updated to account for the $k_z^2$ diagonal mass components. This ensures the CG loop maintains its rapid convergence properties:
