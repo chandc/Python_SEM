@@ -72,7 +72,7 @@ def make_continuous(mesh, U):
     return gs(mesh, U)/np.where(mult < 1e-10, 1.0, mult)
 
 
-def normal_op(Ur, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None):
+def normal_op(Ur, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None, kap=0.0):
     """A = M Q^T Q L0^T W L0 M applied to a split-real state.
 
     THE ASSEMBLY STEP IS NOT OPTIONAL.  Without gather_scatter the operator is
@@ -94,14 +94,14 @@ def normal_op(Ur, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None):
     """
     if mask is not None:
         Ur = Ur*mask
-    out = OP.apply_LT(OP.apply_L(Ur, D, facx, facy, kz, nu, c, wq),
-                      D, facx, facy, kz, nu, c)
+    out = OP.apply_LT(OP.apply_L(Ur, D, facx, facy, kz, nu, c, wq, kap),
+                      D, facx, facy, kz, nu, c, kap)
     if mesh is not None:
         out = gs(mesh, out)
     return out*mask if mask is not None else out
 
 
-def jacobi_diagonal(shape, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None):
+def jacobi_diagonal(shape, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None, kap=0.0):
     """diag(L^T L) by probing with unit vectors.
 
     REFERENCE QUALITY, NOT PRODUCTION.  This costs one operator application per
@@ -119,12 +119,12 @@ def jacobi_diagonal(shape, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=No
                 e = np.zeros(shape)
                 e[:, i, j, f, :] = 1.0
                 diag[:, i, j, f, :] = normal_op(
-                    e, D, facx, facy, kz, nu, c, mesh, mask, wq)[:, i, j, f, :]
+                    e, D, facx, facy, kz, nu, c, mesh, mask, wq, kap)[:, i, j, f, :]
     return diag
 
 
 def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
-        tol=1e-10, max_iter=2000, x0=None, wq=None):
+        tol=1e-10, max_iter=2000, x0=None, wq=None, kap=0.0):
     """Preconditioned CG on A x = b, batched over modes.
 
     Returns (x, iters, resid) with resid the per-mode final residual norm.
@@ -135,7 +135,7 @@ def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
     if mask is not None:
         b = b*mask
         x = x*mask
-    A = lambda v: normal_op(v, D, facx, facy, kz, nu, c, mesh, mask, wq)
+    A = lambda v: normal_op(v, D, facx, facy, kz, nu, c, mesh, mask, wq, kap)
     mw = None if mesh is None else multiplicity_weight(mesh, b.shape)
     P = (lambda r: r) if M_inv is None else (lambda r: r*M_inv)
 

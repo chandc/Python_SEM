@@ -22,6 +22,18 @@ not appear here at all; that is what keeps the modes decoupled, and it is also
 why this operator is Stokes-like rather than the linearised Navier-Stokes
 operator whose stability was characterised in 2D.
 
+ARTIFICIAL COMPRESSIBILITY.  `kap` adds kappa_p*p to the continuity row, the
+same term ARTIFICIAL_COMPRESSIBILITY.md measures in 2D.  Its justification is
+sharper here than there: pressure reaches the operator only through grad p in
+the momentum rows and through i*k_z*p in the w-momentum row -- and that second
+path VANISHES at k_z = 0.  So the missing a33 pressure diagonal, which is what
+AC supplies, is worst exactly at the k_z = 0 mode.  Measured in 2D: 27x fewer CG
+iterations at a_mass = 30, the benefit growing with a_mass.
+
+The term is consistent at a steady state (p = p_prev makes it vanish), which is
+what the M2 gate needs; during a transient it perturbs by O(kappa_p * R), so the
+caller must carry kappa_p*p^n on the continuity row of the right-hand side.
+
 COMPLEX INSIDE, REAL OUTSIDE.  The residuals are written in complex form because
 that is how the equations read and how they are checked.  The public entry
 points take and return SPLIT-REAL arrays (..., 14) so that L^T L is symmetric
@@ -60,7 +72,7 @@ def to_real(Uc):
 
 # ------------------------------------------------------------------ operator
 
-def apply_L0_complex(U, D, facx, facy, kz, nu, c):
+def apply_L0_complex(U, D, facx, facy, kz, nu, c, kap=0.0):
     """UNWEIGHTED residual rows: the raw differential operator L0.
 
     apply_LT_complex is the exact transpose of THIS, not of the weighted form
@@ -80,7 +92,7 @@ def apply_L0_complex(U, D, facx, facy, kz, nu, c):
     ik = 1j*kz
 
     R = np.empty(U.shape[:-2] + (NROW, U.shape[-1]), dtype=complex)
-    R[..., 0, :] = ux + vy + ik*w
+    R[..., 0, :] = kap*p + ux + vy + ik*w        # kap: artificial compressibility
     R[..., 1, :] = wy - ik*v - ox
     R[..., 2, :] = ik*u - wx - oy
     R[..., 3, :] = vx - uy - oz
@@ -91,7 +103,7 @@ def apply_L0_complex(U, D, facx, facy, kz, nu, c):
     return R
 
 
-def apply_LT_complex(R, D, facx, facy, kz, nu, c):
+def apply_LT_complex(R, D, facx, facy, kz, nu, c, kap=0.0):
     """Adjoint of apply_L_complex: 8 complex rows -> 7 complex fields.
 
     TWO RULES, and both were wrong in the first draft:
@@ -120,11 +132,11 @@ def apply_LT_complex(R, D, facx, facy, kz, nu, c):
     C[..., OX_, :] = -r1 + nu*mik*r5 - nu*dyT(r6) + dxT(r7)
     C[..., OY_, :] = -r2 - nu*mik*r4 + nu*dxT(r6) + dyT(r7)
     C[..., OZ_, :] = -r3 + nu*dyT(r4) - nu*dxT(r5) + mik*r7
-    C[..., P_, :] = dxT(r4) + dyT(r5) + mik*r6
+    C[..., P_, :] = dxT(r4) + dyT(r5) + mik*r6 + kap*r0
     return C
 
 
-def apply_L_complex(U, D, facx, facy, kz, nu, c, wq=None):
+def apply_L_complex(U, D, facx, facy, kz, nu, c, wq=None, kap=0.0):
     """Quadrature-WEIGHTED rows: W * L0, matching lssem2d's convention.
 
     THE CONVENTION, and it is not the obvious one.  lssem2d's apply_L multiplies
@@ -142,21 +154,21 @@ def apply_L_complex(U, D, facx, facy, kz, nu, c, wq=None):
 
     wq is (nelem, n, n); pass None only for the unweighted operator in tests.
     """
-    R = apply_L0_complex(U, D, facx, facy, kz, nu, c)
+    R = apply_L0_complex(U, D, facx, facy, kz, nu, c, kap)
     return R if wq is None else R*wq[..., None, None]
 
 
 # --------------------------------------------------------- split-real facade
 
-def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None):
+def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0):
     """(..., 14, nmode) real -> (..., 16, nmode) real.  Weighted if wq given."""
-    return to_real(apply_L_complex(to_complex(Ur), D, facx, facy, kz, nu, c, wq))
+    return to_real(apply_L_complex(to_complex(Ur), D, facx, facy, kz, nu, c, wq, kap))
 
 
-def apply_LT(Rr, D, facx, facy, kz, nu, c):
+def apply_LT(Rr, D, facx, facy, kz, nu, c, kap=0.0):
     """(..., 16, nmode) real -> (..., 14, nmode) real."""
     Rc = Rr[..., :NROW, :] + 1j*Rr[..., NROW:, :]
-    return to_real(apply_LT_complex(Rc, D, facx, facy, kz, nu, c))
+    return to_real(apply_LT_complex(Rc, D, facx, facy, kz, nu, c, kap))
 
 
 def reduces_to_2d(kz):
