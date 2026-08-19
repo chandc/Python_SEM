@@ -174,6 +174,47 @@ Stage 5:
 | AC with re-tuned `κ_p` | supplies the missing `a33`; worked to `a_mass` = 60 in 2D | untested in the Stokes-like operator; AC is numpy-only today |
 | Accept a floor on `dt` | stay under the threshold | may violate CFL → unstable convection. **May be infeasible**; this is the case to test first. |
 
+### 0.6 RESOLVED: a periodic channel is already measured stable to `a_mass` = 2400
+
+The evidence was in the repo the whole time. `TEMPORAL_ACCURACY_STUDY.md`, via
+`scratch/pois_temporal.py`, runs **startup plane Poiseuille on a
+streamwise-periodic channel** — `build_channel(..., bcs=(0,0,1,1))` with
+`m.periodic_x = LX`, so **no outflow plane anywhere** — at
+`w_mom = w_mass = 1`, the identical weighting to every run that fails above:
+
+| `dt` | 0.01 | 0.005 | 0.0025 | 0.00125 | 0.000625 |
+|---|---|---|---|---|---|
+| **`a_mass`** | 150 | 300 | 600 | 1200 | **2400** |
+
+Across that whole range, at N = 10, 14 and 18, the scheme is not merely stable —
+it is **time-accurate to second order, fitted slope 2.04**, on a genuinely
+unsteady solution. `a_mass` = 2400 is 40× the value at which the *same code* on
+the *same equations* diverges within 33 steps when an outflow boundary is present
+(§0.3, §0.5).
+
+**This closes the Stage 5 feasibility question in the affirmative.** The 3D
+target — `Re_τ` = 180 channel, periodic in `x` and `z`, walls in `y` — has no
+outflow plane, and the RKW3/CN requirement of `a_mass` = 600 … 6000 is *directly
+covered by measured data* at 600, 1200 and 2400. Only the top of the band
+(6000, i.e. `dt` = 1e−3) sits above what has been measured, and nothing in the
+150 → 2400 sequence shows any degradation approaching it.
+
+**Revised conclusion on the whole `a_mass` story:** it is an **outflow-boundary
+phenomenon**, not a property of the least-squares weighting in general. Three
+causes have now been excluded by measurement — non-zero residual (§0.3),
+convection (§0.5), and small `dt` per se (this section) — and the outflow
+boundary is the only factor that has ever separated a stable run from an unstable
+one. Options 2–4 of §0.5's ladder (AC, `w_mass ∝ dt`, fractional step) are
+therefore **not needed for the target case**, and in particular there is no
+reason to abandon the least-squares VVP formulation for a projection method.
+
+> **Remaining exposure, stated so it is not forgotten.** (i) `a_mass` = 6000 is
+> extrapolated, not measured — check it at Stage 5, it is one cheap run. (ii) The
+> periodic evidence is 2D and laminar; a turbulent 3D field is a different
+> dynamical regime even if the boundary treatment is the same. (iii) If any
+> variant of the 3D problem ever grows an outflow — an inflow/outflow BFS, say —
+> every constraint in §0.3 applies again in full.
+
 ### 0.5 Measured 2026-08-18: it is not convection, so semi-implicit is not a fallback
 
 `scratch/stokes_amass_probe.py` zeroes the linearisation (`fu = fv = 0`) so that
@@ -495,7 +536,7 @@ expensive. Once Stage 4 passes:
 
 | risk | likelihood | mitigation |
 |---|---|---|
-| **`a_mass`/CFL windows do not overlap** | **medium** (was high) | §0.3 measures AC holding to `a_mass` = 300 on a non-zero-residual 2D channel, inside the 150–1500 band. Stage 5 still a gate — that test used the full NS operator, not the Stokes-like one |
+| **`a_mass`/CFL windows do not overlap** | **low** (was high, then medium) | §0.6: a *periodic* 2D channel is already measured stable **and second-order accurate** to `a_mass` = 2400, covering 600–2400 of the required 600–6000. The failure is an outflow phenomenon and the target case has no outflow. Residual (§0.3) and convection (§0.5) are both excluded as causes |
 | AC-off at large `a_mass` is unusably slow even when stable | high | §0.3: 503 s for 33 steps at `a_mass` = 60. AC is not optional at these `a_mass`, it is the enabling technology |
 | 2D stability results assumed to transfer | high | §0.1; Stage 5 re-measures from scratch |
 | Python loop over modes | medium | §1.1; Stage 4 scaling test catches it |
