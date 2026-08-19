@@ -8,7 +8,8 @@ Decisions taken (2026-08-18):
 
 | | choice |
 |---|---|
-| convection | **explicit** — `u·∇u` formed in physical space, FFT'd, carried in the RHS |
+| convection | **explicit**, 3-stage low-storage **RKW3** (Spalart–Moser–Rogers) |
+| viscous / linear | **implicit, Crank–Nicolson**, per mode |
 | backend | **NumPy first, numba second**, behind the existing `set_backend()` |
 | target case | **turbulent channel DNS, `Re_τ` = 180** (Kim–Moin–Moser) |
 
@@ -41,9 +42,14 @@ assumed. Treat §5 of this plan as mandatory, not optional.
 **0.2 Explicit convection collides with the `a_mass` floor — this is the main
 technical risk.** Explicit convection imposes a CFL limit. For `Re_τ` = 180
 channel DNS a typical step is `dt` ≈ 1e−3 … 1e−2 in wall units-normalised time.
-With `w_mass` = 1 and BDF2, `a_mass = 1.5/dt` gives **150 … 1500** — one to two
-orders above anything that has ever been stable in this code, and above the
-`a_mass` = 120 at which AC failed on the BFS.
+With RKW3/CN the momentum row carries `c_k = 1/(β_k·dt)` and the worst stage has
+`β` = 1/6, so `c = 6/dt` gives **6000 … 60000** — three to four orders above
+anything that has ever been stable in this code, and far above the `a_mass` = 300
+to which AC was measured to hold in §0.3.
+
+> **Do not use `1.5/dt` here.** That is the BDF2 coefficient. RKW3/CN's worst
+> stage is **4× larger at the same `dt`** (§0.4). An implementation that budgets
+> against `1.5/dt` will under-estimate its own `a_mass` by a factor of four.
 
 **Do not take reassurance from the 2D channel.** The periodic channel ran
 happily at `a_mass` = 1.5, 3 and **30** (`TEMPORAL_ACCURACY_STUDY.md`, bit-exact
@@ -115,6 +121,39 @@ is the finding the plan actually depends on.
 > for the developed profile, so these are still transient. This is a stability
 > result only. It also does not test the Stokes-like operator of §0.1 — convection
 > is still inside the functional here. Stage 5 remains a gate.
+
+### 0.4 RKW3/CN does not relieve `a_mass` — it mildly aggravates it
+
+Worth stating plainly, because the opposite is the intuitive guess: a scheme with
+a bigger CFL limit permits a bigger `dt`, and `a_mass ∝ 1/dt`, so RK "should"
+help. It does not, because the implicit stage coefficient works the other way.
+
+| | implicit coefficient | at matched CFL |
+|---|---|---|
+| BDF2 + AB2 | `fac1/dt` = **1.50**/dt | `1.50/dt_AB2` |
+| RKW3/CN, worst stage (`β` = 1/6) | `1/(β·dt)` = **6.00**/dt | `6.00/(3.46·dt_AB2)` = **1.73**/dt_AB2 |
+
+`1/β` = (4.324, 4.800, **6.000**), so at the *same* `dt` RKW3/CN is 4× worse. The
+CFL gain (√3 ≈ 1.73 against AB2's ≈ 0.5, i.e. a 3.46× larger step) recovers most
+but not all of that: the net is **≈ 15% worse than BDF2**, not better.
+
+So the case for RKW3/CN rests elsewhere, and it is still a good case:
+
+* **AB2 has no imaginary-axis stability interval at all** — it is unstable for
+  pure advection at any `dt`, surviving only on viscous damping. RKW3 has a
+  genuine one. On fine DNS grids, where convective eigenvalues are nearly
+  imaginary, this is the argument that decides it.
+* 3rd order on convection against AB2's 2nd.
+* **2 storage registers.** At `Nz`× the 2D footprint this is the binding
+  constraint; classical RK4 needs 4.
+* ~13% *fewer* implicit solves per unit physical time — 3 solves per step, but
+  the step is 3.46× larger.
+
+**Consequence for Stage 5:** the quantity to test against the measured stability
+window is `max_k 1/(β_k·dt)`, and the window must be found for *that*, not for
+`1.5/dt`. `lssem3d/timestep.py` exposes `a_mass_worst(dt)` for exactly this, and
+`lssem3d/tests/test_fourier.py` pins the 4× and the 15% so the correction cannot
+be quietly lost.
 
 Three ways out, none free, and the plan must pick one *with measurements* at
 Stage 5:
@@ -189,7 +228,9 @@ their imaginary parts asserted zero in debug builds — a nonzero imaginary part
 
     lssem3d/
       fourier.py     rfft/irfft wrappers, wavenumbers, dealias padding,
-                     Hermitian-symmetry assertions
+                     Hermitian-symmetry assertions          [BUILT, tested]
+      timestep.py    RKW3/Crank-Nicolson coefficients, implicit_coeff(dt, stage),
+                     a_mass_worst(dt)                       [BUILT, tested]
       lssem3d.py     apply_L / apply_LT for the 7-field (14 real) per-mode system
       convect.py     physical-space u·grad u, 3/2-rule dealiasing, CFL estimate
       solver3d.py    BDF + per-mode batched PCG, reusing lssem2d.solver where it
@@ -320,7 +361,7 @@ forcing.
 |---|---|
 | spatial convergence in `N` | spectral in `(x,y)`: error falls faster than any algebraic rate |
 | spectral convergence in `Nz` | exponential until round-off |
-| temporal order | BDF2 slope 2.0 ± 0.1 on `dt` refinement, as `TEMPORAL_ACCURACY_STUDY.md` |
+| temporal order | **RKW3 slope 3.0 ± 0.15** on `dt` refinement (not 2.0 — the scheme is 3rd order; measuring 2.0 means the `α/β/γ/ζ` table is mis-transcribed or Crank–Nicolson is limiting) |
 
 ### Stage 5 — the `a_mass` / CFL collision ⚑ **decision gate**
 
