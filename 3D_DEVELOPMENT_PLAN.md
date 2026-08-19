@@ -428,10 +428,34 @@ whose test is merely "looks reasonable".
 `z`-dependence, the 3D system must collapse to the 2D one: `w = ωx = ωy = 0`, and
 `(u, v, ωz, p)` must satisfy exactly the 2D equations.
 
+| test | criterion | status |
+|---|---|---|
+| operator | `apply_L3D` at `k_z`=0 vs `apply_L2D`, row by row | ✅ **≤ 1e−13**, `tests/test_stage1_vs_2d.py` |
+| adjoint | `⟨b, LᵀLa⟩ = ⟨a, LᵀLb⟩` to ≤ 1e−15 | ✅ |
+| Kovasznay | reproduces `KOVASZNAY_VALIDATION.md` | ✗ needs BC + solve |
+| **Ghia cavity** | RMS u = **1.568e−02** | ✗ needs BC + solve |
+
+The operator comparison earned its billing immediately: it is what exposed the
+missing quadrature weights (§1.2 note), a bug that every symmetry and
+adjointness test in the suite passed straight through, because those hold for
+the *unweighted* operator too. The row correspondence is
+
+| lssem2d row | lssem3d row at `k_z`=0 | sign |
+|---|---|---|
+| `su0` momentum x | 4 | + |
+| `su1` momentum y | 5 | + |
+| `su2` continuity | 0 | + |
+| `su3` vorticity | 3 | **−** |
+
+The sign on the vorticity row is a convention — lssem2d writes `ω − (v_x − u_y)`,
+lssem3d writes `(v_x − u_y) − ω_z`; both define the same `ω_z` and square to the
+same functional. It is asserted explicitly rather than absorbed into an absolute
+value, so a genuine sign error elsewhere still fails.
+
+*(superseded criteria, kept for the record)*
+
 | test | criterion |
 |---|---|
-| operator | `apply_L3D` at `k_z`=0 vs `apply_L2D` — **bit-identical**, or ≤ 1e−15 |
-| adjoint | `⟨b, LᵀLa⟩ = ⟨a, LᵀLb⟩` to ≤ 1e−15 (as `ARTIFICIAL_COMPRESSIBILITY.md` §2) |
 | Kovasznay | reproduces `KOVASZNAY_VALIDATION.md` to the digits published there |
 | **Ghia cavity Re=1000** | RMS u = **1.568e−02**, matching `ARTIFICIAL_COMPRESSIBILITY.md` §5.1 |
 
