@@ -58,8 +58,8 @@ proceedings**, and fig. 2 there is the profile comparison, not the grid.
    channel with a residual of 8e−02. Zero residual with an outflow gives no
    protection, so the discriminator looks like the **outflow boundary**, not the
    residual. Periodic channels lack both, so the evidence below cannot separate
-   them. See `3D_DEVELOPMENT_PLAN.md` §0.3 and `ARTIFICIAL_COMPRESSIBILITY.md`
-   §5.1.)* The original argument was:
+   them. **Resolved in `AMASS_RESOLVED.md`: the discriminator is the outflow
+   boundary.**)* The original argument was:
    `TEMPORAL_ACCURACY_STUDY.md` ran the channel at `a_mass` = 30 with no trouble,
    where the BFS diverges. Poiseuille/Stokes are exactly representable
    (`J = 5.94e-27`), so all four rows vanish together and the weighting is

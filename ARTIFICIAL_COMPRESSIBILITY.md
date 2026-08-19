@@ -332,6 +332,7 @@ weighting imbalance and an outflow boundary.
 > the discriminator, and it makes `GARTLING_VALIDATION.md` §8's residual
 > explanation unresolved rather than established — periodic channels lack an
 > outflow *and* have a zero residual, so its evidence could not separate the two.
+> Full evidence and resolution: **`AMASS_RESOLVED.md`**.
 
 Earlier text in this repo that
 states the threshold without that qualifier is over-general.
