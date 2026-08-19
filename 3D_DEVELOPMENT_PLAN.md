@@ -174,9 +174,53 @@ Stage 5:
 | AC with re-tuned `κ_p` | supplies the missing `a33`; worked to `a_mass` = 60 in 2D | untested in the Stokes-like operator; AC is numpy-only today |
 | Accept a floor on `dt` | stay under the threshold | may violate CFL → unstable convection. **May be infeasible**; this is the case to test first. |
 
-If none works, the fallback is semi-implicit convection (option 3 of the original
-question), which restores mode coupling and costs the decoupling. **Decide this
-at Stage 5, before writing any turbulence machinery.**
+### 0.5 Measured 2026-08-18: it is not convection, so semi-implicit is not a fallback
+
+`scratch/stokes_amass_probe.py` zeroes the linearisation (`fu = fv = 0`) so that
+`apply_L` becomes exactly the Stokes-like operator that explicit convection
+leaves behind — without modifying `lssem2d`. Same channel, parabolic inlet
+(Poiseuille *is* a Stokes solution, so the exact answer is unchanged):
+
+| operator | `a_mass` | outcome |
+|---|---|---|
+| linearised Navier–Stokes (convection **in** the functional) | 60 | BLEWUP @ step 33 |
+| **Stokes-like** (convection **removed**) | 60 | **BLEWUP @ step 29** |
+
+**Removing convection changes nothing.** Together with §0.3 — where a residual of
+≈ 0 failed at the same step as a residual of 8e−02 — three candidate causes are
+now excluded by measurement:
+
+| candidate | verdict |
+|---|---|
+| non-zero residual | **excluded** (§0.3: parabolic ≡ uniform, same step) |
+| convective term | **excluded** (§0.5: Stokes ≡ full NS, same step) |
+| **outflow boundary** | **only surviving explanation** |
+
+**Consequence: the fallback ladder in this plan was wrong and is replaced.**
+Semi-implicit convection cannot fix a failure that persists with no convection at
+all. The remaining options, in order of disruption:
+
+1. **Do nothing — if closed/periodic domains are exempt.** The `Re_τ` = 180
+   channel is periodic in `x` and `z` with walls in `y`: it has **no outflow
+   plane**. `ARTIFICIAL_COMPRESSIBILITY.md` §5.1 already showed the closed cavity
+   converging at `a_mass` = 30 where the BFS diverges at 12.1. If that exemption
+   extends to 600–6000, the entire problem is an outflow-BC artefact that the
+   target case never encounters. **This is the measurement in flight and it
+   decides everything below.**
+2. **AC.** Already extends the window; a channel run at `a_mass` = 600 with
+   `κ_p` = 300 survived 200 steps where AC-off fails at 60.
+3. **`w_mass ∝ dt`,** holding `a_mass` fixed, at the cost of `dt_eff = w_mom`
+   and a re-verification of temporal order.
+4. **Fractional-step / projection.** The real fallback if (1) fails. It does not
+   *have* the `a_mass` mechanism: continuity is enforced by a projection rather
+   than traded off against the momentum rows inside a functional, so there is no
+   weighting to get wrong. The cost is that it is a **different method, not an
+   extension** — it abandons the coupled least-squares VVP formulation and with
+   it every result validated in this repo, and brings its own splitting-error and
+   pressure-boundary-condition problems. Do not reach for it before (1) is
+   measured.
+
+**Decide at Stage 5, before writing any turbulence machinery.**
 
 ---
 
