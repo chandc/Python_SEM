@@ -334,8 +334,24 @@ their imaginary parts asserted zero in debug builds — a nonzero imaginary part
                      facade so the real CG applies unchanged [BUILT, tested]
       convect.py     explicit u.grad u with 3/2 dealiasing in z, CFL estimate
                      and max_dt_for_cfl                     [BUILT, tested]
-      solver3d.py    batched per-mode normal_op / PCG / probed Jacobi, and the
-                     RKW3-CN stage driver                   [BUILT, tested]
+      solver3d.py    batched per-mode normal_op / PCG / probed Jacobi, the
+                     RKW3-CN stage driver, gather-scatter assembly,
+                     multiplicity weighting                 [BUILT, tested]
+      bc.py          wall/lid/outflow/symmetry masking for 7 fields, values,
+                     pressure pinning                       [BUILT, tested]
+
+**The full assembled operator is** `A = M Qᵀ Q L₀ᵀ W L₀ M`. Three pieces of that
+were missing at one time or another and each failed silently:
+
+| missing piece | symptom | found by |
+|---|---|---|
+| `W` (quadrature weights) | wrong functional; symmetry and adjointness both still pass | Stage 1 comparison |
+| `Qᵀ Q` (gather-scatter) | elements disconnected, C⁰ never imposed; 20 000 CG iterations, no convergence | BC solve |
+| multiplicity weight in CG | interface nodes counted once per owning element | BC solve |
+
+A manufactured solution must also be **C⁰-continuous** — the assembled operator
+annihilates the discontinuous part, so a random *local* array is not recoverable.
+`solver3d.make_continuous` projects onto that subspace.
 
 **Standard array layout, fixed:** `U[e, i, j, var, k]` — the field axis is
 **second to last** and z-modes are **last**. Two separate bugs came from

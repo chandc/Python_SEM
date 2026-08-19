@@ -68,7 +68,7 @@ def test_pcg_is_exact_on_the_nonsingular_part(geom):
     mask[..., OP.P_, :] = 0.0                    # freeze p entirely: crude but
     mask[..., OP.NVAR + OP.P_, :] = 0.0          # sufficient to kill the null space
     x_exact = np.random.default_rng(4).standard_normal(_shape(m, len(kz)))*mask
-    b = S3.normal_op(x_exact, D, m.facx, m.facy, kz, NU, C, mask)
+    b = S3.normal_op(x_exact, D, m.facx, m.facy, kz, NU, C, mask=mask)
     x, it, _ = S3.pcg(b, D, m.facx, m.facy, kz, NU, C, mask=mask, tol=1e-13,
                       max_iter=8000)
     err = np.abs(x - x_exact).max()/np.abs(x_exact).max()
