@@ -46,6 +46,14 @@ RE, EX, N = 1000.0, 6, 10
 NU = 1.0/RE
 NZ, LZ = 1, 2.0*np.pi          # a single k_z = 0 mode
 GH = np.load('cavity_re1000_data.npz')
+# Ghia Table II: v(x) on the horizontal centreline y = 0.5, Re = 1000.
+# NOTE lssem2d/tests/plot_verification.py carries a DIFFERENT ghia_v -- Re=100.
+GHIA_XV = np.array([1.0000, 0.9688, 0.9609, 0.9531, 0.9453, 0.9063, 0.8594,
+                    0.8047, 0.5000, 0.2344, 0.2266, 0.1563, 0.0938, 0.0781,
+                    0.0703, 0.0625, 0.0000])
+GHIA_V = np.array([0.0000, -0.21388, -0.27669, -0.33714, -0.39188, -0.51550,
+                   -0.42665, -0.31966, 0.02526, 0.32235, 0.33075, 0.37095,
+                   0.32627, 0.30353, 0.29012, 0.27485, 0.0000])
 
 
 def lagrange(xn, xq):
@@ -74,6 +82,33 @@ def centreline_u(mesh, U, n):
     o = np.argsort(ys); ys, us = np.array(ys)[o], np.array(us)[o]
     k = np.concatenate(([True], np.diff(ys) > 1e-9))
     return ys[k], us[k]
+
+
+def centreline_v(mesh, U, n):
+    """v(x) on y = 0.5.  Tracking BOTH components is not optional: the 2D study
+    found RMS u improving while RMS v did not move, and it was the v column that
+    established AC is accuracy-NEUTRAL rather than better
+    (ARTIFICIAL_COMPRESSIBILITY.md sec 5.1).  A gate on u alone can be passed by
+    a solution that is wrong in v."""
+    xs, vs = [], []
+    for e in range(mesh.nelem):
+        yr = mesh.ynod[e]
+        if yr[0]-1e-9 <= 0.5 <= yr[-1]+1e-9:
+            L = lagrange(yr, 0.5)
+            for i in range(n):
+                xs.append(mesh.xnod[e, i])
+                vs.append(np.dot(L, U[e, i, :, OP.V_, 0]))
+    o = np.argsort(xs); xs, vs = np.array(xs)[o], np.array(vs)[o]
+    k = np.concatenate(([True], np.diff(xs) > 1e-9))
+    return xs[k], vs[k]
+
+
+def rms_both(mesh, U, n):
+    ys, us = centreline_u(mesh, U, n)
+    xs, vs = centreline_v(mesh, U, n)
+    ru = float(np.sqrt(np.mean((np.interp(GH['ghia_y'], ys, us)-GH['ghia_u'])**2)))
+    rv = float(np.sqrt(np.mean((np.interp(GHIA_XV[::-1], xs, vs)[::-1]-GHIA_V)**2)))
+    return ru, rv
 
 
 def run(cfl_target=0.8, tmax=25.0, kap_frac=1.0, nstep_cap=40000, tol=1e-9):
@@ -138,20 +173,17 @@ def run(cfl_target=0.8, tmax=25.0, kap_frac=1.0, nstep_cap=40000, tol=1e-9):
             status = f'NaN@{s_+1}'; break
         dUs = float(np.abs(U-Uold).max())
         if (s_+1) % 200 == 0 or s_ < 2:
-            ys, us = centreline_u(mesh, U, n)
-            rms = float(np.sqrt(np.mean((np.interp(GH['ghia_y'], ys, us)
-                                         - GH['ghia_u'])**2)))
+            ru, rv = rms_both(mesh, U, n)
             print(f'  step {s_+1:5d} t={dt*(s_+1):6.2f}  |dU| {dUs:.2e}  '
-                  f'cg/step {cg_tot/(s_+1):6.0f}  RMS {rms:.4e}  '
-                  f'{time.perf_counter()-t0:6.0f}s', flush=True)
+                  f'cg/step {cg_tot/(s_+1):6.0f}  RMS u {ru:.4e}  RMS v {rv:.4e}'
+                  f'  {time.perf_counter()-t0:6.0f}s', flush=True)
         if s_ > 3 and dUs < tol:
             status = 'conv'; break
 
-    ys, us = centreline_u(mesh, U, n)
-    rms = float(np.sqrt(np.mean((np.interp(GH['ghia_y'], ys, us)-GH['ghia_u'])**2)))
+    ru, rv = rms_both(mesh, U, n)
     np.savez(f'{SC}/cavity3d_kz0_rkw3.npz', U=U, xnod=mesh.xnod, ynod=mesh.ynod,
-             dt=dt, rms=rms, status=status, steps=s_+1, kappa_p=kap)
-    return rms, status, s_+1, time.perf_counter()-t0
+             dt=dt, rms=ru, rms_v=rv, status=status, steps=s_+1, kappa_p=kap)
+    return (ru, rv), status, s_+1, time.perf_counter()-t0
 
 
 if __name__ == '__main__':
@@ -161,6 +193,7 @@ if __name__ == '__main__':
     print(f'3D solver at k_z = 0, cavity Re={RE:g}, {EX}x{EX} N={N}, RKW3/CN')
     print(f'GATE: RMS u vs Ghia should approach 1.568e-02 '
           f'(the measured 2D value on this mesh)\n')
-    rms, status, steps, wall = run(cflt, tmax, kapf)
-    print(f'\nRMS u = {rms:.4e}   target 1.568e-02   ratio {rms/1.5682e-02:.3f}'
-          f'   [{status}, {steps} steps, {wall:.0f}s]')
+    (ru, rv), status, steps, wall = run(cflt, tmax, kapf)
+    print(f'\nRMS u = {ru:.4e}   target 1.568e-02   ratio {ru/1.5682e-02:.2f}')
+    print(f'RMS v = {rv:.4e}   target 2.079e-02   ratio {rv/2.0790e-02:.2f}')
+    print(f'[{status}, {steps} steps, {wall:.0f}s]')
