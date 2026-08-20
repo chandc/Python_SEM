@@ -10,7 +10,8 @@ import numpy as np
 import pytest
 from lssem2d.mesh import build_channel
 from lssem2d.lgl import diff_matrix
-from lssem3d import bc as BC, operator as OP, solver3d as S3
+from lssem3d import bc as BC
+from lssem3d import solver3d as S3, operator as OP
 
 N, EX, NK = 4, 2, 3
 
@@ -148,3 +149,85 @@ def test_masked_solve_recovers_a_known_solution(cav):
                        mask=mask, tol=1e-13, max_iter=20000, wq=cav.wq)
     err = np.abs(xs - x).max()/np.abs(x).max()
     assert err < 1e-5, f'rel err {err:.3e} after {it} iters'
+
+
+# ------------------------------- pinning on a shared / periodic node
+
+def _periodic_mesh(N=4, ex=2, ey=2, both=True):
+    from lssem2d.mesh import build_channel
+    L = 2.0*np.pi
+    m = build_channel(L, L, ex, ey, N, bcs=(0, 0, 0, 0))
+    m.periodic_x = L
+    if both:
+        m.periodic_y = L
+    m.compute_global_indices()
+    return m
+
+
+def test_pin_dof_covers_every_copy_of_a_shared_node():
+    """A pin must prescribe the GLOBAL dof, i.e. all of its local copies.
+
+    `mask[0,0,0,f,k] = 0` prescribes ONE copy.  On a periodic seam that node is
+    shared 2 or 4 ways, so the siblings stay free: the dof is not pinned at all,
+    and the mask disagrees with itself across copies of one global node.
+    """
+    m = _periodic_mesh()
+    nk = 1
+    mask = np.ones((m.nelem, m.N+1, m.N+1, OP.NVAR_R, nk))
+    mult = S3.gs(m, np.ones_like(mask))
+    assert mult[0, 0, 0, OP.P_, 0] > 1.5, 'test needs a SHARED node to be meaningful'
+    BC.pin_dof(m, mask, OP.P_, 0)
+    ind = np.zeros_like(mask)
+    ind[0, 0, 0, OP.P_, 0] = 1.0
+    copies = S3.gs(m, ind) > 0.5
+    assert copies.sum() > 1, 'node is not actually shared'
+    assert np.all(mask[copies] == 0.0), 'a sibling copy was left free'
+
+
+def test_assembled_operator_is_symmetric_on_a_periodic_mesh():
+    """CG requires a symmetric A, and a one-copy pin destroys it.
+
+    Tested on the CONTINUOUS subspace: a random LOCAL array is discontinuous,
+    the assembled operator does not act on it meaningfully, and a symmetry test
+    built from one would report failure for a correct operator.  (The pre-
+    existing symmetry tests pass mesh=None and so never exercised assembly.)
+
+    Measured before the fix: 1.5e-07 with multiplicity 2, 5.9e-05 with 4.
+    """
+    from lssem2d.lgl import diff_matrix
+    m = _periodic_mesh()
+    D = diff_matrix(m.N)
+    nk = 1
+    kz = np.zeros(nk)
+    mask = BC.build_mask(m, nk, pin_p=True, nz=1)
+    mw = S3.multiplicity_weight(m, mask.shape)
+    rng = np.random.default_rng(0)
+    a, b = (S3.make_continuous(m, rng.standard_normal(mask.shape))*mask
+            for _ in range(2))
+    f = lambda v: S3.normal_op(v, D, m.facx, m.facy, kz, 0.1, 60.0, m, mask,
+                               m.wq, 0.0)
+    s1 = float(np.sum(b*f(a)*mw))
+    s2 = float(np.sum(a*f(b)*mw))
+    assert abs(s1 - s2)/abs(s1) < 1e-12, f'assembled operator not symmetric: {abs(s1-s2)/abs(s1):.3e}'
+
+
+def test_one_copy_pin_would_break_symmetry():
+    """Negative control: the fix must be load-bearing."""
+    from lssem2d.lgl import diff_matrix
+    m = _periodic_mesh()
+    D = diff_matrix(m.N)
+    nk = 1
+    kz = np.zeros(nk)
+    bad = BC.build_mask(m, nk, pin_p=False, nz=1)
+    bad[0, 0, 0, OP.P_, 0] = 0.0                 # the old, single-copy pin
+    mw = S3.multiplicity_weight(m, bad.shape)
+    rng = np.random.default_rng(0)
+    a, b = (S3.make_continuous(m, rng.standard_normal(bad.shape))*bad
+            for _ in range(2))
+    f = lambda v: S3.normal_op(v, D, m.facx, m.facy, kz, 0.1, 60.0, m, bad,
+                               m.wq, 0.0)
+    s1 = float(np.sum(b*f(a)*mw))
+    s2 = float(np.sum(a*f(b)*mw))
+    assert abs(s1 - s2)/abs(s1) > 1e-9, (
+        'a one-copy pin did NOT break symmetry -- this mesh has no shared '
+        'pinned node, so the test above proves nothing')

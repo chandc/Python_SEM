@@ -55,8 +55,8 @@ def setup(N=8, ex=4, ey=4, nz=16, re=180.0, lz=2.0*np.pi, pin_kz0_only=True):
     m.compute_global_indices()
     nk = nz//2 + 1
     mask = BC.build_mask(m, nk, pin_p=False, nz=nz)
-    mask[0, 0, 0, OP.P_, 0] = 0.0
-    mask[0, 0, 0, OP.NVAR + OP.P_, 0] = 0.0
+    BC.pin_dof(m, mask, OP.P_, 0)            # ALL copies (periodic seam)
+    BC.pin_dof(m, mask, OP.NVAR + OP.P_, 0)
     if not pin_kz0_only:
         mask[0, 0, 0, OP.P_, :] = 0.0
         mask[0, 0, 0, OP.NVAR + OP.P_, :] = 0.0

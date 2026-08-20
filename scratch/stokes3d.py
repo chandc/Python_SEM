@@ -55,8 +55,8 @@ def setup(N=8, ex=2, ey=4, nz=8, lz=2.0*np.pi):
     m.compute_global_indices()
     nk = nz//2 + 1
     mask = BC.build_mask(m, nk, pin_p=False, nz=nz)
-    mask[0, 0, 0, OP.P_, 0] = 0.0            # pressure constant, k_z = 0 only
-    mask[0, 0, 0, OP.NVAR + OP.P_, 0] = 0.0
+    BC.pin_dof(m, mask, OP.P_, 0)            # pressure constant, k_z = 0 only
+    BC.pin_dof(m, mask, OP.NVAR + OP.P_, 0)  # ALL copies (periodic seam)
     n = N+1
     X = np.empty((m.nelem, n, n)); Y = np.empty_like(X)
     for e in range(m.nelem):

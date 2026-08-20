@@ -8,7 +8,7 @@ code reuses `lssem2d.mesh`, `lssem2d.lgl` and `lssem2d.assembly.gather_scatter`
 by calling them, never by editing them. Every place the 2D API did not fit was
 worked around on the 3D side (see §2.4).
 
-**Suite: 144 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`).
+**Suite: 147 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`).
 
 | milestone | state | evidence |
 |---|---|---|
@@ -158,7 +158,7 @@ bug that is not there.
 
 ## 2. What the gate actually caught — a taxonomy of silent failures
 
-This is the part worth keeping. **Eleven distinct bugs so far, and not one
+This is the part worth keeping. **Twelve distinct bugs so far, and not one
 raised an exception.** Every one produced a plausible array of the right shape.
 Eight are below; the ninth is §5, and the tenth and eleventh are §2.5.
 
@@ -878,6 +878,85 @@ speed on a harder problem.
 * **Row weights everywhere**: only the Stokes rig passes `rw` today. The cavity
   and channel drivers, and the M2/Stage 5 results, still run unweighted.
 
+## 7C. BC review: the pressure pin covered one copy of a shared node
+
+A twelfth silent bug, found by reviewing the boundary conditions on the periodic
+seam — and it was masking the measurement §7D needed.
+
+`mask[0,0,0,P_,k] = 0` prescribes **one local copy**. On a mesh where that node
+is shared it is the wrong operation:
+
+| mesh | multiplicity of the pinned node | copies pinned |
+|---|---|---|
+| cavity (no periodicity) | 1 | 1 ✓ |
+| channel (`periodic_x`) | **2** | 1 ✗ |
+| Taylor–Green (`periodic_x` + `periodic_y`) | **4** | 1 ✗ |
+
+Two consequences: the global dof is **not pinned** (its siblings still carry it),
+and the mask **disagrees with itself across copies of one global node** — so `M`
+is not well defined on the global space and `A = M Qᵀ Q Lᵀ W L M` stops being
+symmetric. CG was being run on a non-symmetric operator.
+
+Measured on the **continuous** subspace — and that qualifier is the reason this
+went unnoticed:
+
+| | symmetry error |
+|---|---|
+| cavity, multiplicity 1 | 1.1e−15 |
+| channel, multiplicity 2 | **1.5e−07** |
+| Taylor–Green, multiplicity 4 | **5.9e−05** |
+| Taylor–Green, all copies pinned | **0.0e+00** |
+
+**Why the suite missed it.** Both existing symmetry tests call `normal_op` with
+`mesh=None`, so the *assembled* operator's symmetry had never been tested at all.
+And a test built from random **local** vectors would have reported failure for a
+correct operator, because the assembled operator only acts meaningfully on the
+continuous subspace — my own first attempt at this test made exactly that
+mistake and had to be discarded.
+
+Fixed by `bc.pin_dof`, which marks every copy via `gs` of a one-hot array. Three
+regression tests added, including a negative control asserting that a one-copy
+pin really does break symmetry — otherwise the exactness test proves nothing.
+
+---
+
+## 7D. Taylor–Green: order 2.00 with CONVECTION ACTIVE
+
+The last unverified path of the time-splitting. Raised in review: the RK3
+convective half had never been order-tested through the PDE. The order-2.00
+Stokes capstone runs with **convection switched off by construction**, and the
+3.025 explicit-only result runs on a scalar model that bypasses
+`rhs_explicit → convective() → stage-RHS assembly` entirely.
+
+Taylor–Green decay on a doubly-periodic box is an exact unsteady Navier–Stokes
+solution where `u·∇u` is non-zero and balanced **pointwise** by the pressure
+gradient — the coupling Stokes cannot exercise:
+
+```
+u = −cos x sin y·F(t),  v = sin x cos y·F(t),  F = e^{−2νt}
+ω_z = 2 cos x cos y·F,  p = −¼(cos 2x + cos 2y)·F²
+```
+
+N = 12, 3×3 elements, ν = 0.1, `t` = 0.4:
+
+| `dt` | 0.1 | 0.05 | 0.025 | 0.0125 | order |
+|---|---|---|---|---|---|
+| L2 velocity error | 2.53e−06 | 6.33e−07 | 1.58e−07 | 3.95e−08 | **2.00, 2.00, 2.00** |
+
+**The splitting is verified end to end.** Two supporting results:
+
+* **`CV.convective` is spectrally exact** against the analytic `u·∇u`:
+  9.70e−05 → 5.50e−07 → 4.46e−12 → 4.88e−13 for N = 6→16. Previously it was
+  only checked against hand-built special cases.
+* **`mesh.periodic_y` works** — this is its first user in the repo. `div u` of
+  the exact state falls spectrally to 4.9e−13 and gather-scatter continuity is
+  machine-zero.
+
+Before the §7C fix this same test read **6.0e−04 and order 0.04**: the pin bug
+was a 240× error floor that made the measurement impossible.
+
+---
+
 ## 8. What is next
 
 Reordered by §7A.2. The AC accuracy programme is largely dissolved: it was
@@ -1009,7 +1088,7 @@ in a converged solve); the 2D and 3D suites pass, `test_stage1_vs_2d` included.
 | `solver3d.py` | gather-scatter, multiplicity weight, `normal_op`, batched `pcg`, `rkw3_step` |
 | **`parallel.py`** | **mode-parallel `apply_op` and `pcg` (§3.4)** |
 
-### Tests — 144, all passing
+### Tests — 147, all passing
 
 ```
 uv run --quiet python -m pytest lssem3d/tests -q

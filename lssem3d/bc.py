@@ -30,6 +30,7 @@ domain with a `bc == 4` outflow already fixes p and needs no pin.
 import numpy as np
 from . import operator as OP
 from . import fourier as FR
+from lssem2d.assembly import gather_scatter
 
 VEL = (OP.U_, OP.V_, OP.W_)
 WALLISH = (1, 2, 3)
@@ -41,6 +42,37 @@ def _edges(mesh, e):
             (mesh.bc[e, 1], (e, -1, slice(None))),       # E
             (mesh.bc[e, 2], (e, slice(None), 0)),        # S
             (mesh.bc[e, 3], (e, slice(None), -1)))       # N
+
+
+def pin_dof(mesh, mask, field, mode=0, elem=0, i=0, j=0):
+    """Prescribe ONE GLOBAL dof by zeroing EVERY LOCAL COPY of it.
+
+    Setting `mask[elem, i, j, field, mode] = 0` prescribes a single local copy.
+    On a mesh where that node is shared -- an element interface, and in
+    particular a PERIODIC seam -- its siblings are still free, so:
+
+      * the dof is not actually pinned (the siblings carry it), and
+      * the mask is INCONSISTENT across copies of one global node, which breaks
+        the symmetry of A = M Q^T Q L^T W L M.  M is then not well defined on
+        the global space, and CG is being run on a non-symmetric operator.
+
+    Measured on the continuous subspace (the space the assembled operator acts
+    on -- random LOCAL vectors are discontinuous and cannot test this):
+
+        cavity, no periodicity, node multiplicity 1   sym err 1.1e-15
+        channel, periodic x,    multiplicity 2        sym err 1.5e-07
+        Taylor-Green, periodic x and y, mult 4        sym err 5.9e-05
+        Taylor-Green, all copies pinned               sym err 0.0e+00
+
+    `gs` of a one-hot array marks exactly the copies of that global node, which
+    is why it is the right instrument here.
+    """
+    ind = np.zeros(mask.shape)
+    ind[elem, i, j, field, mode] = 1.0
+    nel, n, _, nv, nk = ind.shape
+    spread = gather_scatter(mesh, ind.reshape(nel, n, n, nv*nk)).reshape(ind.shape)
+    mask[spread > 0.5] = 0.0
+    return mask
 
 
 def real_mode_columns(nmode, nz=None):
@@ -116,8 +148,12 @@ def build_mask(mesh, nmode, pin_p=False, nz=None):
             elif code == 5:
                 freeze(idx, (OP.V_, OP.OZ_))
     if pin_p:
-        mask[0, 0, 0, OP.P_, :] = 0.0
-        mask[0, 0, 0, OP.NVAR + OP.P_, :] = 0.0
+        # EVERY local copy of the pinned node, not just one -- see pin_dof.
+        # Harmless where the node is unshared (the cavity corner, multiplicity
+        # 1); essential on a periodic mesh, where it is shared 2 or 4 ways.
+        for _k in range(nmode):
+            pin_dof(mesh, mask, OP.P_, _k)
+            pin_dof(mesh, mask, OP.NVAR + OP.P_, _k)
     return mask
 
 
