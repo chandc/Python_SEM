@@ -71,7 +71,7 @@ worth re-deriving rather than inheriting:
 | "RKW3 temporal slope 3.0 ± 0.15" | Unachievable. Explicit-only **3.025**, CN-only **2.002**, mixed **2.189** — the table is right and CN is the limiter. No correct implementation could pass (§4.2) |
 | "iterations should fall with `k_z`; flat means a bad preconditioner" | Flat is *correct* at production `a_mass`: `ν·k_z²` = 1.42 against `a_mass` = 1200. Competing would need `k_z` ≈ 465; the largest available is 64 (§6) |
 | "M5 feasibility closed in the affirmative" | Closed on **2D** evidence, for a plan whose own risk register rates that transfer as *high* risk. Re-measured in 3D, it does pass — but it did not before (§7) |
-| "AC is the enabling technology" | True for the 2D **outflow** case. In `lssem3d` it was true only because the least-squares functional had no row weights: AC was lifting the continuity row to compensate. With row weights the AC-free system solves in 22047 CG iterations instead of saturating at 600000 (§7A.2) |
+| "AC is the enabling technology" | True for the 2D **outflow** case, and true for the 3D cavity (25 CG/step with AC against 12320 without). **Not** true for the ν = 1 Stokes benchmark under legacy weighting, where the AC-free system solves in 22047. AC's value is Reynolds-number dependent (§7A.2b) |
 | "`κ_p` = `a_mass`" (inherited from the 2D steady studies) | Cost a **12.5% error in the Stokes decay rate** at every `dt`. Part initial-condition artifact, the rest a symptom of the scaling bug — not a fundamental accuracy/cost trade (§7A.3) |
 
 ### L4. Measure the mechanism, not just the symptom
@@ -687,7 +687,11 @@ true *rate* toward the scheme's own limit, and that limit was simply wrong (L5).
 error **12.5% → 1.0%**. So most of the headline number was an initial-condition
 artifact, and only ~1% was attributable to AC.
 
-### 7A.2 ROOT CAUSE: the least-squares functional had no row weights
+### 7A.2 CAUSE: `lssem3d` hard-coded one row weighting, and it is the wrong one for this benchmark
+
+**This subsection was originally written as "ROOT CAUSE: the functional had no
+row weights", i.e. as a bug. That was overreach, corrected below in §7A.2b after
+the cavity re-run contradicted it.**
 
 The question that broke it open: at `k_z` = 0 the 3D system **is** the 2D system
 (Stage 1 proves the operator), so why can `lssem2d` solve the AC-free problem
@@ -718,7 +722,58 @@ Stokes decay, AC **off**, `dt` = 5e−3, σ_exact = 9.3137399:
 | no row weights | 9.31809 | 4.68e−04 | **600000** (cap saturated) |
 | **row weights** | **9.31413** | **4.19e−05** | **22047** (converged) |
 
-**27× fewer CG iterations and 11× more accurate.**
+**27× fewer CG iterations and 11× more accurate — on this benchmark.** The
+qualifier is not decorative; see §7A.2b.
+
+### 7A.2b CORRECTION: the weighting is a problem-dependent choice, not a bug
+
+Re-running the M2 cavity with row weights **contradicted the framing above** and
+forced a re-reading of `lssem2d`.
+
+`lssem2d` supports **two** weightings, not one:
+
+| setting | `a_mass` | `a_flux` | used by |
+|---|---|---|---|
+| legacy (both `None`) | `fac1` = 1 | `dt` | the **Chan (1996) Stokes-decay validation** |
+| `w_mom` = 1 | `fac1/dt` | 1 | the cavity / BFS / `a_mass` studies |
+
+**`lssem3d`'s original scaling is exactly the `w_mom` = 1 setting** — a
+legitimate, well-used 2D configuration, not a defect. What `lssem3d` lacked was
+the *option*: it hard-coded one of the two, and the one it hard-coded is not the
+one the Stokes benchmark uses. That is why the 3D code could not reproduce a 2D
+result the 2D code produces routinely.
+
+**Which weighting wins is problem-dependent**, and the two benchmarks disagree
+sharply. Cavity, Re = 1000, `dt` = 1.74e−3, CG per step:
+
+| row weights (legacy) | `κ_p` | CG/step |
+|---|---|---|
+| **off** (`w_mom` = 1, original) | `a_mass` | **25** |
+| on | `a_mass` | 688 |
+| on | 10 | 1028 |
+| on | 1 | 5519 |
+| on | 0 | 12320 |
+
+Legacy weighting is **27× worse at best** on the cavity, while it is what makes
+the Stokes case solvable at all. The plausible discriminant is viscosity: legacy
+scales the momentum row to `u + β·dt·(p_x + ν∇×ω)`, and at ν = 1e−3 with
+β·dt ≈ 3e−4 the vorticity coupling is ~3e−7 — effectively absent. At ν = 1
+(Stokes) it is not.
+
+**Consequences for the claims in §7A.3:**
+
+* "AC was never a solver requirement" — **true only for the ν = 1 Stokes case.**
+  On the cavity, AC is worth 25 CG/step against 12320 without it. AC's value is
+  Reynolds-number dependent and it is **not** dispensable.
+* "correctly weighted, AC is slower as well as less accurate" — **withdrawn.**
+  That was measured on Stokes alone and does not generalise.
+* The order-2.00 result (§7A.5) stands: it is a statement about the Stokes
+  benchmark under legacy weighting, which is the configuration it was measured in
+  and the one the 2D reference uses.
+
+**What is actually established:** `rw` gives `lssem3d` the second weighting it was
+missing, the Stokes benchmark now reproduces at its design order, and **choosing
+the weighting per problem is an open design question** — exactly as it is in 2D.
 
 ### 7A.3 What this does to the AC findings
 

@@ -49,28 +49,34 @@ reproduces the 2D cavity at `k_z` = 0 (M2), MMS convergence is spectral in `N`
 and exponential in `Nz` (M4), and the `a_mass`/CFL feasibility gate passes in 3D
 with a window spanning ~66× in `dt` (M5).
 
-## 5. The improvement that mattered most: row weights in the least-squares functional
+## 5. Row weights: the second least-squares scaling, which `lssem3d` lacked
 
 `lssem2d` writes the momentum row as `a_mass·u + a_flux·N(u)` with the
 constraints at weight 1 — so **`a_flux` is the weight of momentum against the
 constraints**, and its legacy setting (`a_mass` = 1, `a_flux` = `dt`) makes every
 row O(1).
 
-`lssem3d` had **no row weighting at all**. Momentum rows carried
-`c = 1/(β_k·dt)` against O(1) constraints; the functional squares them, so at
-`dt` = 5e−3 momentum outweighed continuity by `c²` ≈ 1.4×10⁶. The minimiser
-effectively ignored `div u`.
+`lssem2d` offers **two** scalings: legacy (`a_mass` = 1, `a_flux` = `dt`), which
+the Chan validation uses, and `w_mom` = 1 (`a_mass` = `fac1/dt`, `a_flux` = 1),
+which the cavity and BFS studies use. **`lssem3d` hard-coded the second and had
+no way to express the first** — which is why it could not reproduce a 2D result
+the 2D code produces routinely.
 
 | Stokes decay, AC off, `dt` = 5e−3 | σ | rel err | CG |
 |---|---|---|---|
 | no row weights | 9.31809 | 4.68e−04 | 600000 (cap) |
 | **row weights** | **9.31413** | **4.19e−05** | **22047** |
 
-**27× fewer iterations, 11× more accurate.** This one fix dissolved a large body
-of apparent findings about artificial compressibility: AC's "63× conditioning
-benefit", the unsolvability of the AC-free 3D system, and AC's measured accuracy
-cost were all downstream of the missing weights. AC had been compensating for the
-scaling by lifting the continuity row.
+**27× fewer iterations, 11× more accurate — on this benchmark.**
+
+**The weighting is a problem-dependent choice, not a universal fix.** On the
+Re = 1000 cavity the legacy scaling is *27× worse* (688 CG/step against 25), and
+AC there is worth 25 against 12320 without it. The plausible discriminant is
+viscosity: legacy scales the momentum row to `u + β·dt·(p_x + ν∇×ω)`, and at
+ν = 1e−3 that vorticity coupling is ~3e−7, effectively absent. So AC's value is
+Reynolds-number dependent and AC is **not** dispensable — an earlier claim to the
+contrary, drawn from the Stokes case alone, is withdrawn. Choosing the weighting
+per problem is an open design question, exactly as in 2D.
 
 ## 6. Accuracy: the scheme now hits its design order
 
@@ -87,9 +93,9 @@ Exactly the design order — RK3's third order applies to the explicit half alon
 at 2. This is the **first PDE-level confirmation**: the earlier temporal gate ran
 on a scalar model with no pressure and no constraint rows.
 
-**Production configuration: row weights, no operator-AC.** At `dt` = 0.01 AC-off
-costs 17203 CG against AC-on's 24471 — correctly weighted, AC is slower *and*
-less accurate.
+**For the Stokes benchmark** the configuration is legacy row weights with no
+operator-AC. That does **not** transfer to the cavity or to high Reynolds number
+(§5) — a general production recipe is not yet established.
 
 ## 7. Performance
 

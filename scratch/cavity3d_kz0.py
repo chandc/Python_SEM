@@ -130,11 +130,17 @@ def run(cfl_target=0.8, tmax=25.0, kap_frac=1.0, nstep_cap=40000, tol=1e-9):
     U = np.zeros(shape)
     BC.apply_values(mesh, U, NZ, lid_speed=1.0, pin_p=True)
 
+    # Row weights: lssem2d's legacy least-squares scaling, without which the
+    # momentum rows outweigh the constraints by c^2 (3D_STATUS.md sec 7A.2).
+    RWS = [OP.momentum_row_weights(c) if ROWWEIGHT else None for c in cs]
+    _fw = lambda rw, n2: (1.0 if rw is None
+                          else np.concatenate([rw, rw]).reshape((1, 1, 1, n2, 1)))
+
     t0 = time.perf_counter(); Minv = []
-    for c in cs:
+    for k, c in enumerate(cs):
         d = S3.jacobi_diagonal(shape, D, mesh.facx, mesh.facy, kz, NU, c,
-                               mesh, mask, mesh.wq, kap)
-        Minv.append(np.where(np.abs(d) > 1e-300, 1.0/np.where(d == 0, 1, d), 0.0))
+                               mesh, mask, mesh.wq, kap, rw=RWS[k])
+        Minv.append(S3.jacobi_inverse(d, mask))
     print(f'  jacobi probed (3 stages) in {time.perf_counter()-t0:.0f}s', flush=True)
 
     wqR = mesh.wq[..., None, None]
@@ -159,12 +165,13 @@ def run(cfl_target=0.8, tmax=25.0, kap_frac=1.0, nstep_cap=40000, tol=1e-9):
             f = np.concatenate([fc.real, fc.imag], axis=-2)
 
             r = OP.apply_LT(OP.apply_L(U, D, mesh.facx, mesh.facy, kz, NU, c,
-                                       mesh.wq, kap) - f*wqR,
+                                       mesh.wq, kap, RWS[k])
+                            - f*wqR*_fw(RWS[k], f.shape[-2]),
                             D, mesh.facx, mesh.facy, kz, NU, c, kap)
             b = -S3.gs(mesh, r)*mask
             dU, it, _ = S3.pcg(b, D, mesh.facx, mesh.facy, kz, NU, c, mesh=mesh,
                                mask=mask, M_inv=Minv[k], tol=1e-8,
-                               max_iter=20000, wq=mesh.wq, kap=kap)
+                               max_iter=20000, wq=mesh.wq, kap=kap, rw=RWS[k])
             U = U + dU
             cg_tot += it
             Nprev = Nk
@@ -181,10 +188,13 @@ def run(cfl_target=0.8, tmax=25.0, kap_frac=1.0, nstep_cap=40000, tol=1e-9):
             status = 'conv'; break
 
     ru, rv = rms_both(mesh, U, n)
-    np.savez(f'{SC}/cavity3d_kz0_rkw3.npz', U=U, xnod=mesh.xnod, ynod=mesh.ynod,
+    np.savez(f'{SC}/cavity3d_kz0_rkw3{TAG}.npz', U=U, xnod=mesh.xnod, ynod=mesh.ynod,
              dt=dt, rms=ru, rms_v=rv, status=status, steps=s_+1, kappa_p=kap)
     return (ru, rv), status, s_+1, time.perf_counter()-t0
 
+
+ROWWEIGHT = 'rw' in sys.argv
+TAG = ('_rw' if ROWWEIGHT else '') + ('_noac' if '0.0' in sys.argv[3:4] else '')
 
 if __name__ == '__main__':
     cflt = float(sys.argv[1]) if len(sys.argv) > 1 else 0.8

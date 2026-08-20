@@ -114,8 +114,15 @@ def _set_vorticity(s, Uc):
     Uc[..., OP.OZ_, :] = ux(v) - uy(u)
 
 
+def _fw(rw, nrow2):
+    """Row weights broadcast onto the split-real f array (real rows then imag)."""
+    if rw is None:
+        return 1.0
+    return np.concatenate([rw, rw]).reshape((1, 1, 1, nrow2, 1))
+
+
 def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
-          Minv=None, nsub=1, sub_tol=1e-10):
+          Minv=None, nsub=1, sub_tol=1e-10, rw=None):
     """One RKW3/CN stage with AC and the body force.
 
     The body force is a constant, so it rides in the EXPLICIT term: per stage the
@@ -166,13 +173,17 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
     for _ in range(max(1, nsub)):
         fc[..., 0, :] = kap*p_prev
         f = np.concatenate([fc.real, fc.imag], axis=-2)
+        # f must carry the SAME row weighting as the operator, or the defect
+        # correction solves a different problem than apply_L represents.
         r = OP.apply_LT(
-            OP.apply_L(Uit, D, m.facx, m.facy, kz, nu, c, m.wq, kap) - f*wqR,
+            OP.apply_L(Uit, D, m.facx, m.facy, kz, nu, c, m.wq, kap, rw)
+            - f*wqR*_fw(rw, f.shape[-2]),
             D, m.facx, m.facy, kz, nu, c, kap)
         b = -S3.gs(m, r)*mask
         dU, it, _ = PAR.pcg(b, D, m.facx, m.facy, kz, nu, c, mesh=m, mask=mask,
                             M_inv=None if Minv is None else Minv[k], tol=tol,
-                            max_iter=max_iter, wq=m.wq, kap=kap, workers=workers)
+                            max_iter=max_iter, wq=m.wq, kap=kap, workers=workers,
+                        rw=rw)
         Uit = Uit + dU
         its += it
         nit += 1
@@ -184,13 +195,15 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
     return Uit, Nk, its
 
 
-def make_precond(s, dt, kap):
+def make_precond(s, dt, kap, rowweight=False):
     shape = (s['m'].nelem, s['N']+1, s['N']+1, OP.NVAR_R, s['nk'])
     out = []
     for k in range(T.NSTAGE):
+        cc = T.implicit_coeff(dt, k)
+        rw = OP.momentum_row_weights(cc) if rowweight else None
         d = S3.jacobi_diagonal(shape, s['D'], s['m'].facx, s['m'].facy, s['kz'],
-                               s['nu'], T.implicit_coeff(dt, k), s['m'],
-                               s['mask'], s['m'].wq, kap)
+                               s['nu'], cc, s['m'],
+                               s['mask'], s['m'].wq, kap, rw=rw)
         # jacobi_inverse, not 1/max(d, 1e-30): the clamp puts 1e30 on every
         # PRESCRIBED dof (diagonal exactly 0) and survives only because the
         # masked residual happens to be exactly zero.
@@ -198,10 +211,11 @@ def make_precond(s, dt, kap):
     return out
 
 
-def step(s, U, Nprev, dt, kap, **kw):
+def step(s, U, Nprev, dt, kap, rowweight=False, **kw):
     its = 0
     for k in range(T.NSTAGE):
-        U, Nprev, it = stage(s, U, Nprev, k, dt, kap, **kw)
+        rw = OP.momentum_row_weights(T.implicit_coeff(dt, k)) if rowweight else None
+        U, Nprev, it = stage(s, U, Nprev, k, dt, kap, rw=rw, **kw)
         its = max(its, it)
     return U, Nprev, its
 

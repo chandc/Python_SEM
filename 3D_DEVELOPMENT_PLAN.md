@@ -265,7 +265,7 @@ all. The remaining options, in order of disruption:
 
 ---
 
-## 0.7 Measured 2026-08-19: the least-squares functional needs ROW WEIGHTS
+## 0.7 Measured 2026-08-19: `lssem3d` needs BOTH of lssem2d's row weightings
 
 Found while asking why `lssem3d` could not reproduce the 2D Stokes-decay
 validation. `3D_STATUS.md` §7A.2.
@@ -276,7 +276,12 @@ momentum against the constraints**. Its legacy setting — the one the Chan (199
 Fig. 1 validation runs — is `a_mass = fac1 = 1`, `a_flux = dt`: every row O(1) in
 the velocity.
 
-A 3D implementation that omits this carries momentum rows scaled by
+`lssem2d` offers two scalings — legacy above, and `w_mom` = 1 giving
+`a_mass = fac1/dt`, `a_flux` = 1, which its cavity and BFS studies use.
+`lssem3d` hard-coded the **second** and could not express the first, which is why
+it could not reproduce the Chan validation.
+
+Under the `w_mom` = 1 scaling an implementation carries momentum rows scaled by
 `c = 1/(β_k·dt)` against O(1) constraint rows. The functional squares them, so at
 `dt` = 5e−3 momentum outweighs continuity by `c²` ≈ 1.4×10⁶: the minimiser
 ignores `div u` and the normal operator is unusable. Measured on Stokes decay
@@ -291,8 +296,11 @@ to the explicit half alone; Crank–Nicolson caps the mixed scheme at 2), and it
 the first PDE-level confirmation — Stage 4's gate ran on a scalar model with no
 pressure and no constraint rows. Operator-AC at `κ_p` ∝ 1/`dt` sits at 6.1e−03
 with **zeroth** order for comparison, and now costs *more* CG iterations than
-AC-off (24471 vs 17203 at `dt` = 1e−2). **Production configuration: row weights,
-no operator-AC.**
+AC-off (24471 vs 17203 at `dt` = 1e−2). **For the Stokes benchmark** the configuration is legacy
+row weights with no operator-AC. **This does not generalise:** on the Re = 1000
+cavity the legacy scaling is 27x worse (688 CG/step vs 25) and AC is worth 25
+against 12320 without it. Which weighting to use, and whether AC is wanted, are
+**problem-dependent and still open** -- see `3D_STATUS.md` §7A.2b.
 
 **Consequence for this plan's AC story.** §0.3's "AC is the enabling technology"
 holds for the 2D *outflow* case, but in 3D AC was largely compensating for this

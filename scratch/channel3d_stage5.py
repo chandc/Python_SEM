@@ -55,22 +55,24 @@ def dt_for_cfl(s, U, target=None):
                                    s['lz'], s['nz'], target))
 
 
-def run_case(dt, kind, ac, nstep=NSTEP, grid=None, verbose=True):
+def run_case(dt, kind, ac, nstep=NSTEP, grid=None, verbose=True,
+             rowweight=False):
     s = C.setup(**(grid or GRID))
     U = C.initial_state(s, amp=AMP if kind == 'perturbed' else 0.0)
     a_mass = T.a_mass_worst(dt)
     kap = a_mass if ac else 0.0
-    Minv = C.make_precond(s, dt, kap)
+    Minv = C.make_precond(s, dt, kap, rowweight=rowweight)
     Nprev = np.zeros(OP.to_complex(U).shape[:-2] + (3, s['nk']), dtype=complex)
 
     e0 = C.perturbation_energy(s, U)
     rec = dict(dt=dt, a_mass=a_mass, kind=kind, ac=bool(ac), kap=kap,
+               rowweight=bool(rowweight),
                cfl0=C.cfl(s, U, dt), dt_cfl=dt_for_cfl(s, U), e0=e0,
                grid=grid or GRID, nstep=nstep)
     status, hist, t0 = 'OK', [], time.perf_counter()
     for i in range(nstep):
         U, Nprev, it = C.step(s, U, Nprev, dt, kap, Minv=Minv, tol=1e-9,
-                              max_iter=4000)
+                              max_iter=4000, rowweight=rowweight)
         if not np.all(np.isfinite(U)):
             status = 'BLEWUP'; break
         e = C.perturbation_energy(s, U)
@@ -95,10 +97,14 @@ if __name__ == '__main__':
     dt = float(sys.argv[1])
     kind = sys.argv[2] if len(sys.argv) > 2 else 'perturbed'
     ac = (sys.argv[3] if len(sys.argv) > 3 else 'ac') == 'ac'
-    tag = sys.argv[4] if len(sys.argv) > 4 else f'{kind}_dt{dt:g}_{"ac" if ac else "noac"}'
+    rowweight = 'rw' in sys.argv[4:]
+    rest = [a for a in sys.argv[4:] if a != 'rw']
+    tag = rest[0] if rest else (f'{kind}_dt{dt:g}_{"ac" if ac else "noac"}'
+                                + ('_rw' if rowweight else ''))
     print(f'=== dt={dt:g}  a_mass={T.a_mass_worst(dt):.1f}  {kind}  '
-          f'AC={"on" if ac else "off"} ===', flush=True)
-    r = run_case(dt, kind, ac)
+          f'AC={"on" if ac else "off"}  rowweights={"on" if rowweight else "off"}'
+          f' ===', flush=True)
+    r = run_case(dt, kind, ac, rowweight=rowweight)
     print(f'--> {r["status"]} after {r["steps"]} steps  '
           f'(CFL0={r["cfl0"]:.3f}, dt_CFL={r["dt_cfl"]:.4f}, '
           f'{r["wall"]:.0f}s)', flush=True)
