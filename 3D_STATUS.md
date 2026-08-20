@@ -914,9 +914,33 @@ correct operator, because the assembled operator only acts meaningfully on the
 continuous subspace — my own first attempt at this test made exactly that
 mistake and had to be discarded.
 
-Fixed by `bc.pin_dof`, which marks every copy via `gs` of a one-hot array. Three
-regression tests added, including a negative control asserting that a one-copy
-pin really does break symmetry — otherwise the exactness test proves nothing.
+Fixed by `bc.pin_dof`, which marks every copy via `gs` of a one-hot array, and
+routed through `build_mask` and all three periodic rigs (`taylorgreen`,
+`stokes3d`, `channel3d`). Three regression tests added, including a negative
+control asserting that a one-copy pin really does break symmetry — otherwise the
+exactness test proves nothing. Both affected rigs are now symmetric to machine
+precision: `stokes3d` 2.7e−16, `channel3d` 1.0e−15.
+
+#### Re-verification of results measured with the bug present
+
+`stokes3d` and `channel3d` both ran at multiplicity 2, so every earlier result
+from them was obtained on a slightly non-symmetric operator. Re-run after the fix:
+
+| `dt` | 0.01 | 0.005 | 0.0025 | 0.00125 | order |
+|---|---|---|---|---|---|
+| rel err in σ | 1.680e−04 | 4.189e−05 | 1.046e−05 | 2.613e−06 | **2.00, 2.00, 2.00** |
+| CG before → after | 17203→16519 | 32044→30210 | 70234→66413 | 146767→140862 |
+
+**Identical to seven digits**, with ~4% fewer CG iterations. That is the expected
+outcome and worth stating as such rather than as luck: at multiplicity 2 the
+symmetry error was 1.5e−07, below the smallest error being measured (2.6e−06).
+At multiplicity 4 (Taylor–Green) it was 5.9e−05 — above the signal — which is
+exactly why that case was destroyed and this one was not.
+
+**Still to re-run:** the Stage 5 sweeps and the M2 cavity used `channel3d` and
+the cavity driver respectively. The cavity is unaffected (its pinned node has
+multiplicity 1). The Stage 5 verdicts were stability results at multiplicity 2
+and are very unlikely to move, but they have not been re-measured.
 
 ---
 

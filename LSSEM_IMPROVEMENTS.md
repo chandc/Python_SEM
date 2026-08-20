@@ -119,10 +119,28 @@ operator-AC. That does **not** transfer to the cavity or to high Reynolds number
 | **Jacobi probe contamination** | probing the *assembled* operator with a discontinuous unit vector folded off-diagonal couplings into the diagonal — 1.4% error at every interface node. Probing unassembled and keeping the gather is exact (0.0) |
 | **Nyquist imaginary half unconstrained** | `fourier.py` stated the invariant and tests asserted it, but nothing *enforced* it in the solve; `irfft` discards those components, so CG was filling a physically invisible direction |
 | **True-residual safeguard in `pcg`** | the recursive residual drifts over 10⁴ iterations; CG could declare victory on a number that no longer described the iterate. Now verified against `b − A x`, restarts on drift, and reports the true residual |
+| **Pressure pin covered one copy of a shared node** | on a periodic seam the pinned node is shared 2–4 ways, so the global dof was never pinned *and* the mask disagreed with itself across copies — making the assembled operator **non-symmetric**, which CG requires. Symmetry error 1.5e−07 at multiplicity 2, 5.9e−05 at 4; exactly zero once every copy is pinned. On Taylor–Green it was a **240× error floor** that made the convection-active order measurement impossible |
 | **`jacobi_inverse`** | `1.0/np.maximum(d, 1e-30)` put **1e30** at every prescribed dof and survived only because the masked residual is exactly zero. Now exactly 0 there, and it *raises* on a negative diagonal rather than clamping a bug into a live multiplier |
 
-Eleven distinct bugs have been found in the 3D work so far and **not one raised
+Twelve distinct bugs have been found in the 3D work so far and **not one raised
 an exception** — every one produced a correctly-shaped, plausible array.
+
+## 8b. The time-splitting is now verified end to end
+
+The last unverified path was the explicit RK3 convective half, which no test
+reached: the Stokes capstone runs with convection **off by construction**, and
+the order-3.025 explicit result runs on a scalar model that bypasses the
+convective assembly entirely. **Taylor–Green decay** — an exact unsteady
+Navier–Stokes solution where `u·∇u` is balanced pointwise by the pressure
+gradient — closes it:
+
+| `dt` | 0.1 | 0.05 | 0.025 | 0.0125 | order |
+|---|---|---|---|---|---|
+| L2 velocity error | 2.53e−06 | 6.33e−07 | 1.58e−07 | 3.95e−08 | **2.00, 2.00, 2.00** |
+
+Supporting: `CV.convective` is spectrally exact against the analytic `u·∇u`
+(4.9e−13 at N = 16), and `mesh.periodic_y` — unused anywhere in the repo until
+this test — is spectrally accurate.
 
 ## 9. Gates that were wrong as written
 
