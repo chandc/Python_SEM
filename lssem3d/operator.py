@@ -136,7 +136,7 @@ def apply_LT_complex(R, D, facx, facy, kz, nu, c, kap=0.0):
     return C
 
 
-def apply_L_complex(U, D, facx, facy, kz, nu, c, wq=None, kap=0.0):
+def apply_L_complex(U, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
     """Quadrature-WEIGHTED rows: W * L0, matching lssem2d's convention.
 
     THE CONVENTION, and it is not the obvious one.  lssem2d's apply_L multiplies
@@ -153,16 +153,52 @@ def apply_L_complex(U, D, facx, facy, kz, nu, c, wq=None, kap=0.0):
     GLL grid, where the node spacing varies as 1/N^2 near element edges).
 
     wq is (nelem, n, n); pass None only for the unweighted operator in tests.
+
+    ROW WEIGHTS (`rw`) -- the least-squares weight of each row against the
+    others, and the thing this module was missing entirely.
+
+    lssem2d writes the momentum row as `a_mass*u + a_flux*N(u)` and gives the
+    continuity and vorticity rows weight 1, so **a_flux is the weight of
+    momentum against the constraints**.  Its legacy setting -- the one the
+    Chan (1996) Stokes-decay validation runs -- is a_mass = fac1 = 1,
+    a_flux = dt, i.e. every row is O(1) in the velocity.
+
+    This operator had no row weighting, so its momentum rows carried
+    c = 1/(beta_k*dt) against constraint rows of O(1).  At dt = 5e-3 that is
+    c = 1200, and since the functional squares the rows the momentum terms
+    outweigh continuity by c^2 ~ 1.4e6.  The minimiser then effectively ignores
+    div u, and the normal operator is hopelessly conditioned -- measured: the
+    AC-free 3D system could not be solved in 80000 CG iterations per stage,
+    while lssem2d solves the same k_z = 0 problem routinely.
+
+    `rw` is the diagonal of that weighting, (NROW,), applied as diag(rw)*wq so
+    that apply_LT(apply_L(x)) = L0^T diag(rw) W L0 x stays symmetric.  To match
+    lssem2d's legacy scaling pass rw with 1/c^2 on the three momentum rows
+    (see `momentum_row_weights`).  ANY f used with this must be weighted
+    identically, or the defect correction solves a different problem than the
+    operator represents.
     """
     R = apply_L0_complex(U, D, facx, facy, kz, nu, c, kap)
+    if rw is not None:
+        R = R*np.asarray(rw).reshape((1,)*(R.ndim-2) + (len(rw), 1))
     return R if wq is None else R*wq[..., None, None]
+
+
+def momentum_row_weights(c):
+    """lssem2d's legacy scaling: momentum rows divided by c so their mass
+    coefficient is 1, matching the constraint rows.  Squared, because the
+    functional squares the residual."""
+    rw = np.ones(NROW)
+    rw[4:7] = 1.0/(c*c)
+    return rw
 
 
 # --------------------------------------------------------- split-real facade
 
-def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0):
+def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
     """(..., 14, nmode) real -> (..., 16, nmode) real.  Weighted if wq given."""
-    return to_real(apply_L_complex(to_complex(Ur), D, facx, facy, kz, nu, c, wq, kap))
+    return to_real(apply_L_complex(to_complex(Ur), D, facx, facy, kz, nu, c, wq,
+                                   kap, rw))
 
 
 def apply_LT(Rr, D, facx, facy, kz, nu, c, kap=0.0):

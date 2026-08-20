@@ -203,68 +203,83 @@ def _jac_geom():
     return m, diff_matrix(4), kz, mask, (m.nelem, 5, 5, OP.NVAR_R, nk)
 
 
-def test_jacobi_diagonal_is_the_assembled_diagonal():
-    """diag(A) at a shared node is the SUM over the elements that own it.
+def test_jacobi_diagonal_is_exact_at_EVERY_free_dof():
+    """diag(A) against ground truth at every free dof of every field.
 
-    Checked against an exact single-DOF probe: `gs` of a one-hot local array is
-    precisely the global basis function (1 at every copy of that node, 0
-    elsewhere), so `normal_op` of it, read back at the node, IS the assembled
-    diagonal entry -- no thresholding and no multiplicity bookkeeping to get
-    wrong.
-    """
-    m, D, kz, mask, shape = _jac_geom()
-    nu, c, kap = 0.01, 50.0, 50.0
-    diag = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, nu, c, m, mask,
-                              m.wq, kap)
-    f, k = OP.U_, 1
-    checked = 0
-    for (e, i, j) in [(0, 2, 2), (0, 4, 2), (0, 2, 4), (0, 4, 4), (3, 0, 0)]:
-        if mask[e, i, j, f, k] == 0.0:
-            continue
-        ed = np.zeros(shape)
-        ed[e, i, j, f, k] = 1.0
-        Eg = S3.gs(m, ed)                     # exact global basis function
-        want = S3.normal_op(Eg, D, m.facx, m.facy, kz, nu, c, m, mask, m.wq,
-                            kap)[e, i, j, f, k]
-        got = diag[e, i, j, f, k]
-        assert abs(got - want) <= 1e-9*abs(want), (
-            f'node (e={e},i={i},j={j}): got {got:.6f}, assembled {want:.6f}')
-        checked += 1
-    assert checked >= 4, 'too few live nodes checked'
+    THE PREVIOUS VERSION OF THIS TEST SPOT-CHECKED FIVE NODES ON THE VELOCITY
+    FIELD AND PASSED WHILE THE ROUTINE WAS 1.4% WRONG.  Two reasons it missed:
 
+      * velocity-row contamination shrinks like 1/c^2, so at production a_mass it
+        is invisible; the error lives on the c-independent pressure and vorticity
+        rows, which were never sampled.
+      * the probe vector -- local index (i,j) set in EVERY element -- is
+        DISCONTINUOUS at an interface, so gs() folds intra-element off-diagonal
+        couplings into the reading.  Comparing that against another gs'd probe
+        cannot see it: both carry the contamination in proportion.  Lesson L1,
+        committed by the same author who wrote L1.
 
-def test_unassembled_diagonal_is_wrong_at_shared_nodes():
-    """Negative control: the old behaviour really was wrong, and by the factor
-    claimed.  On this uniform mesh the raw probe returns diag/multiplicity --
-    1/2 on an edge, 1/4 at a corner -- so 1/diag over-weighted every
-    element-boundary node.  Without this, the test above could pass against an
-    assembly that does nothing.
+    Ground truth here is the only probe that measures the true assembled
+    diagonal: a CONTINUOUS unit vector for one global node (gs of a one-hot
+    local array is exactly that), pushed through the real solve operator and
+    read back at the node.  Sweeping all fields makes the c-independent rows
+    unavoidable.
     """
     m, D, kz, mask, shape = _jac_geom()
     nu, c, kap = 0.01, 50.0, 50.0
     kw = dict(mesh=m, mask=mask, wq=m.wq, kap=kap)
-    asm = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, nu, c, **kw)
-    raw = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, nu, c,
-                             assemble=False, **kw)
+    diag = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, nu, c, **kw)
     mult = S3.gs(m, np.ones(shape))
-    live = (mask != 0.0) & (np.abs(asm) > 1e-12)
-    ratio = np.where(live, raw/np.where(asm == 0, 1, asm), 1.0)
-    interior = live & (mult < 1.5)
-    edge = live & (mult > 1.5) & (mult < 2.5)
-    corner = live & (mult > 3.5)
-    assert interior.any() and edge.any() and corner.any()
-    # Interior nodes have one owner, so assembly is a no-op there: exact.
-    assert np.abs(ratio[interior] - 1.0).max() < 1e-9, 'interior must be equal'
-    # Shared nodes are 1/multiplicity only when the owning elements contribute
-    # EQUALLY.  They nearly do on a uniform mesh, but not exactly: a boundary
-    # element carries a different mask, so its contribution differs slightly.
-    # Hence a tolerance on the ratio, plus the exact statement that assembly
-    # strictly increases the diagonal wherever a node is shared.
-    assert np.abs(ratio[edge] - 0.5).max() < 1e-2, 'edge should be ~half'
-    assert np.abs(ratio[corner] - 0.25).max() < 1e-2, 'corner should be ~quarter'
-    shared = live & (mult > 1.5)
-    assert (raw[shared] < asm[shared]).all(), (
-        'assembly must strictly increase the diagonal at every shared node')
+    n_checked = n_interface = 0
+    worst = 0.0
+    for f in range(OP.NVAR_R):
+        for i in range(shape[1]):
+            for j in range(shape[2]):
+                for k in (0, 1):
+                    if mask[0, i, j, f, k] == 0.0:
+                        continue
+                    ed = np.zeros(shape)
+                    ed[0, i, j, f, k] = 1.0
+                    want = S3.normal_op(S3.gs(m, ed), D, m.facx, m.facy, kz,
+                                        nu, c, **kw)[0, i, j, f, k]
+                    if abs(want) < 1e-14:
+                        continue
+                    n_checked += 1
+                    if mult[0, i, j, f, k] > 1.5:
+                        n_interface += 1
+                    worst = max(worst, abs(diag[0, i, j, f, k] - want)/abs(want))
+    assert n_checked > 200, f'only {n_checked} dofs checked'
+    assert n_interface > 50, f'only {n_interface} INTERFACE dofs -- the bug lived there'
+    assert worst < 1e-12, f'worst relative error {worst:.3e} over {n_checked} dofs'
+
+
+def test_probing_the_assembled_operator_would_contaminate_the_diagonal():
+    """Negative control: the fix must be load-bearing.
+
+    Probing WITH the mesh (the old behaviour) folds off-diagonal couplings into
+    interface nodes.  If this reproduced the correct answer, the test above
+    would be passing for free.
+    """
+    m, D, kz, mask, shape = _jac_geom()
+    nu, c, kap = 0.01, 50.0, 50.0
+    good = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, nu, c, m, mask,
+                              m.wq, kap)
+    bad = np.zeros(shape)
+    n = shape[1]
+    for f in range(OP.NVAR_R):
+        for i in range(n):
+            for j in range(n):
+                e = np.zeros(shape)
+                e[:, i, j, f, :] = 1.0
+                bad[:, i, j, f, :] = S3.normal_op(
+                    e, D, m.facx, m.facy, kz, nu, c, m, mask, m.wq,
+                    kap)[:, i, j, f, :]
+    bad = S3.gs(m, bad)
+    mult = S3.gs(m, np.ones(shape))
+    iface = (mult > 1.5) & (np.abs(good) > 1e-12)
+    rel = np.abs(bad[iface] - good[iface])/np.abs(good[iface])
+    assert rel.max() > 1e-3, (
+        f'assembled-probe contamination is only {rel.max():.3e} -- the fix is '
+        f'not load-bearing and the exactness test proves nothing')
 
 
 def test_assembled_diagonal_reduces_cg_iterations():

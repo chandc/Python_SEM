@@ -72,7 +72,7 @@ def make_continuous(mesh, U):
     return gs(mesh, U)/np.where(mult < 1e-10, 1.0, mult)
 
 
-def normal_op(Ur, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None, kap=0.0):
+def normal_op(Ur, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None, kap=0.0, rw=None):
     """A = M Q^T Q L0^T W L0 M applied to a split-real state.
 
     THE ASSEMBLY STEP IS NOT OPTIONAL.  Without gather_scatter the operator is
@@ -94,7 +94,7 @@ def normal_op(Ur, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None, kap=0
     """
     if mask is not None:
         Ur = Ur*mask
-    out = OP.apply_LT(OP.apply_L(Ur, D, facx, facy, kz, nu, c, wq, kap),
+    out = OP.apply_LT(OP.apply_L(Ur, D, facx, facy, kz, nu, c, wq, kap, rw),
                       D, facx, facy, kz, nu, c, kap)
     if mesh is not None:
         out = gs(mesh, out)
@@ -102,7 +102,7 @@ def normal_op(Ur, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None, kap=0
 
 
 def jacobi_diagonal(shape, D, facx, facy, kz, nu, c, mesh=None, mask=None,
-                    wq=None, kap=0.0, assemble=True):
+                    wq=None, kap=0.0, assemble=True, rw=None):
     """diag(A) by probing with unit vectors, ASSEMBLED across elements.
 
     THE ASSEMBLY IS NOT OPTIONAL FOR CORRECTNESS.  A probe sets one LOCAL node
@@ -135,15 +135,51 @@ def jacobi_diagonal(shape, D, facx, facy, kz, nu, c, mesh=None, mask=None,
             for j in range(n):
                 e = np.zeros(shape)
                 e[:, i, j, f, :] = 1.0
+                # PROBE THE UNASSEMBLED OPERATOR (mesh=None).  With the mesh
+                # passed in, the probe vector -- local index (i,j) set in EVERY
+                # element -- is DISCONTINUOUS at an interface: one copy of a
+                # shared node is 1 while its twin is 0, and the neighbour's
+                # opposite edge also carries a 1.  gs() then sums intra-element
+                # off-diagonal couplings (west<->east through the D-matrix row)
+                # into what is read back as "the diagonal".  Measured: 1.4%
+                # error at interface dofs, worst on the c-independent pressure
+                # and vorticity rows (velocity contamination falls like 1/c^2,
+                # which is why a velocity-only spot check missed it entirely).
+                # Unassembled, each local unit vector is a clean unit inside its
+                # own element block, so the local diagonals are exact; the gs()
+                # below then sums them, which IS the assembled diagonal because
+                # L^T W L is element-block-diagonal.  Verified exact (0.0e+00).
                 diag[:, i, j, f, :] = normal_op(
-                    e, D, facx, facy, kz, nu, c, mesh, mask, wq, kap)[:, i, j, f, :]
+                    e, D, facx, facy, kz, nu, c, None, mask, wq, kap,
+                    rw)[:, i, j, f, :]
     if assemble and mesh is not None:
         diag = gs(mesh, diag)
     return diag
 
 
+def jacobi_inverse(diag, mask=None):
+    """1/diag on free dofs, ZERO on prescribed ones -- never 1/eps.
+
+    The idiom `1.0/np.maximum(diag, 1e-30)` puts 1e30 at every masked dof, whose
+    diagonal is exactly 0.  It survives only because the masked residual is
+    exactly zero every iteration, so 0 * 1e30 = 0; one round-off leak or one NaN
+    and it detonates.  It would also clamp a NEGATIVE diagonal to 1e-30, turning
+    a bug notification into a 1e30 multiplier on a LIVE dof.
+
+    A non-positive diagonal of an SPD operator is a defect, so this asserts
+    rather than sanitises.
+    """
+    live = np.abs(diag) > 0.0 if mask is None else (mask != 0.0) & (diag != 0.0)
+    bad = live & (diag <= 0.0)
+    if bad.any():
+        raise ValueError(
+            f'{int(bad.sum())} free dofs have a non-positive Jacobi diagonal '
+            f'(min {diag[bad].min():.3e}) -- the operator is not SPD there')
+    return np.where(live, 1.0/np.where(live, diag, 1.0), 0.0)
+
+
 def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
-        tol=1e-10, max_iter=2000, x0=None, wq=None, kap=0.0):
+        tol=1e-10, max_iter=2000, x0=None, wq=None, kap=0.0, rw=None):
     """Preconditioned CG on A x = b, batched over modes.
 
     Returns (x, iters, resid) with resid the per-mode final residual norm.
@@ -154,7 +190,7 @@ def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
     if mask is not None:
         b = b*mask
         x = x*mask
-    A = lambda v: normal_op(v, D, facx, facy, kz, nu, c, mesh, mask, wq, kap)
+    A = lambda v: normal_op(v, D, facx, facy, kz, nu, c, mesh, mask, wq, kap, rw)
     mw = None if mesh is None else multiplicity_weight(mesh, b.shape)
     P = (lambda r: r) if M_inv is None else (lambda r: r*M_inv)
 

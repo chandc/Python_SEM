@@ -86,11 +86,19 @@ def initial_state(s, mode='kz0', kmode=1, amp=1.0e-3):
     sig, b1, c, k = sigma_exact(alpha, kzv)
     f, f1, f2 = f_and_derivs(Y, b1, c, a=k)
 
+    A, B, P, Q = c
     if mode == 'kz0':
         # psi = f(y) cos(alpha x):  u = f' cos, v = alpha f sin, om_z = (a^2 f - f'') cos
         Uc[..., OP.U_, 0] = (f1*np.cos(alpha*X))*nz
         Uc[..., OP.V_, 0] = (alpha*f*np.sin(alpha*X))*nz
         Uc[..., OP.OZ_, 0] = ((alpha*alpha*f - f2)*np.cos(alpha*X))*nz
+        # PRESSURE IS NOT ZERO.  From -sigma u = -p_x + nu grad^2 u the
+        # hyperbolic terms cancel and p = sigma*(A sinh + B cosh)*sin(alpha x).
+        # Starting from p = 0 leaves AC to establish the pressure at the rate
+        # div u / kappa_p per step, which for kappa_p = a_mass is far too slow
+        # over half a decay time -- it was worth 12.5% in sigma.
+        Uc[..., OP.P_, 0] = (sig*(A*np.sinh(k*Y) + B*np.cosh(k*Y))
+                             * np.sin(alpha*X))*nz
     else:
         # same construction with z in place of x:
         #   w = f' cos(k z),  v = k f sin(k z),  om_x = (f'' - k^2 f) cos(k z)
@@ -99,6 +107,7 @@ def initial_state(s, mode='kz0', kmode=1, amp=1.0e-3):
         Uc[..., OP.W_, col] = f1*c_cos
         Uc[..., OP.V_, col] = (k*f)*c_sin
         Uc[..., OP.OX_, col] = (f2 - k*k*f)*c_cos
+        Uc[..., OP.P_, col] = (sig*(A*np.sinh(k*Y) + B*np.cosh(k*Y)))*c_sin
 
     U = np.concatenate([Uc.real, Uc.imag], axis=-2)
     scale = amp/max(np.abs(U).max(), 1e-300)
@@ -114,7 +123,7 @@ def energy(s, U):
 
 
 def stage(s, U, k, dt, kap, nsub=1, Minv=None, tol=1e-12, max_iter=40000,
-          sub_tol=1e-13, workers=None):
+          sub_tol=1e-13, workers=None, rw=None):
     """One RKW3/CN stage of the STOKES problem -- no convection, no body force.
 
     Dropping u.grad u makes the problem exactly linear, so the analytic decay
@@ -131,18 +140,25 @@ def stage(s, U, k, dt, kap, nsub=1, Minv=None, tol=1e-12, max_iter=40000,
         fc[..., row, :] = c*(Uc[..., fld, :]
                              + dt*T.ALPHA[k]*Lk[..., row-4, :])
     wqR = m.wq[..., None, None]
+    # f must carry the SAME row weighting as the operator, or the defect
+    # correction solves a different problem than apply_L represents.
+    rwR = (1.0 if rw is None
+           else np.asarray(rw).reshape((1,)*(len(fc.shape)-2) + (len(rw), 1)))
     p_prev = Uc[..., OP.P_, :]
     Uit, its = U, 0
     for _ in range(max(1, nsub)):
         fc[..., 0, :] = kap*p_prev
         f = np.concatenate([fc.real, fc.imag], axis=-2)
         r = OP.apply_LT(
+            OP.apply_L(Uit, D, m.facx, m.facy, kz, nu, c, m.wq, kap, rw)
+            - f*wqR*np.concatenate([rwR, rwR], axis=-2) if rw is not None else
             OP.apply_L(Uit, D, m.facx, m.facy, kz, nu, c, m.wq, kap) - f*wqR,
             D, m.facx, m.facy, kz, nu, c, kap)
         b = -S3.gs(m, r)*mask
         dU, it, _ = PAR.pcg(b, D, m.facx, m.facy, kz, nu, c, mesh=m, mask=mask,
                             M_inv=None if Minv is None else Minv[k], tol=tol,
-                            max_iter=max_iter, wq=m.wq, kap=kap, workers=workers)
+                            max_iter=max_iter, wq=m.wq, kap=kap,
+                            workers=workers, rw=rw)
         Uit = Uit + dU
         its += it
         p_new = OP.to_complex(Uit)[..., OP.P_, :]
@@ -153,20 +169,25 @@ def stage(s, U, k, dt, kap, nsub=1, Minv=None, tol=1e-12, max_iter=40000,
     return Uit, its
 
 
-def step(s, U, dt, kap, **kw):
+def step(s, U, dt, kap, rowweight=False, **kw):
     tot = 0
     for k in range(T.NSTAGE):
-        U, it = stage(s, U, k, dt, kap, **kw)
+        rw = OP.momentum_row_weights(T.implicit_coeff(dt, k)) if rowweight else None
+        U, it = stage(s, U, k, dt, kap, rw=rw, **kw)
         tot += it
     return U, tot
 
 
-def make_precond(s, dt, kap):
+def make_precond(s, dt, kap, rowweight=False):
     shape = (s['m'].nelem, s['N']+1, s['N']+1, OP.NVAR_R, s['nk'])
-    return [1.0/np.maximum(S3.jacobi_diagonal(
-        shape, s['D'], s['m'].facx, s['m'].facy, s['kz'], s['nu'],
-        T.implicit_coeff(dt, k), s['m'], s['mask'], s['m'].wq, kap), 1e-30)
-        for k in range(T.NSTAGE)]
+    out = []
+    for k in range(T.NSTAGE):
+        cc = T.implicit_coeff(dt, k)
+        rw = OP.momentum_row_weights(cc) if rowweight else None
+        out.append(1.0/np.maximum(S3.jacobi_diagonal(
+            shape, s['D'], s['m'].facx, s['m'].facy, s['kz'], s['nu'], cc,
+            s['m'], s['mask'], s['m'].wq, kap, rw=rw), 1e-30))
+    return out
 
 
 def measure_sigma(s, U0, dt, kap, nsub=1, tend=0.1, half=True, **kw):
@@ -175,7 +196,7 @@ def measure_sigma(s, U0, dt, kap, nsub=1, tend=0.1, half=True, **kw):
     Fitted over the SECOND HALF by default, past any startup transient -- the
     same convention as the validated 2D harness.
     """
-    Minv = make_precond(s, dt, kap)
+    Minv = make_precond(s, dt, kap, rowweight=kw.get('rowweight', False))
     U = U0.copy()
     nstep = max(6, int(round(tend/dt)))
     ts, Es = [0.0], [energy(s, U)]

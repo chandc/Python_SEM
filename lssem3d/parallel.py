@@ -119,7 +119,8 @@ def apply_op(Ur, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None,
 
 
 def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
-        tol=1e-10, max_iter=2000, x0=None, wq=None, kap=0.0, workers=None):
+        tol=1e-10, max_iter=2000, x0=None, wq=None, kap=0.0, workers=None,
+        rw=None):
     """Thread-parallel `solver3d.pcg`, same signature plus `workers`.
 
     Returns (x, iters, resid) exactly as the serial version, with `iters` the
@@ -133,13 +134,13 @@ def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
     w = n_workers(nk) if workers is None else min(workers, nk)
     if w <= 1:
         return S3.pcg(b, D, facx, facy, kz, nu, c, mesh, mask, M_inv, tol,
-                      max_iter, x0, wq, kap)
+                      max_iter, x0, wq, kap, rw)
     cs = mode_chunks(nk, w)
 
     def solve(s):
         return S3.pcg(b[..., s], D, facx, facy, kz[s], nu, c, mesh,
                       _sl(mask, s), _sl(M_inv, s), tol, max_iter,
-                      _sl(x0, s), wq, kap)
+                      _sl(x0, s), wq, kap, rw)
 
     out = list(pool(w).map(solve, cs))
     x = np.concatenate([o[0] for o in out], axis=-1)
