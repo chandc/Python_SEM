@@ -70,9 +70,13 @@ def run_case(dt, kind, ac, nstep=NSTEP, grid=None, verbose=True,
                cfl0=C.cfl(s, U, dt), dt_cfl=dt_for_cfl(s, U), e0=e0,
                grid=grid or GRID, nstep=nstep)
     status, hist, t0 = 'OK', [], time.perf_counter()
+    cg_tot = 0
     for i in range(nstep):
-        U, Nprev, it = C.step(s, U, Nprev, dt, kap, Minv=Minv, tol=1e-9,
-                              max_iter=4000, rowweight=rowweight)
+        # tol = 1e-6: the measured policy (3D_STATUS.md sec 7F) -- identical
+        # accuracy to 1e-12 at ~40% of the iterations
+        U, Nprev, it = C.step(s, U, Nprev, dt, kap, Minv=Minv, tol=1e-6,
+                              max_iter=20000, rowweight=rowweight)
+        cg_tot += it
         if not np.all(np.isfinite(U)):
             status = 'BLEWUP'; break
         e = C.perturbation_energy(s, U)
@@ -88,6 +92,7 @@ def run_case(dt, kind, ac, nstep=NSTEP, grid=None, verbose=True,
                 print(f'  step {i+1:4d}  its={it:5d}  E/E0={e/e0 if e0 else 0:.4e}'
                       f'  meanerr={me:.3e}', flush=True)
     rec.update(status=status, steps=i+1, wall=time.perf_counter()-t0, hist=hist,
+               cg_per_step=cg_tot/max(i+1, 1),
                e_end=C.perturbation_energy(s, U) if np.all(np.isfinite(U)) else None,
                meanerr_end=C.mean_profile_error(s, U) if np.all(np.isfinite(U)) else None)
     return rec
@@ -107,7 +112,8 @@ if __name__ == '__main__':
     r = run_case(dt, kind, ac, rowweight=rowweight)
     print(f'--> {r["status"]} after {r["steps"]} steps  '
           f'(CFL0={r["cfl0"]:.3f}, dt_CFL={r["dt_cfl"]:.4f}, '
-          f'{r["wall"]:.0f}s)', flush=True)
+          f'CG/step={r["cg_per_step"]:.0f}, {r["wall"]:.0f}s, '
+          f'{r["wall"]/max(r["steps"],1):.2f} s/step)', flush=True)
     with open(f'scratch/stage5_{tag}.json', 'w') as f:
         json.dump(r, f, indent=1)
     print(f'wrote scratch/stage5_{tag}.json')

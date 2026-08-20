@@ -151,7 +151,10 @@ def make_precond(s, dt):
         cc = T.implicit_coeff(dt, k)
         rw = OP.momentum_row_weights(cc)
         rws.append(rw)
-        out.append(S3.jacobi_inverse(S3.jacobi_diagonal(
+        # analytic diagonal (8eca725): identical to the probe to 3e-16, and
+        # 2000-21000x faster to build -- the probing setup was 34-41% of the
+        # runtime it was "deferred" out of.
+        out.append(S3.jacobi_inverse(S3.jacobi_diagonal_analytic(
             shape, s['D'], s['m'].facx, s['m'].facy, s['kz'], s['nu'], cc,
             s['m'], s['mask'], s['m'].wq, 0.0, rw=rw), s['mask']))
     return out, rws
@@ -223,8 +226,11 @@ CASES = dict(
     # Re = 400 the cascade reaches finer scales than Re = 100, so expect the
     # ratio to dip further than re100's 0.993 floor near peak enstrophy.  The
     # 64^3 rerun is an M6 (numba) deliverable, not a numpy one.
+    # tol = 1e-6 is the measured policy (d6c3311): error unchanged within 1%,
+    # ~40% fewer CG iterations than 1e-12, and the required tolerance does not
+    # tighten as dt falls.
     re400=dict(nu=0.0025, N=8, ex=6, ey=6, nz=48, tend=15.0, snap=0.5,
-               cfl=1.1, chk_every=2.5, tol=1e-7),
+               cfl=1.1, chk_every=2.5, tol=1e-6),
 )
 
 

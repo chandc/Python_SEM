@@ -16,17 +16,18 @@ worked around on the 3D side (see §2.4).
 | M2 operator + Stage 1 | **PASSED**\* | §1, `figs/cavity3d_kz0_profiles.png` |
 | M3 Stages 2–3 | **done** | analytic single-mode; dealiasing with negative control |
 | M4 Stage 4 MMS | **PASSED** | §4 — spectral in `N` and `Nz`; temporal gate restated. **PDE-level order 2.00 confirmed** (§7A.5) |
-| M5 Stage 5 gate | **PASSED in 3D**\* | §7 — stable to `a_mass` = 6000; window spans ~66× in `dt` |
+| M5 Stage 5 gate | **PASSED in 3D** | §7 — stable to `a_mass` = 6000; re-verified on corrected code (§7H) |
 | M6 numba backend | not started | §3 changes what this should target |
 | M7 `Re_τ` = 180 | not started | — |
 
 **Five of seven milestones complete** (M1–M5). M6 (numba) and M7 (`Re_τ` = 180)
 remain.
 
-\* **M2 and M5 were measured before the row-weight fix** (§7A.2) and so ran on a
+\* **M2 was measured before the row-weight fix** (§7A.2) and so ran on a
 mis-scaled least-squares functional. Neither verdict is expected to flip — M2
 compared 3D against 2D at matched settings, and M5 was a stability result — but
-both should be re-run (§8.3), and until then they carry this asterisk.
+it should be re-run (§8.3), and until then it carries this asterisk. **M5 has
+been re-run and its asterisk is removed** (§7H).
 
 M5 had been recorded as done on **2D evidence only** — the `a_mass` sweeps, the
 periodic channel to `a_mass` = 2400, the AC studies were all 2D, while the plan's
@@ -1260,6 +1261,59 @@ demonstrably change the answer, or the equality test would be passing on
 coincidence.
 
 All four drivers now use it.
+
+---
+
+## 7H. The recipe survives walls — and the cavity was the outlier
+
+The open risk since §7E: the cavity needed AC (**25 vs 12320** CG/step), and I had
+attributed that to its lid and corner singularities rather than to viscosity or
+walls — an inference, not a measurement. M7 has walls, so if the true cause were
+walls the recipe would fracture at exactly the geometry that matters.
+
+Re-run on the channel (walls in `y`, periodic `x`, no lid, no corner
+singularity) with the **full corrected recipe** — legacy row weights, `tol` =
+1e−6, analytic Jacobi diagonal, pin fix — Re = 180, N = 6, 3×3, Nz = 16, 200
+steps:
+
+| kind | AC | `dt` | `a_mass` | CFL | status | CG/step | s/step | `E/E₀` |
+|---|---|---|---|---|---|---|---|---|
+| perturbed | on | 0.05 | 120 | 1.303 | OK | 1783 | 22.8 | 0.245 |
+| perturbed | on | 0.01 | 600 | 0.261 | OK | 1221 | 15.6 | 0.762 |
+| perturbed | on | 0.0025 | 2400 | 0.065 | OK | 931 | 11.7 | 0.856 |
+| perturbed | on | 0.001 | 6000 | 0.026 | OK | 881 | 11.3 | 0.927 |
+| perturbed | **off** | 0.05 | 120 | 1.303 | **OK** | 3037 | 39.7 | 0.242 |
+| perturbed | **off** | 0.01 | 600 | 0.261 | **OK** | 3362 | 43.5 | 0.763 |
+| perturbed | **off** | 0.0025 | 2400 | 0.065 | **OK** | 3623 | 46.6 | 0.851 |
+| perturbed | **off** | 0.001 | 6000 | 0.026 | **OK** | 3750 | 48.1 | 0.926 |
+| laminar | off | 0.001 | 6000 | 0.021 | OK | 580 | 8.5 | — |
+
+### The answer
+
+**AC-off is affordable in the channel.** The cost ratio is **2–4×**, against the
+cavity's **490×**:
+
+| geometry | AC-off ÷ AC-on |
+|---|---|
+| cavity — walls + lid + corner singularities | 12320 / 25 = **490×** |
+| **channel — walls only** | 3750 / 881 = **4.3×** |
+
+So the cavity's AC dependence is a property of its **lid and corner
+singularities**, not of walls and not of viscosity. **The recipe carries to M7's
+geometry**, where 2–4× is a trivial price against AC's 5–7 orders of accuracy
+(§7E).
+
+Note the opposite trends: without AC the cost **rises** as `dt` falls
+(3037 → 3750), while with AC it **falls** (1783 → 881). That is `κ_p` = `a_mass`
+∝ 1/`dt` compensating the stiffness — AC's conditioning benefit grows with
+`a_mass` even as its accuracy cost stays fixed.
+
+### M5 re-established
+
+These are also the Stage 5 sweeps re-run on corrected code, so the **asterisk on
+M5 is removed**. Stable and decaying at every `a_mass` from 120 to 6000, with
+`E/E₀` matching the pre-fix values to three digits (0.245 vs 0.2448 etc.) — the
+fixes changed the cost, not the physics, which is what they should have done.
 
 ---
 
