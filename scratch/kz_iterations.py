@@ -74,7 +74,7 @@ def run(nz=64, N=8, ex=4):
 
         diag = S3.jacobi_diagonal(b.shape, D, mesh.facx, mesh.facy, kz, NU, c,
                                   mesh, mask, mesh.wq, kap)
-        Minv = 1.0/np.maximum(diag, 1e-30)
+        Minv = S3.jacobi_inverse(diag, mask)
 
         t0 = time.perf_counter()
         _, it_j, _ = S3.pcg(b, D, mesh.facx, mesh.facy, kz, NU, c, mesh, mask,

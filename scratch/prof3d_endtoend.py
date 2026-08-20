@@ -43,9 +43,9 @@ def main(nz=64):
     b = S3.gs(mesh, U)*mask
     kw = dict(mesh=mesh, mask=mask, wq=mesh.wq, kap=KAP)
 
-    Minv = 1.0/np.maximum(S3.jacobi_diagonal(b.shape, D, mesh.facx, mesh.facy,
-                                             kz, NU, C, mesh, mask, mesh.wq,
-                                             KAP), 1e-30)
+    Minv = S3.jacobi_inverse(S3.jacobi_diagonal(b.shape, D, mesh.facx,
+                                                mesh.facy, kz, NU, C, mesh,
+                                                mask, mesh.wq, KAP), mask)
 
     t0 = time.perf_counter()
     xs, it_s, _ = S3.pcg(b, D, mesh.facx, mesh.facy, kz, NU, C, mesh, mask,

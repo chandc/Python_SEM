@@ -191,7 +191,10 @@ def make_precond(s, dt, kap):
         d = S3.jacobi_diagonal(shape, s['D'], s['m'].facx, s['m'].facy, s['kz'],
                                s['nu'], T.implicit_coeff(dt, k), s['m'],
                                s['mask'], s['m'].wq, kap)
-        out.append(1.0/np.maximum(d, 1e-30))
+        # jacobi_inverse, not 1/max(d, 1e-30): the clamp puts 1e30 on every
+        # PRESCRIBED dof (diagonal exactly 0) and survives only because the
+        # masked residual happens to be exactly zero.
+        out.append(S3.jacobi_inverse(d, s['mask']))
     return out
 
 

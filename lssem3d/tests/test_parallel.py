@@ -137,9 +137,9 @@ def test_parallel_pcg_handles_a_preconditioner_and_initial_guess(prob):
     """M_inv and x0 both carry a mode axis and both must be sliced WITH the
     data; slicing one and not the other silently mismatches mode to operator."""
     p = prob
-    Minv = 1.0/np.maximum(S3.jacobi_diagonal(
+    Minv = S3.jacobi_inverse(S3.jacobi_diagonal(
         p['b'].shape, p['D'], p['m'].facx, p['m'].facy, p['kz'], NU, C,
-        p['m'], p['mask'], p['m'].wq, KAP), 1e-30)
+        p['m'], p['mask'], p['m'].wq, KAP), p['mask'])
     x0 = 0.1*np.random.default_rng(1).standard_normal(p['b'].shape)*p['mask']
     x, _, _ = PAR.pcg(p['b'], p['D'], p['m'].facx, p['m'].facy, p['kz'], NU, C,
                       M_inv=Minv, x0=x0, tol=1e-9, max_iter=4000, workers=4,

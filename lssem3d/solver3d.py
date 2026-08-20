@@ -201,6 +201,7 @@ def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
     b_norm = np.sqrt(_dot(b, b, mw))
     target = np.maximum(tol*b_norm, 1e-300)
     it = 0
+    restarts = 0
     for it in range(1, max_iter + 1):
         Ap = A(p)
         denom = _dot(p, Ap, mw)
@@ -209,13 +210,37 @@ def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
         r = r - alpha*Ap
         rn = np.sqrt(_dot(r, r, mw))
         if np.all(rn < target):
-            break
+            # TRUE-RESIDUAL SAFEGUARD, ported from lssem2d.pcg_solve.
+            #
+            # `r` here is the RECURSIVE residual, updated as r - alpha*Ap.  Over
+            # thousands of iterations it drifts away from the true b - A x, and
+            # CG then declares victory on a number that no longer describes the
+            # iterate.  The k_z study already runs this solver past 1e4
+            # iterations, which is exactly the regime where that bites.
+            #
+            # Costs one extra matvec, and only when the recursive residual
+            # claims convergence -- usually once per solve.
+            r_true = b - A(x)
+            rn_true = np.sqrt(_dot(r_true, r_true, mw))
+            if np.all(rn_true < target):
+                break
+            # Drift: restart the recursion from the true residual.  Doing it for
+            # every mode at once is correct even though only some drifted -- the
+            # per-mode recurrences are independent, and for an undrifted mode
+            # r_true is its recursive r to rounding.
+            r = r_true
+            z = P(r)
+            p = z.copy()
+            rz = _dot(r, z, mw)
+            restarts += 1
+            continue
         z = P(r)
         rz_new = _dot(r, z, mw)
         beta = np.where(np.abs(rz) > 1e-300, rz_new/np.where(rz == 0, 1, rz), 0.0)
         p = z + beta*p
         rz = rz_new
-    return x, it, np.sqrt(_dot(r, r, mw)).ravel()
+    # report the TRUE residual, not the recursive one it may have drifted from
+    return x, it, np.sqrt(_dot(b - A(x), b - A(x), mw)).ravel()
 
 
 def rkw3_step(Uh, dt, rhs_explicit, solve_stage, N_prev=None):

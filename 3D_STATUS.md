@@ -8,7 +8,7 @@ code reuses `lssem2d.mesh`, `lssem2d.lgl` and `lssem2d.assembly.gather_scatter`
 by calling them, never by editing them. Every place the 2D API did not fit was
 worked around on the 3D side (see §2.4).
 
-**Suite: 140 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`).
+**Suite: 144 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`).
 
 | milestone | state | evidence |
 |---|---|---|
@@ -854,6 +854,16 @@ and until then their numbers carry an asterisk.
 
 ### 8.4 Hardening carried over from review
 
+* ~~Port the true-residual safeguard~~ **DONE.** `pcg` now verifies the
+  recursive residual against `b − A x` when it claims convergence, restarts the
+  recursion from the true residual on drift, and **reports the true residual**
+  rather than the recursive one. Costs one matvec per solve, only at the
+  convergence check. Per-mode restart is safe because the recurrences are
+  independent.
+* ~~Standardise `M_inv`~~ **DONE.** `solver3d.jacobi_inverse` — zero on
+  prescribed dofs, and it *raises* on a negative diagonal instead of clamping a
+  bug into a 1e30 multiplier on a live dof. All drivers and tests converted; the
+  `1.0/np.maximum(d, 1e-30)` idiom is gone from the 3D code.
 * **Convergence guards on every order study.** A capped solve promotes the
   preconditioner into the scheme — that is how two AC-off runs returned σ = 9.384
   and σ = 14.279. Assert `max_iter` was not reached, and that the solver
@@ -901,7 +911,7 @@ constraint and handed to the OBC session:
 | `solver3d.py` | gather-scatter, multiplicity weight, `normal_op`, batched `pcg`, `rkw3_step` |
 | **`parallel.py`** | **mode-parallel `apply_op` and `pcg` (§3.4)** |
 
-### Tests — 140, all passing
+### Tests — 144, all passing
 
 ```
 uv run --quiet python -m pytest lssem3d/tests -q

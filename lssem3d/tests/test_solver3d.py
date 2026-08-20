@@ -292,9 +292,73 @@ def test_assembled_diagonal_reduces_cg_iterations():
     for lab, asm in (('raw', False), ('assembled', True)):
         d = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, nu, c,
                                assemble=asm, **kw)
-        Mi = 1.0/np.maximum(d, 1e-30)
+        Mi = S3.jacobi_inverse(d, mask)
         _, it, _ = S3.pcg(b, D, m.facx, m.facy, kz, nu, c, m, mask, Mi,
                           1e-8, 20000, None, m.wq, kap)
         its[lab] = it
     assert its['assembled'] < its['raw'], (
         f"assembled {its['assembled']} not better than raw {its['raw']}")
+
+
+# ------------------------------------------------ hardening (from review)
+
+def test_jacobi_inverse_is_zero_on_prescribed_dofs_not_1e30():
+    """`1.0/np.maximum(diag, 1e-30)` puts 1e30 at every masked dof, whose
+    diagonal is exactly 0.
+
+    It survives only because the masked residual is exactly zero every
+    iteration, so 0 * 1e30 = 0.  One round-off leak or one NaN and it
+    detonates.  jacobi_inverse must return 0 there instead.
+    """
+    m, D, kz, mask, shape = _jac_geom()
+    diag = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, 0.01, 50.0, m,
+                              mask, m.wq, 50.0)
+    Mi = S3.jacobi_inverse(diag, mask)
+    prescribed = (mask == 0.0)
+    assert prescribed.any(), 'no prescribed dofs -- test is vacuous'
+    assert np.all(Mi[prescribed] == 0.0), 'prescribed dof did not get exactly 0'
+    assert np.isfinite(Mi).all()
+    assert np.abs(Mi).max() < 1e12, f'huge multiplier {np.abs(Mi).max():.3e}'
+    live = (mask != 0.0) & (diag != 0.0)
+    assert np.allclose(Mi[live]*diag[live], 1.0)
+
+
+def test_jacobi_inverse_raises_on_a_negative_diagonal():
+    """A non-positive diagonal of an SPD operator is a bug notification, not a
+    number to be sanitised.  The clamp idiom would have turned it into a 1e30
+    multiplier on a LIVE dof."""
+    diag = np.ones((2, 3))
+    diag[1, 1] = -4.0
+    with pytest.raises(ValueError, match='non-positive'):
+        S3.jacobi_inverse(diag)
+
+
+def test_pcg_reports_the_true_residual_not_the_recursive_one(geom):
+    """The returned residual must describe the ITERATE.
+
+    The recursive residual (r - alpha*Ap) drifts from b - A x over thousands of
+    iterations, and reporting it lets a solve claim a convergence it does not
+    have.  Checked against the operator directly.
+    """
+    m, D, kz = geom
+    x_exact = np.random.default_rng(5).standard_normal(_shape(m, len(kz)))
+    b = S3.normal_op(x_exact, D, m.facx, m.facy, kz, NU, C, wq=m.wq)
+    x, it, res = S3.pcg(b, D, m.facx, m.facy, kz, NU, C, tol=1e-11,
+                        max_iter=8000, wq=m.wq)
+    r = b - S3.normal_op(x, D, m.facx, m.facy, kz, NU, C, wq=m.wq)
+    true = np.sqrt(np.sum(r*r, axis=S3.SPATIAL).sum(axis=0))
+    assert np.allclose(res, true, rtol=1e-8), (
+        'reported residual disagrees with b - A x')
+
+
+def test_pcg_still_converges_with_the_safeguard_armed(geom):
+    """The safeguard adds a matvec and a restart path; neither may break the
+    ordinary convergence it guards."""
+    m, D, kz = geom
+    x_exact = np.random.default_rng(6).standard_normal(_shape(m, len(kz)))
+    b = S3.normal_op(x_exact, D, m.facx, m.facy, kz, NU, C, wq=m.wq)
+    x, it, res = S3.pcg(b, D, m.facx, m.facy, kz, NU, C, tol=1e-10,
+                        max_iter=8000, wq=m.wq)
+    bn = np.sqrt(np.sum(b*b, axis=S3.SPATIAL).sum(axis=0))
+    assert it < 8000, 'hit max_iter'
+    assert np.all(res <= 1e-10*bn*1.01 + 1e-12), 'left a mode unconverged'

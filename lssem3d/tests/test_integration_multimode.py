@@ -48,9 +48,9 @@ def setup():
     shape = (m.nelem, N+1, N+1, OP.NVAR_R, nk)
     # one preconditioner per stage: c differs per stage, and the diagonal is
     # dominated by c
-    Minv = [1.0/np.maximum(S3.jacobi_diagonal(
+    Minv = [S3.jacobi_inverse(S3.jacobi_diagonal(
         shape, D, m.facx, m.facy, kz, NU, T.implicit_coeff(DT, k), m, mask,
-        m.wq, KAP), 1e-30) for k in range(T.NSTAGE)]
+        m.wq, KAP), mask) for k in range(T.NSTAGE)]
     return dict(m=m, D=D, kz=kz, nk=nk, mask=mask, Minv=Minv)
 
 
