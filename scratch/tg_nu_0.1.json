@@ -1,0 +1,34 @@
+[
+ {
+  "nu": 0.1,
+  "rw": true,
+  "ac": false,
+  "err": 6.325824453559321e-07,
+  "cg": 16844,
+  "capped": false
+ },
+ {
+  "nu": 0.1,
+  "rw": true,
+  "ac": true,
+  "err": 0.09213084188619225,
+  "cg": 8232,
+  "capped": false
+ },
+ {
+  "nu": 0.1,
+  "rw": false,
+  "ac": false,
+  "err": 6.331035268615822e-07,
+  "cg": 112065,
+  "capped": false
+ },
+ {
+  "nu": 0.1,
+  "rw": false,
+  "ac": true,
+  "err": 0.09213243592139628,
+  "cg": 1361,
+  "capped": false
+ }
+]

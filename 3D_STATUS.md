@@ -981,6 +981,56 @@ was a 240× error floor that made the measurement impossible.
 
 ---
 
+## 7E. The recipe, settled at M7's viscosity
+
+Three benchmarks had disagreed about the row weighting, and they disagreed along
+the **viscosity** axis — Stokes (ν = 1) and Taylor–Green (ν = 0.1) wanted legacy
+weights with AC off, the cavity (ν = 1e−3) wanted `w_mom` = 1 with AC on. M7
+runs at **ν = 1/180 = 5.6e−3**, closer to the cavity than to either verified
+case, so the configuration M7 needs was the one whose accuracy had never been
+established.
+
+Taylor–Green settles it: it is the only case with an exact unsteady solution,
+active convection, **and** a free ν, so accuracy and cost can both be measured
+where they matter. N = 12, `dt` = 0.05, `t` = 0.4:
+
+| ν | legacy + AC off | legacy + AC on | `w_mom`=1 + AC off | `w_mom`=1 + AC on |
+|---|---|---|---|---|
+| 1 | **3.09e−04** / 13031 | 6.07e−01 / 16124 | 3.09e−04 / 103962 | 6.07e−01 / 6813 |
+| 0.1 | **6.33e−07** / 16844 | 9.21e−02 / 8232 | 6.33e−07 / 112065 | 9.21e−02 / 1361 |
+| 0.01 | **6.80e−10** / 20587 | 9.66e−03 / 8030 | 2.96e−08 / 91679 | 9.66e−03 / 248 |
+| **5.6e−3 (M7)** | **1.20e−10** / 20940 | 5.43e−03 / 8161 | 2.98e−08 / 93031 | 5.43e−03 / 256 |
+
+*(L2 error / CG iterations. No run capped.)*
+
+**Two clean rules, holding at every ν:**
+
+1. **AC in the operator costs 5–7 orders of magnitude of accuracy** for 2.5–80×
+   in CG. The error with AC on is essentially independent of both ν and the row
+   weighting — AC dominates everything else. That trade is not worth making.
+2. **With AC off, legacy weights are 4.4× cheaper** than `w_mom` = 1 (20940 vs
+   93031 at M7's ν) *and* no less accurate.
+
+**Recipe: legacy row weights, no operator-AC.** It wins on accuracy and cost
+simultaneously at every viscosity tested, including M7's.
+
+### The caveat that limits this
+
+**Taylor–Green becomes nearly steady as ν → 0.** `F(t)` = e^{−2νt} → 1, so at
+ν = 5.6e−3 the exact solution barely evolves and `u·∇u` sits in equilibrium with
+`∇p`. That is why the AC-off error falls to 1.2e−10 — the temporal error has
+almost nothing to act on. So this sweep is a strong result about **conditioning
+and cost** at low ν, and a weak one about **accuracy under genuine unsteady
+dynamics** there.
+
+It also does not explain the cavity, which needed AC (25 CG/step against 12320).
+The cavity differs from Taylor–Green in more than ν: a driven lid, corner
+singularities, and inhomogeneous BCs. The honest reading is that **the cavity's
+need for AC is probably about those features rather than viscosity**, and that
+should be confirmed rather than assumed before M7 inherits the recipe.
+
+---
+
 ## 8. What is next
 
 Reordered by §7A.2. The AC accuracy programme is largely dissolved: it was

@@ -296,8 +296,15 @@ to the explicit half alone; Crank–Nicolson caps the mixed scheme at 2), and it
 the first PDE-level confirmation — Stage 4's gate ran on a scalar model with no
 pressure and no constraint rows. Operator-AC at `κ_p` ∝ 1/`dt` sits at 6.1e−03
 with **zeroth** order for comparison, and now costs *more* CG iterations than
-AC-off (24471 vs 17203 at `dt` = 1e−2). **For the Stokes benchmark** the configuration is legacy
-row weights with no operator-AC. **This does not generalise:** on the Re = 1000
+AC-off (24471 vs 17203 at `dt` = 1e−2). **RECIPE, measured 2026-08-20 across viscosity** (`3D_STATUS.md` §7E): legacy
+row weights, no operator-AC. On Taylor-Green -- exact solution, active
+convection, free nu -- it wins on accuracy AND cost at every nu from 1 down to
+M7's 5.6e-3, where it gives L2 error 1.2e-10 at 20940 CG against AC-on's
+5.4e-3. AC in the operator costs 5-7 orders of accuracy for 2.5-80x in CG.
+Caveat: Taylor-Green becomes near-steady as nu -> 0, so the low-nu accuracy
+figure is weak evidence about genuine unsteady dynamics; and it does not explain
+the cavity, whose need for AC is probably its lid/corner singularities rather
+than viscosity. **Earlier text below is superseded:** on the Re = 1000
 cavity the legacy scaling is 27x worse (688 CG/step vs 25) and AC is worth 25
 against 12320 without it. Which weighting to use, and whether AC is wanted, are
 **problem-dependent and still open** -- see `3D_STATUS.md` §7A.2b.

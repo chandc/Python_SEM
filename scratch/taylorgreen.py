@@ -48,7 +48,7 @@ from lssem3d import (operator as OP, solver3d as S3, bc as BC, convect as CV,
                      fourier as FR, timestep as T, parallel as PAR)
 
 L = 2.0*np.pi
-NU = 0.1
+NU = float(os.environ.get('TG_NU', 0.1))
 NZ = 1                      # k_z = 0 only: convection lives in (x, y)
 
 
