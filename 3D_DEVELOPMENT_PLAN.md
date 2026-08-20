@@ -265,6 +265,34 @@ all. The remaining options, in order of disruption:
 
 ---
 
+## 0.7 Measured 2026-08-19: the least-squares functional needs ROW WEIGHTS
+
+Found while asking why `lssem3d` could not reproduce the 2D Stokes-decay
+validation. `3D_STATUS.md` §7A.2.
+
+`lssem2d` writes the momentum row as `a_mass·u + a_flux·N(u)` with the continuity
+and vorticity rows at weight 1, so **`a_flux` is the least-squares weight of
+momentum against the constraints**. Its legacy setting — the one the Chan (1996)
+Fig. 1 validation runs — is `a_mass = fac1 = 1`, `a_flux = dt`: every row O(1) in
+the velocity.
+
+A 3D implementation that omits this carries momentum rows scaled by
+`c = 1/(β_k·dt)` against O(1) constraint rows. The functional squares them, so at
+`dt` = 5e−3 momentum outweighs continuity by `c²` ≈ 1.4×10⁶: the minimiser
+ignores `div u` and the normal operator is unusable. Measured on Stokes decay
+with AC off — 600000 CG iterations (cap saturated, wrong answer) without row
+weights, **22047 and 11× more accurate** with them.
+
+**Consequence for this plan's AC story.** §0.3's "AC is the enabling technology"
+holds for the 2D *outflow* case, but in 3D AC was largely compensating for this
+missing weighting — adding `κ_p·p` lifts the continuity row toward the momentum
+rows. The 63× conditioning benefit, the unsolvability of the AC-free 3D system,
+and AC's measured accuracy cost are all downstream of it. **Re-derive the AC
+decision with row weights on** before treating any of those numbers as
+properties of AC.
+
+---
+
 ## 1. Architecture
 
 ### 1.1 Array layout — decided by the two operations that must both be fast

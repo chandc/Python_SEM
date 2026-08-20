@@ -13,15 +13,20 @@ worked around on the 3D side (see §2.4).
 | milestone | state | evidence |
 |---|---|---|
 | M1 `fourier.py` + Stage 0 | **done** | transform/derivative tests, Hermitian assertions |
-| M2 operator + Stage 1 | **PASSED** | §1, `figs/cavity3d_kz0_profiles.png` |
+| M2 operator + Stage 1 | **PASSED**\* | §1, `figs/cavity3d_kz0_profiles.png` |
 | M3 Stages 2–3 | **done** | analytic single-mode; dealiasing with negative control |
 | M4 Stage 4 MMS | **PASSED** | §4 — spectral in `N` and `Nz`; temporal gate restated |
-| M5 Stage 5 gate | **PASSED in 3D** | §7 — stable to `a_mass` = 6000; window spans ~66× in `dt` |
+| M5 Stage 5 gate | **PASSED in 3D**\* | §7 — stable to `a_mass` = 6000; window spans ~66× in `dt` |
 | M6 numba backend | not started | §3 changes what this should target |
 | M7 `Re_τ` = 180 | not started | — |
 
 **Five of seven milestones complete** (M1–M5). M6 (numba) and M7 (`Re_τ` = 180)
 remain.
+
+\* **M2 and M5 were measured before the row-weight fix** (§7A.2) and so ran on a
+mis-scaled least-squares functional. Neither verdict is expected to flip — M2
+compared 3D against 2D at matched settings, and M5 was a stability result — but
+both should be re-run (§8.3), and until then they carry this asterisk.
 
 M5 had been recorded as done on **2D evidence only** — the `a_mass` sweeps, the
 periodic channel to `a_mass` = 2400, the AC studies were all 2D, while the plan's
@@ -66,8 +71,8 @@ worth re-deriving rather than inheriting:
 | "RKW3 temporal slope 3.0 ± 0.15" | Unachievable. Explicit-only **3.025**, CN-only **2.002**, mixed **2.189** — the table is right and CN is the limiter. No correct implementation could pass (§4.2) |
 | "iterations should fall with `k_z`; flat means a bad preconditioner" | Flat is *correct* at production `a_mass`: `ν·k_z²` = 1.42 against `a_mass` = 1200. Competing would need `k_z` ≈ 465; the largest available is 64 (§6) |
 | "M5 feasibility closed in the affirmative" | Closed on **2D** evidence, for a plan whose own risk register rates that transfer as *high* risk. Re-measured in 3D, it does pass — but it did not before (§7) |
-| "AC is the enabling technology" | True for the 2D **outflow** case; in the 3D periodic channel AC-off is stable at `a_mass` = 600–6000. AC buys affordability, not stability (§7.5) |
-| "`κ_p` = `a_mass`" (inherited from the 2D steady studies) | Carries a **12.5% error in the Stokes decay rate**, at every `dt`. AC is exact only at a steady state; the choice does not transfer to unsteady runs. κ_p ≈ 1 is 5× more accurate for 1.36× the cost (§7B) |
+| "AC is the enabling technology" | True for the 2D **outflow** case. In `lssem3d` it was true only because the least-squares functional had no row weights: AC was lifting the continuity row to compensate. With row weights the AC-free system solves in 22047 CG iterations instead of saturating at 600000 (§7A.2) |
+| "`κ_p` = `a_mass`" (inherited from the 2D steady studies) | Cost a **12.5% error in the Stokes decay rate** at every `dt`. Part initial-condition artifact, the rest a symptom of the scaling bug — not a fundamental accuracy/cost trade (§7A.3) |
 
 ### L4. Measure the mechanism, not just the symptom
 
@@ -88,6 +93,22 @@ was resolved by finding a knob that separates them:
 row, not a constraint. The meaningful quantity was **2.39× the AC-off floor**,
 not the raw 1.46e−02. Likewise the M2 gate's target was the *2D curve*, not
 Ghia's numbers, because 2D and 3D share a discretisation error that Ghia does not.
+
+### L7. A symptom investigated long enough starts to look like a law
+
+The AC work produced four correct measurements — 2.39× the divergence floor,
+order 0.92, 12.5% at every `dt`, `nsub` buying nothing — and an elaborate,
+self-consistent theory of AC as a fundamental accuracy/solvability trade. All of
+it was downstream of one missing feature: **row weights in the least-squares
+functional** (§7A.2). The measurements were right; the framing was invented to
+explain them.
+
+What eventually broke it was not a better measurement but a **comparison
+question**: *at `k_z` = 0 this is the 2D system, so why can 2D solve what 3D
+cannot?* The 2D code was sitting there the whole time as an oracle. The rule that
+falls out: when a scheme behaves badly, first ask whether a working
+implementation of the same equations disagrees — before theorising about the
+equations.
 
 ### L6. Discard confounded results out loud — and re-check the diagnosis too
 
@@ -137,8 +158,9 @@ bug that is not there.
 
 ## 2. What the gate actually caught — a taxonomy of silent failures
 
-This is the part worth keeping. **Eight distinct bugs were found, and not one
+This is the part worth keeping. **Eleven distinct bugs so far, and not one
 raised an exception.** Every one produced a plausible array of the right shape.
+Eight are below; the ninth is §5, and the tenth and eleventh are §2.5.
 
 ### 2.1 Four missing pieces of the operator
 
@@ -190,6 +212,30 @@ class of bug is otherwise silent.
   convergence test could never fire. Added a stagnation exit.
 
 A ninth is in §5 — it needed the integrator under test, which came later.
+
+### 2.5 Two more, found by comparison and by review
+
+**10. No row weights in the least-squares functional** (§7A.2). The momentum rows
+outweighed the constraints by `c²` ≈ 1.4×10⁶, so the minimiser ignored `div u`
+and the AC-free system could not be solved at all. Invisible to every test in the
+suite: the operator is *correct*, it is the **functional** that was mis-weighted,
+and Stage 1 compared against 2D at matched `a_mass` rather than matched row
+scaling. Found only by asking why `lssem2d` could solve what `lssem3d` could not.
+
+**11. The Jacobi probe was 1.4% wrong at every interface node.** The probe set
+local index `(i,j)` in *every* element, which is **discontinuous** at an
+interface — one copy of a shared node is 1 while its twin is 0 — so `gs()` folded
+intra-element off-diagonal couplings into the reading. Probing the *unassembled*
+operator and keeping the gather is exact (0.000e+00 over all 441 free dofs).
+
+The second is the more embarrassing one, and the more instructive. The test that
+"confirmed" the earlier assembly fix **spot-checked five nodes on the velocity
+field** — and velocity contamination shrinks like 1/`c²`, so it is invisible at
+production `a_mass`; the error lives on the `c`-independent pressure and vorticity
+rows. That is exactly L1 — a test comparing the operator against itself — written
+by the author of L1, in the same file that states it. The replacement sweeps every
+free dof of every field and carries a negative control asserting the contaminated
+probe really is contaminated, so it cannot pass for free.
 
 ### 2.4 Reusing `lssem2d` without touching it
 
@@ -604,305 +650,188 @@ carried over to the periodic channel unqualified. This does not change the Stage
 
 ---
 
-## 7A. AC in unsteady flow: it does inject error, and sub-iteration only partly repairs it
+## 7A. The AC investigation — and the scaling bug underneath all of it
 
-Raised in review, and correct: **AC is a steady-state device unless it is
-sub-iterated.** The continuity row solves
+This section reads chronologically on purpose. Everything in §7A.1 was measured
+and is correct as data; §7A.2 is the root cause that reinterprets all of it. The
+symptoms were real; the diagnosis attached to them was not.
+
+### 7A.1 The symptoms, in the order they appeared
+
+Artificial compressibility is a **steady-state** device unless sub-iterated. The
+continuity row solves
 
 ```
 κ_p·p + div u = κ_p·p_prev     ⇒     div u = −κ_p·(p − p_prev)
 ```
 
-With `nsub` = 1 and `p_prev` from the previous time level, `Δp ~ (dp/dt)·dt`
-while `κ_p ~ 1/dt`, so the product is **O(1) in `dt`** — it does not vanish under
-time refinement. At a steady state `p = p_prev` and it is exact, which is why
-the M2 cavity gate could never see this. The 3D driver had **no sub-iterations at
-all**, and that configuration had never been tested in this project, 2D or 3D.
+At a steady state `p = p_prev` and it is exact — which is why the M2 cavity gate
+could never see a problem. The driver had **no sub-iterations at all**, a
+configuration never tested in this project, 2D or 3D. Four measurements followed:
 
-### 7A.1 The error is real — measured two independent ways
+| measurement | result |
+|---|---|
+| `div u` vs the AC-off floor, `dt` = 0.008 | AC `nsub`=1: **2.39×** the floor; `nsub`=3: 1.75× for 1.9× the CG cost |
+| `κ_p` scaling | flat under refinement when `κ_p` ∝ 1/`dt`; falls when `κ_p` is fixed |
+| Richardson self-convergence, real 3D stepper | order **~0.92**, where Stage 4 predicts ~2 |
+| **Stokes decay** (exact answer, `figs/chan_fig1_pref.png`) | **12.5% error in σ at every `dt` — zeroth order**; `nsub`=10 no better than `nsub`=1 |
 
-`scratch/ac_unsteady_divergence.py`, `scratch/ac_subiter.py`. Same physical time,
-same grid, `dt` = 0.008:
+The Stokes case was decisive because it has an **analytic** rate, so the error is
+absolute. It exposed what self-convergence structurally cannot: the ~0.92 was a
+true *rate* toward the scheme's own limit, and that limit was simply wrong (L5).
 
-| config | rms\|div u\| | vs AC-off floor | CG iters |
+**Two contributions to the 12.5% were then separated.** The initial condition set
+`p` = 0, which is inconsistent — for the Stokes mode
+`p = σ·(A sinh(αy) + B cosh(αy))·sin(αx)`, derived by hand from
+`−σu = −p_x + ν∇²u`, where the hyperbolic terms cancel. Supplying it cut the
+error **12.5% → 1.0%**. So most of the headline number was an initial-condition
+artifact, and only ~1% was attributable to AC.
+
+### 7A.2 ROOT CAUSE: the least-squares functional had no row weights
+
+The question that broke it open: at `k_z` = 0 the 3D system **is** the 2D system
+(Stage 1 proves the operator), so why can `lssem2d` solve the AC-free problem
+routinely while `lssem3d` cannot solve it at all?
+
+`lssem2d` writes the momentum row as `a_mass·u + a_flux·N(u)` with the continuity
+and vorticity rows at weight 1 — so **`a_flux` is the least-squares weight of
+momentum against the constraints**. Its legacy setting, the one the Chan (1996)
+validation runs, is `a_mass = fac1 = 1`, `a_flux = dt`: **every row O(1)** in the
+velocity.
+
+**`lssem3d` had no row weighting whatsoever.** Its momentum rows carried
+`c = 1/(β_k·dt)` against constraint rows of O(1). At `dt` = 5e−3 that is
+`c` = 1200, and the functional *squares* the rows:
+
+```
+J₃D = ∫ [ (c·u + p_x + ν∇×ω)²  +  (div u)²  +  (ω-definitions)² ]
+J₂D = ∫ [ (u − u_old + dt·N)²   +  (div u)²  +  (ω-definitions)² ]
+```
+
+Momentum outweighed continuity by **c² ≈ 1.4×10⁶**. The minimiser therefore
+essentially ignored `div u`, and the normal operator was hopelessly conditioned.
+
+Stokes decay, AC **off**, `dt` = 5e−3, σ_exact = 9.3137399:
+
+| | σ | rel err | CG |
 |---|---|---|---|
-| AC off | 6.1163e−03 | 1.00 (floor) | — |
-| **AC on, `nsub` = 1** (the driver today) | 1.4599e−02 | **2.39×** | 3458 |
-| **AC on, `nsub` = 3** | 1.0722e−02 | **1.75×** | 6566 |
+| no row weights | 9.31809 | 4.68e−04 | **600000** (cap saturated) |
+| **row weights** | **9.31413** | **4.19e−05** | **22047** (converged) |
 
-AC-off is the **floor, not zero**: continuity is a weighted row of a least-squares
-functional, never a hard constraint, so a finite `div u` is carried regardless.
-The target is a ratio near 1.0.
+**27× fewer CG iterations and 11× more accurate.**
 
-The **`κ_p` scaling contrast** confirms the mechanism rather than merely the
-symptom — same runs, `dt` refined:
+### 7A.3 What this does to the AC findings
 
-| | `dt` = 0.008 | 0.004 | 0.002 | 0.001 |
-|---|---|---|---|---|
-| `κ_p` ∝ 1/`dt` (production) | 1.4599e−02 | 1.4737e−02 | 1.4817e−02 | 1.4860e−02 |
-| `κ_p` **fixed** | 1.4599e−02 | 1.1639e−02 | 1.0277e−02 | — |
+**AC was never a solver requirement.** It was compensating for the row scaling:
+adding `κ_p·p` to the continuity row lifts that row toward the momentum rows.
+One fact explains the whole tangle —
 
-Flat when `κ_p` ∝ 1/`dt`, falling when `κ_p` is fixed — precisely the O(1)-vs-O(`dt`)
-split the algebra predicts. Flatness alone would have been ambiguous (a spatial
-residual is also `dt`-independent); this pair is not.
+* the **63× "conditioning benefit"** of AC: it was repairing a scaling bug, not
+  preconditioning a well-posed system;
+* why **AC-off was unsolvable in 3D but routine in 2D**: 2D never had the bug;
+* why **AC cost accuracy**: it rebalanced by *changing the equation* rather than
+  by rescaling it, so incompressibility was traded away;
+* why **`nsub` could not rescue it**: with `κ_p` large,
+  `κ_p(p−p_prev) + div u = 0` is satisfiable by a tiny pressure change for *any*
+  `div u`, so the sub-iteration that would restore incompressibility converges
+  ever more slowly as `κ_p` grows.
 
-### 7A.2 Sub-iteration works, and is not free
+The κ_p sweep (12.5% → 2.5% as `κ_p` fell 1000×, for 1.36× the CG cost) was
+therefore measuring how much of the scaling damage could be undone by backing AC
+off — not a fundamental accuracy/cost trade. **With row weights the question is
+no longer "how small can `κ_p` be" but "is AC needed at all".**
 
-`nsub` = 3 closes ~27% of the gap to the floor for **1.9×** the CG iterations.
-It is a *partial* repair — 1.75× the floor is still visibly above it, so three
-sub-iterations buy some of the accuracy, not all. The practical consequence for
-M7: **AC's per-step cheapness erodes roughly linearly as one sub-iterates toward
-accuracy**, and the AC-vs-AC-off cost comparison must be made at equal accuracy,
-which no measurement in this project has yet done.
+`rw` is optional and defaults to `None`, so every earlier result remains
+reproducible.
 
-Implementation (`scratch/channel3d.py`, `stage(..., nsub=)`): only the continuity
-row is refreshed between sub-iterations. The momentum rows encode the physical
-time derivative and the explicit terms at the *start* of the stage; rebuilding
-them would move the time level being solved for.
+### 7A.4 Retractions
 
-### 7A.3 Temporal order on the 3D stepper: AC costs an order — measured
+Three, recorded because the sequence is instructive:
 
-**Result: the scheme runs at first order in time with AC on, where Stage 4 says
-it should be ~2.** Richardson self-convergence from the analytic state,
-`t` = 0.032, `dt` = 0.008 → 0.001, κ_p = `a_mass` (the production scaling):
+1. **"κ_p fixed is the inconsistent scaling"** (§7A.3, previous version) — the
+   sign was backwards. With `κ_p` fixed, `p − p_prev` → 0 as `dt` → 0, so
+   `div u` → 0 and the incompressible limit **is** recovered; with `κ_p` ∝ 1/`dt`
+   it is not. I had also used this to overturn a *correct* earlier diagnosis (the
+   `p` = 0 initial condition), which the Stokes test then vindicated. A wrong
+   diagnosis of a discarded result outlived the result.
+2. **"AC-off gives 0.76% error, so the 12.5% is AC's fault."** Both AC-off runs
+   saturated the CG cap (1.2e6 and 1.8e6 iterations) and returned mutually
+   inconsistent rates (9.384 and 14.279). Withdrawn. We now know *why* they could
+   not converge: §7A.2.
+3. **"AC is the enabling technology"** — true for the 2D *outflow* case, and true
+   of `lssem3d` only because of the scaling bug.
 
-| config | velocity order | pressure order |
-|---|---|---|
-| AC on, `nsub` = 1 | 0.90, 0.94 | 0.91, 0.96 |
-| AC on, `nsub` = 3 | 0.86, 0.92 | 0.86, 0.91 |
+### 7A.5 What is still open
 
-Two things follow, and the second is the uncomfortable one:
-
-1. **AC halves the temporal order**, 2 → 1. Stage 4's scalar model gives 2.189
-   for the mixed scheme; the real stepper with AC delivers ~0.92. That is a
-   concrete accuracy cost for M7, and it was invisible to every test that
-   existed — the scalar model has no pressure and no continuity row.
-2. **`nsub` = 3 does not fix it.** It reduced the *divergence* error (2.39× →
-   1.75× the floor, §7A.2) but left the order unchanged. Three sub-iterations
-   are nowhere near converged; until the sub-iteration drives `p → p_prev`
-   properly, the AC term still caps the order at 1.
-
-#### The scaling insight that got here — and a retracted diagnosis
-
-The first attempt (`ac_temporal_order.py`) held **κ_p fixed** across `dt` on the
-reasoning that a convergence study must refine one fixed scheme. It returned
-*negative* orders. The stated cause at the time — an inconsistent `p` = 0 initial
-condition — **was wrong**. The real cause is that holding κ_p fixed is itself
-inconsistent:
-
-```
-κ_p·(p − p_prev) = −div u     ⇒     p drifts by  (T/dt)·(div u / κ_p)
-```
-
-so with κ_p fixed the pressure evolves at a rate ∝ 1/`dt` — arbitrarily fast
-under refinement, which is why successive solutions moved apart, and why the
-"warm-up" never equilibrated (`max|p|` climbed 10× and was still drifting 9.3%).
-
-With the production scaling κ_p = `K`/`dt` the row becomes `K·dp/dt = −div u`, a
-genuine `dt`-independent PDE — **artificial compressibility with artificial bulk
-modulus β = 1/`K` = 1/6**, against a flow speed ~1.5. So κ_p ∝ 1/`dt` is the
-*consistent* choice, and the scheme converges — but to an AC system, at first
-order, not to incompressible Navier–Stokes at second order.
-
-**Caveat, stated because it bounds the claim.** These runs start from the
-analytic state, whose pressure is not equilibrated. An initial pressure layer can
-depress an observed order, so ~0.92 should be read as "first order, on this
-setup" rather than a proven asymptotic rate. A start from a developed field would
-settle it. The comparison *between* `nsub` = 1 and 3 is unaffected — both share
-the same initial condition.
-
-### 7A.4 Superseded by §7B
-
-The order measured above (~0.92) is real but describes convergence to the
-*scheme's own limit*. §7B shows that limit is wrong by 12.5%, which is the
-finding that actually matters. Self-convergence could not have revealed it —
-see L5.
-
----
-
-## 7B. Stokes decay: AC biases a physical decay rate by 12.5%, at every `dt`
-
-`scratch/stokes3d.py`. The decisive test, and it needed a case with an **exact
-unsteady solution** rather than self-convergence.
-
-**Why this case.** Chan (1996) Fig. 1 — Stokes decay in a periodic channel — is
-already reproduced by the 2D solver (`figs/chan_fig1_pref.png`, σ = 9.313955
-measured against 9.313740 analytic, slope 1.94–1.99). It gives an analytic decay
-rate, so the error is **absolute**; it is unsteady with a decaying pressure,
-which is exactly where AC is suspect; and dropping convection makes it **exactly
-linear**, so the reference rate is exact rather than amplitude-limited. In 3D the
-same eigenproblem applies with `a` → `k` = √(α²+`k_z`²), giving
-σ = ν(`k`²+β²) — verified: the `k_z` = 0 mode and a spanwise `k_z` = 1 mode both
-return σ = 9.3137399, as symmetry demands.
-
-### 7B.1 The error does not converge — it is zeroth order
-
-`t` = 0.05, N = 8, 2×4 elements, Nz = 8, σ_exact = 9.3137399:
-
-| `dt` | 0.005 | 0.0025 | 0.00125 | 0.000625 | order |
-|---|---|---|---|---|---|
-| AC, `nsub`=1 | 1.252e−01 | 1.252e−01 | 1.253e−01 | 1.254e−01 | **0.00** |
-| AC, `nsub`=3 | 1.108e−01 | 1.084e−01 | 1.073e−01 | 1.067e−01 | 0.01–0.03 |
-| AC, `nsub`=10 | 1.270e−01 | 1.239e−01 | 1.209e−01 | — | ~0 |
-
-**A flat 12.5% error in the decay rate, independent of `dt`.** Refining the time
-step does not help at all, and **`nsub` = 10 is no better than `nsub` = 1**.
-
-This supersedes §7A.3's "first order". That measurement was correct about the
-*rate* — the scheme does approach its own limit at ~O(`dt`) — but the limit is
-wrong by 12.5%. Self-convergence is structurally incapable of seeing this (L5);
-only a case with a known answer can.
-
-### 7B.2 Why `nsub` cannot rescue it
-
-With κ_p large, the continuity row
-
-```
-κ_p·(p − p_prev) + div u = 0
-```
-
-is satisfiable by a *tiny* pressure change, `p − p_prev = −div u/κ_p`, for
-**any** `div u`. Incompressibility is therefore not effectively enforced, and the
-sub-iteration that would restore it converges at a rate that degrades as κ_p
-grows. At κ_p = `a_mass` = 1200 that rate is hopeless — hence nsub = 10 buying
-nothing.
-
-### 7B.3 κ_p is the knob, and the current value is ~1000× too large
-
-Sweeping κ_p at fixed `dt` = 0.005 (`a_mass` = 1200), `nsub` = 1:
-
-| κ_p | κ_p/`a_mass` | rel err in σ | CG iters |
-|---|---|---|---|
-| 1200 | 1.0 **(current)** | **1.252e−01** | 10686 |
-| 300 | 0.25 | 1.183e−01 | 11003 |
-| 75 | 0.0625 | 1.235e−01 | 11407 |
-| 18.8 | 0.0156 | 1.070e−01 | 11985 |
-| 4.7 | 0.0039 | 7.807e−02 | 14868 |
-| **1.2** | **0.001** | **2.546e−02** | 14521 |
-| 0 | 0 | *unconverged, discarded* | 1.8e6 (capped) |
-
-**Reducing κ_p by 1000× cuts the error 5× for 1.36× the CG cost.** The
-conditioning benefit that justified κ_p = `a_mass` — 63× in the 2D *steady*
-studies — is largely absent here, while the accuracy cost is severe. The choice
-was inherited from steady-state work, where AC is exact (`p` = `p_prev`), and it
-does not transfer to an unsteady run.
-
-### 7B.4 Two numbers retracted, and the honest limits
-
-**The AC-off "control" is discarded.** Two AC-off runs at identical settings
-returned σ = 9.384 and σ = 14.279 — both with the CG iteration cap saturated
-(1.2e6 and 1.8e6). They are unconverged, mutually inconsistent, and neither may
-be used. An earlier claim in conversation that "AC-off gives 0.76% error, so the
-12.5% is AC's fault" **rested on one of these and is withdrawn.**
-
-The conclusions that stand do not depend on it: the flat 12.5% at κ_p = `a_mass`
-comes from well-converged solves (10686 CG over 10 steps), and the κ_p trend is
-internally consistent across six values.
-
-What the discarded endpoint *does* establish: at κ_p = 0 the linear system is not
-solvable in any practical iteration count. **That is why AC exists**, and it is
-the real constraint — the question is not whether to use AC but how small κ_p can
-be made while remaining solvable. On this case that is somewhere near κ_p ≈ 1,
-three orders below the current setting.
-
-### 7B.5 What this changes
-
-* **`κ_p` = `a_mass` should not be used for unsteady 3D runs.** It is an
-  inherited steady-state choice carrying a 12.5% error in a physical rate.
-* **M7 statistics would be corrupted** at the current setting, and no amount of
-  `dt` refinement or sub-iteration would reveal it — the error is `dt`-independent
-  and the scheme self-converges cleanly.
-* **The `κ_p` operating point must be chosen by measurement**, on this Stokes
-  case, before M7. The trade is accuracy against solvability, not accuracy
-  against speed.
-* Stage 5's stability verdict is untouched — that was a stability result, and
-  this is an accuracy one.
-
-### 7A.4b What is still open
-
-* **How many sub-iterations restore second order?** `nsub` = 3 does not.
-  Finding the number that does — and its cost — is the decision that determines
-  whether AC is usable for M7 at all.
-* **An equal-accuracy cost comparison** of AC + sub-iterations against AC-off.
-  The ~10× per-step advantage of AC (§7.5) was measured at `nsub` = 1, i.e. at
-  first order; against a second-order AC-off run it is not a like-for-like
-  number.
-* **Confirm the order from a developed field**, removing the initial-pressure
-  layer caveat above.
-
----
+* **Does the scheme now reproduce the 2D result end to end?** The single
+  `dt` = 5e−3 point matches; the full `dt` sweep against
+  `figs/chan_fig1_pref.png` (slope ~2, spatial floor at fine `dt`) has not
+  been run.
+* **Is AC still wanted?** With the functional correctly scaled, re-measure the
+  conditioning benefit honestly — at equal accuracy.
+* **Preconditioner-only AC**: use the AC operator as a *preconditioner* for the
+  true system. Zero bias by construction, conditioning benefit retained. Untried,
+  and the most promising remaining option if AC still helps.
+* **`nsub` non-monotonicity**: `nsub` = 10 was worse than `nsub` = 3. Unexplained,
+  and possibly a defect in the sub-iteration. Re-check with row weights on.
+* **Row weights everywhere**: only the Stokes rig passes `rw` today. The cavity
+  and channel drivers, and the M2/Stage 5 results, still run unweighted.
 
 ## 8. What is next
 
-In priority order. The ordering is driven by one fact: **Stage 5 is a go/no-go
-gate that has not actually been run in 3D**, and everything expensive downstream
-depends on its answer.
+Reordered by §7A.2. The AC accuracy programme is largely dissolved: it was
+measuring a scaling bug. What replaces it is re-validation with the functional
+correctly weighted.
 
-### 8.0 AC accuracy — the open item ⚑
+### 8.1 Finish reproducing the 2D Stokes result ⚑
 
-§7A shows AC injects a real divergence error unsteady, and that `nsub` = 3 only
-partly repairs it. Two things remain:
-* a **pressure-consistent** temporal-order run on the 3D stepper (§7A.3), which
-  is the only way to know whether the O(1) divergence error also costs time
-  accuracy in the velocity;
-* an **equal-accuracy** cost comparison of AC+sub-iterations against AC-off. The
-  ~10× per-step advantage of AC (§7.5) was measured at `nsub` = 1, i.e. at the
-  *lower* accuracy; the honest comparison has not been made.
+One `dt` matches (4.19e−05 against σ_exact at `dt` = 5e−3). Run the full sweep
+against `figs/chan_fig1_pref.png`: slope ~2 through the temporal regime, all
+polynomial orders coincident there, and the spatial floor dropping with `N`.
+**This is the gate that says the 3D scheme is correct**, and it is now within
+reach for the first time.
 
-Both bear directly on M7 statistics.
+### 8.2 Re-measure AC honestly, with row weights on
 
-### 8.1 Stage 5 for real, in 3D — the decision gate ⚑ *(DONE — §7)*
+Is AC wanted at all? The 63× conditioning claim was repairing a bug. If it still
+helps, the zero-bias form is **preconditioner-only AC** — use the AC operator as
+a preconditioner for the true system, never in the operator being solved.
+Untried and the most promising remaining option.
 
-The plan is explicit that if the `a_mass`-stability and CFL windows do not
-overlap, *the formulation is infeasible as specified* and the fallback is
-semi-implicit convection plus a re-plan. That verdict currently rests on 2D
-measurements the plan itself says do not transfer.
+### 8.3 Propagate row weights to every driver
 
-Laminar 3D channel — Poiseuille plus a decaying `z` perturbation, which has a
-known answer — run **laminar first, then with a finite-amplitude perturbation**,
-because §0.2 warns the laminar case is exactly the one that looks deceptively
-healthy. Measure, for the *3D* operator: the `a_mass` threshold, the CFL limit of
-the explicit convection, whether the windows overlap, and whether AC widens the
-window as it did in 2D.
+Only the Stokes rig passes `rw`. The cavity and channel drivers still run
+unweighted, so **M2 and Stage 5 were both measured on the mis-scaled functional**.
+Neither verdict is likely to flip — M2 compared 3D against 2D at matched settings,
+and Stage 5 was a stability result — but both should be re-run once 8.1 passes,
+and until then their numbers carry an asterisk.
 
-Two things make this the right next move beyond its own merit: it is the first
-case with **many live modes**, so it exercises the mode-parallel path and the
-`i·k_z` coupling under a real time integration; and finding infeasibility here
-costs days, whereas finding it during M7 costs weeks.
+### 8.4 Hardening carried over from review
 
-### 8.2 Cheap enablers, best done first
+* Port the 2D `pcg_solve` **true-residual safeguard** to the 3D `pcg` — it
+  restarts on recursive-residual drift, and the `k_z` study already runs to 10⁴+
+  iterations without it.
+* Standardise `M_inv` construction on `solver3d.jacobi_inverse` in every driver.
+* `nsub` non-monotonicity (`nsub` = 10 worse than 3) — recheck with row weights.
 
-- **Analytic Jacobi diagonal** to replace the probing loop, which costs
-  `2·7·(N+1)²` operator applications — 23 s per setup for three stages. Every
-  3D run pays this.
-- **Iterations vs `k_z`**, now that per-chunk counts are visible. They should
-  *fall* with `k_z` (the `k_z²` term is diagonally dominant). **A flat profile
-  means the preconditioner ignores `k_z`**, and every multi-mode run — Stage 5
-  and M7 both — pays for that. Cheap to measure, and it would change the
-  preconditioner before the expensive runs, not after.
+### 8.5 Then the original queue
 
-### 8.3 M6, re-aimed
+M6 (numba, aimed at *fusing* passes — the matvec is bandwidth-bound, §3.3), the
+M7 step-cost model, the Stage 6 forcing decision (constant mass flux vs constant
+pressure gradient — undecided, and it changes the per-step constraint), and
+closing M2 by restarting from the saved field.
 
-§3.3 says the matvec is bandwidth-bound, so a numba backend should target
-*fusing passes over the data*, not just compiling the existing ones. Note
-`_check_ac_backend` guards the numpy-only AC path in 2D; the 3D code needs the
-same guard or AC vanishes silently under numba. Best done *after* §8.1 fixes the
-operating point, so the kernels are tuned for parameters that will actually be
-used.
+### Noted, not owned
 
-### 8.4 M7, `Re_τ` = 180
+Two defects in `lssem2d`, left alone under the "do not modify the 2D code"
+constraint and handed to the OBC session:
 
-The finish line, and the first case where §3's parallelism matters at full
-strength. Gated on §8.1.
-
-### Not urgent
-
-- The `k_z` = 0 fast path (71% of that mode's DOF are identically zero). It helps
-  only single-mode runs, and production runs are multi-mode.
-- Re-running the M2 cavity to full convergence. §1 already explains the residual
-  gap; the run would tighten a number that is already understood.
-
----
+* `newton_step` builds `M_inv` from the linearisation at `U/2` but solves against
+  the Jacobian at full `U` — the preconditioner is the exact diagonal of a
+  different operator. Harmless to the converged answer, real for efficiency in
+  convection-dominated runs.
+* `step_bdf` computes `state.M_inv` every step and `newton_step` immediately
+  shadows it — one full Jacobi build per step, computed and discarded.
 
 ## 9. Inventory
 
@@ -938,6 +867,10 @@ uv run --quiet python -m pytest lssem3d/tests -q
 | `prof3d_modes.py [nz] [maxw]` | thread-parallel modes: speedup and bitwise equality |
 | `prof3d_procs.py [nz]` | threads vs processes → GIL or bandwidth |
 | `prof3d_endtoend.py [nz]` | speedup on a whole PCG, not one matvec |
+| `kz_iterations.py` | CG iterations per `k_z` mode (§6) |
+| `channel3d.py` / `channel3d_stage5.py` | Stage 5 rig and the `a_mass`/CFL sweep (§7) |
+| **`stokes3d.py`** | **3D Stokes decay against the analytic rate — the accuracy gate (§7A)** |
+| `ac_subiter.py`, `ac_unsteady_divergence.py`, `ac_temporal2.py` | the AC investigation (§7A.1) |
 
 ### Using the parallel solver
 
