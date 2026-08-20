@@ -27,3 +27,118 @@ The project structure was refactored for better usability and separation of conc
 *   **Configuration Files**: Moved all hardcoded physical (Reynolds number, timestep) and solver (Newton tolerances, PCG limits) parameters into `.toml` files (`cavity.toml` and `bfs.toml`). The core codebase is now entirely decoupled from specific simulation setups.
 *   **Advanced Diagnostics**: Built robust plotting scripts (`plot_bfs.py`, `plot_intermediate_bfs.py`) capable of loading checkpoint restart files (`.npz`) on the fly, allowing for post-processing and intermediate monitoring without blocking the simulation.
 *   **Plotting Artifact Fixes**: Manually masked the solid step region in our matplotlib configurations to prevent `scipy.interpolate.griddata` from interpolating fake velocities inside the solid wall. This solved the visual illusion of "flow coming out of the wall" seen in early stream plots.
+
+---
+
+# 3D extension and solver correctness — 2026-08
+
+Detail and evidence for everything below live in
+[3D_STATUS.md](./3D_STATUS.md); the plan and its gates are in
+[3D_DEVELOPMENT_PLAN.md](./3D_DEVELOPMENT_PLAN.md). This section is the summary.
+
+## 4. `lssem3d`: 3D via a Fourier basis in z
+
+A **new module**. `lssem2d` is called, never edited — the 3D code reuses its
+mesh, GLL and gather-scatter, and works around the two places the 2D API did not
+fit on the 3D side (`deriv.py` re-derives the contractions rank-agnostically;
+`solver3d.gs` folds `(var, mode)` into one axis rather than reimplementing the
+connectivity).
+
+Eight modules, **144 tests**. Five of seven milestones complete: the operator
+reproduces the 2D cavity at `k_z` = 0 (M2), MMS convergence is spectral in `N`
+and exponential in `Nz` (M4), and the `a_mass`/CFL feasibility gate passes in 3D
+with a window spanning ~66× in `dt` (M5).
+
+## 5. The improvement that mattered most: row weights in the least-squares functional
+
+`lssem2d` writes the momentum row as `a_mass·u + a_flux·N(u)` with the
+constraints at weight 1 — so **`a_flux` is the weight of momentum against the
+constraints**, and its legacy setting (`a_mass` = 1, `a_flux` = `dt`) makes every
+row O(1).
+
+`lssem3d` had **no row weighting at all**. Momentum rows carried
+`c = 1/(β_k·dt)` against O(1) constraints; the functional squares them, so at
+`dt` = 5e−3 momentum outweighed continuity by `c²` ≈ 1.4×10⁶. The minimiser
+effectively ignored `div u`.
+
+| Stokes decay, AC off, `dt` = 5e−3 | σ | rel err | CG |
+|---|---|---|---|
+| no row weights | 9.31809 | 4.68e−04 | 600000 (cap) |
+| **row weights** | **9.31413** | **4.19e−05** | **22047** |
+
+**27× fewer iterations, 11× more accurate.** This one fix dissolved a large body
+of apparent findings about artificial compressibility: AC's "63× conditioning
+benefit", the unsolvability of the AC-free 3D system, and AC's measured accuracy
+cost were all downstream of the missing weights. AC had been compensating for the
+scaling by lifting the continuity row.
+
+## 6. Accuracy: the scheme now hits its design order
+
+Validated against **Stokes decay** (Chan 1996 Fig. 1), which has an analytic
+decay rate — so the error is absolute rather than self-referential:
+
+| `dt` | 0.01 | 0.005 | 0.0025 | 0.00125 | order |
+|---|---|---|---|---|---|
+| row weights, no operator-AC | 1.68e−04 | 4.19e−05 | 1.05e−05 | **2.61e−06** | **2.00, 2.00, 2.00** |
+| operator-AC, `κ_p` = `a_mass` | 6.48e−03 | 6.06e−03 | 6.06e−03 | 6.07e−03 | 0.00 |
+
+Exactly the design order — RK3's third order applies to the explicit half alone
+(3.025 measured on the coefficient table); Crank–Nicolson caps the mixed scheme
+at 2. This is the **first PDE-level confirmation**: the earlier temporal gate ran
+on a scalar model with no pressure and no constraint rows.
+
+**Production configuration: row weights, no operator-AC.** At `dt` = 0.01 AC-off
+costs 17203 CG against AC-on's 24471 — correctly weighted, AC is slower *and*
+less accurate.
+
+## 7. Performance
+
+* **Mode-parallel solve** (`lssem3d/parallel.py`): whole PCG solves distributed
+  across `k_z` chunks. **6.7×** at Nz=128 on 12 performance cores.
+* Profiling settled three things by measurement: `normal_op` is **99.4%** of a
+  step (FFT and gather-scatter are not worth optimising); BLAS threading buys
+  nothing (95.51 → 94.84 ms, 1→8 threads); and threads **tie** processes, so the
+  ceiling is memory bandwidth, not the GIL. More cores will not help — which
+  re-aims the numba work at *fusing* passes over the data rather than compiling
+  the existing ones.
+* **Jacobi diagonal assembled across elements** — the probe returned
+  `diag/multiplicity`, so `1/diag` over-weighted every element-boundary node by
+  2–4×. Worth **1.41–1.44×** fewer CG iterations.
+
+## 8. Correctness fixes
+
+| fix | why it mattered |
+|---|---|
+| **Row weights** (§5) | the functional itself was mis-scaled |
+| **Jacobi probe contamination** | probing the *assembled* operator with a discontinuous unit vector folded off-diagonal couplings into the diagonal — 1.4% error at every interface node. Probing unassembled and keeping the gather is exact (0.0) |
+| **Nyquist imaginary half unconstrained** | `fourier.py` stated the invariant and tests asserted it, but nothing *enforced* it in the solve; `irfft` discards those components, so CG was filling a physically invisible direction |
+| **True-residual safeguard in `pcg`** | the recursive residual drifts over 10⁴ iterations; CG could declare victory on a number that no longer described the iterate. Now verified against `b − A x`, restarts on drift, and reports the true residual |
+| **`jacobi_inverse`** | `1.0/np.maximum(d, 1e-30)` put **1e30** at every prescribed dof and survived only because the masked residual is exactly zero. Now exactly 0 there, and it *raises* on a negative diagonal rather than clamping a bug into a live multiplier |
+
+Eleven distinct bugs have been found in the 3D work so far and **not one raised
+an exception** — every one produced a correctly-shaped, plausible array.
+
+## 9. Gates that were wrong as written
+
+Four acceptance criteria would each have **failed correct code**. Recording them
+was as valuable as the fixes:
+
+| stated criterion | measurement |
+|---|---|
+| "RKW3 temporal slope 3.0 ± 0.15" | unachievable — CN caps the mixed scheme at 2 |
+| "iterations should fall with `k_z`; flat means a bad preconditioner" | flat is *correct* at production `a_mass`: `ν·k_z²` = 1.42 against 1200 |
+| "M5 feasibility closed" | closed on **2D** evidence, for a plan whose own risk register rates that transfer as high risk |
+| "AC is the enabling technology" | true for the 2D outflow case; in 3D it was compensating for §5 |
+
+## 10. 2D solver
+
+* **Dong (2015) outflow BC** as `bc = 6`, tested through the full ladder — it
+  beats P+Z decisively on truncated domains.
+* **Jacobi diagonal built at the solve linearisation**, and the dead per-step
+  build removed: `newton_step` had been building `M_inv` from the linearisation
+  at `U/2` while solving against the Jacobian at full `U`, and `step_bdf`
+  computed a diagonal every step that `newton_step` immediately shadowed.
+
+The 2D legacy weighting (`a_mass` = 1, `a_flux` = `dt`) is what the Chan (1996)
+validation depends on — it is the canary for any future change to the weighting
+path.
