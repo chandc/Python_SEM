@@ -271,6 +271,9 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
     Performs one Newton sub-iteration.
     U: current guess for the new time step, shape (nelem, n, n, 4)
     su_history: weighted historical terms sum(alpha_m / dt U^{n-m} * wq)
+    M_inv: IGNORED, kept for call-site compatibility.  The preconditioner is
+        rebuilt below from the current linearisation -- a caller-supplied
+        diagonal would be stale by one sub-iteration.  Pass None.
     f_known: optional analytical forcing term for MMS (unweighted), shape (nelem, n, n, 4)
     """
     # 0. Enforce Dirichlet boundary conditions EXACTLY each sub-iteration
@@ -292,8 +295,6 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
     # The true nonlinear residual has u*u_x + v*u_y. apply_L is the linearised operator
     # which computes fu*u_x + u*dfu_dx. By passing fu=u/2, fv=v/2, we get exactly the true residual!
     state.update_linearisation(U[..., 0] / 2.0, U[..., 1] / 2.0)
-    # 2. Compute Exact Diagonal of A (Jacobi Preconditioner)
-    M_inv = compute_jacobi(state, U[..., 0] / 2.0, U[..., 1] / 2.0, pin_p=pin_p)
     su_nl = apply_L(state, U, U[..., 0] / 2.0, U[..., 1] / 2.0) - su_history
     _drop_pseudo(state, su_nl, U)
     if f_known is not None:
@@ -304,6 +305,15 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
     fu = U[..., 0]
     fv = U[..., 1]
     state.update_linearisation(fu, fv)
+
+    # 2. Exact diagonal of A (Jacobi preconditioner) -- at the SAME
+    # linearisation the CG below solves.  Until 2026-08-20 this was built six
+    # lines up, at the U/2 velocities of the residual evaluation, so the
+    # preconditioner was the diagonal of an operator with HALVED convection --
+    # harmless to the converged answer (any SPD diagonal is admissible) but
+    # wasted iterations in convection-dominated runs, and it contradicted
+    # compute_jacobi's own "must stay in step with apply_L" contract.
+    M_inv = compute_jacobi(state, fu, fv, pin_p=pin_p)
     
     # 2. Form RHS: b = - Q^T Q L^T (R)
     c = apply_LT(state, su_nl, fu, fv)
@@ -440,12 +450,15 @@ def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_f
         mult = gather_scatter(state.mesh, np.ones_like(U_history[0]))
         state.multiplicity_weight = 1.0 / np.where(mult < 1e-10, 1.0, mult)
         
-    # Compute and cache the exact Jacobi preconditioner once per time step
-    # We use U_n for the linearization velocities
+    # NOTE: no per-step Jacobi build here.  One was computed on every step for
+    # the life of this project and NEVER USED -- newton_step rebuilds M_inv
+    # from the current linearisation before its first use, shadowing the
+    # argument.  The per-sub-iteration rebuild is the correct behaviour (the
+    # preconditioner tracks the Jacobian being solved); the per-step build was
+    # pure waste, removed 2026-08-20.
     fu = U_history[0][..., 0]
     fv = U_history[0][..., 1]
     state.update_linearisation(fu, fv)
-    state.M_inv = compute_jacobi(state, fu, fv, pin_p=pin_p)
         
     # Initial guess is the previous state
     U = U_history[0].copy()
@@ -482,7 +495,7 @@ def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_f
     du_norm_0 = None
     
     for i in range(max_newton):
-        U, dU, cg_iters = newton_step(state, U, su_history, state.M_inv, state.multiplicity_weight, time=time, f_known=f_known, custom_inlet=custom_inlet, custom_lid=custom_lid, exact_solution=exact_solution, pin_p=pin_p, cg_max_iter=cg_max_iter, cgsfac=cgsfac, cg_tol=cg_tol, line_search=line_search, ls_memory=ls_memory)
+        U, dU, cg_iters = newton_step(state, U, su_history, None, state.multiplicity_weight, time=time, f_known=f_known, custom_inlet=custom_inlet, custom_lid=custom_lid, exact_solution=exact_solution, pin_p=pin_p, cg_max_iter=cg_max_iter, cgsfac=cgsfac, cg_tol=cg_tol, line_search=line_search, ls_memory=ls_memory)
         
         du_norm = np.max(np.abs(dU))
         if du_norm_0 is None:
