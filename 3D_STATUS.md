@@ -37,6 +37,45 @@ did not before.
 
 ---
 
+## Net-net
+
+**The 3D solver works and is verified at its design order.** Order **2.00**
+measured two independent ways against exact solutions — Stokes decay (implicit
+path) and Taylor–Green (**convection active**) — which is the design order, since
+RK3's third order lives in the convective half alone and Crank–Nicolson caps the
+mix at 2. The time-splitting is now verified end to end.
+
+**The production recipe, settled by measurement:**
+
+| | |
+|---|---|
+| row weighting | **legacy** (`a_mass` = 1, `a_flux` = `dt`) |
+| artificial compressibility | **off in the operator** |
+| CG tolerance | **1e−06** |
+
+Each was contested and each was decided against an exact solution rather than by
+argument. AC in the operator costs **5–7 orders of magnitude of accuracy**; legacy
+weights are **4.4× cheaper** than the alternative once AC is off; and the
+tolerance policy is worth a **free 40%** of the iteration count.
+
+**Twelve silent bugs, none of which raised an exception.** Every one produced a
+correctly-shaped, plausible array. The two most consequential were found in the
+last day: the **pressure pin covered one copy of a shared node**, making the
+assembled operator non-symmetric on every periodic mesh (a 240× error floor that
+made the convection-active measurement impossible), and the **Jacobi probe was
+1.4% wrong at every interface node**.
+
+**Status:** M1–M4 complete and verified; M5 passed but measured before two later
+fixes; M6 (numba) and M7 (`Re_τ` = 180) remain. The open risk is §8.2 — whether
+the recipe survives walls, since the cavity needed AC and the reason is inferred
+rather than measured.
+
+**What is *not* established:** a general recipe. The three benchmarks agree only
+because they were driven to agree at M7's viscosity; the cavity still behaves
+differently and that is unexplained.
+
+---
+
 ## Lessons so far — the transferable part
 
 Details live in the numbered sections; this is what generalises beyond this
@@ -93,6 +132,22 @@ was resolved by finding a knob that separates them:
 row, not a constraint. The meaningful quantity was **2.39× the AC-off floor**,
 not the raw 1.46e−02. Likewise the M2 gate's target was the *2D curve*, not
 Ghia's numbers, because 2D and 3D share a discretisation error that Ghia does not.
+
+### L8. The other implementation is the cheapest oracle, and it was under-used
+
+Every major correction in this project came from **comparing against `lssem2d`**,
+not from a new measurement in the 3D code:
+
+| wrong claim | what corrected it |
+|---|---|
+| "the functional had no row weights — a bug" | reading `lssem2d`'s docstring: it offers **two** weightings and 3D hard-coded one |
+| "AC is fundamental to the formulation" | asking *why can 2D solve at `k_z` = 0 what 3D cannot?* |
+| "872 CG/solve is our cost" | reading `cgsfac = 0.01` in the 2D driver — 3D had been solving 10 orders tighter |
+
+None of these needed new physics or a cleverer experiment. They needed reading
+the working implementation of the same equations. The rule: **before theorising
+about the scheme, check whether a working implementation disagrees — and check
+what settings it uses, not just what it computes.**
 
 ### L7. A symptom investigated long enough starts to look like a law
 

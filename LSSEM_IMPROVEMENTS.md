@@ -36,6 +36,16 @@ Detail and evidence for everything below live in
 [3D_STATUS.md](./3D_STATUS.md); the plan and its gates are in
 [3D_DEVELOPMENT_PLAN.md](./3D_DEVELOPMENT_PLAN.md). This section is the summary.
 
+## 3b. Net-net
+
+The 3D solver works and is verified at its design order — **2.00**, measured two
+independent ways against exact solutions (Stokes decay for the implicit path,
+Taylor–Green for the **convective** path). Production recipe, each element
+decided by measurement: **legacy row weights, no operator-AC, CG tolerance
+1e−06**. Twelve silent bugs found, **none of which raised an exception**.
+M1–M5 done; M6 and M7 remain, with the open risk being whether the recipe
+survives walls.
+
 ## 4. `lssem3d`: 3D via a Fourier basis in z
 
 A **new module**. `lssem2d` is called, never edited — the 3D code reuses its
@@ -120,6 +130,7 @@ operator-AC. That does **not** transfer to the cavity or to high Reynolds number
 | **Nyquist imaginary half unconstrained** | `fourier.py` stated the invariant and tests asserted it, but nothing *enforced* it in the solve; `irfft` discards those components, so CG was filling a physically invisible direction |
 | **True-residual safeguard in `pcg`** | the recursive residual drifts over 10⁴ iterations; CG could declare victory on a number that no longer described the iterate. Now verified against `b − A x`, restarts on drift, and reports the true residual |
 | **Pressure pin covered one copy of a shared node** | on a periodic seam the pinned node is shared 2–4 ways, so the global dof was never pinned *and* the mask disagreed with itself across copies — making the assembled operator **non-symmetric**, which CG requires. Symmetry error 1.5e−07 at multiplicity 2, 5.9e−05 at 4; exactly zero once every copy is pinned. On Taylor–Green it was a **240× error floor** that made the convection-active order measurement impossible |
+| **CG over-solving** | every 3D solve ran at `tol` = 1e−12 while the 2D driver uses an inexact 1% solve (`cgsfac` = 0.01). Measured policy: **1e−06 costs nothing and saves ~40% of the iterations** |
 | **`jacobi_inverse`** | `1.0/np.maximum(d, 1e-30)` put **1e30** at every prescribed dof and survived only because the masked residual is exactly zero. Now exactly 0 there, and it *raises* on a negative diagonal rather than clamping a bug into a live multiplier |
 
 Twelve distinct bugs have been found in the 3D work so far and **not one raised
