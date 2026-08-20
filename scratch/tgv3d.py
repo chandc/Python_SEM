@@ -217,8 +217,14 @@ CASES = dict(
     # O(1); 25x25 GLL points per (2 pi)^2 plane and 13 z-modes cover them).
     re100=dict(nu=0.01, N=8, ex=3, ey=3, nz=24, tend=12.0, snap=0.25,
                cfl=1.0, chk_every=2.0, tol=1e-8),
-    re400=dict(nu=0.0025, N=8, ex=8, ey=8, nz=64, tend=15.0, snap=0.5,
-               cfl=1.0, chk_every=2.5, tol=1e-8),
+    # re400 sizing: the 8x8/Nz=64 (64^3) version prices at ~19 min/step in
+    # numpy -- weeks, not days.  48^3 with tol 1e-7 runs in ~3-4 days and the
+    # BALANCE RATIO is the honest referee of what the coarser grid costs: at
+    # Re = 400 the cascade reaches finer scales than Re = 100, so expect the
+    # ratio to dip further than re100's 0.993 floor near peak enstrophy.  The
+    # 64^3 rerun is an M6 (numba) deliverable, not a numpy one.
+    re400=dict(nu=0.0025, N=8, ex=6, ey=6, nz=48, tend=15.0, snap=0.5,
+               cfl=1.1, chk_every=2.5, tol=1e-7),
 )
 
 

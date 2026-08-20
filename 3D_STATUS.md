@@ -1147,6 +1147,61 @@ Two defects in `lssem2d`, handed to the OBC session and since fixed there:
 Converged fixed points are unaffected by both (a preconditioner is invisible
 in a converged solve); the 2D and 3D suites pass, `test_stage1_vs_2d` included.
 
+## 7E. The Taylor–Green ladder: z-convection order 2.00, and the first interacting-vortex run
+
+`scratch/tgv3d.py` (rig + driver), `scratch/tgv3d_movie.py` (movie +
+diagnostics).  Three rungs, run in order (review recommendation), all with row
+weights on, operator-AC off, every solve guarded.
+
+### 7E.1 Rotated (x,z) Taylor–Green: the z-convection order gate — PASSED
+
+§7D verified convection in the SEM plane; this rotates the same exact
+non-interacting solution into the (x, z) plane, so the convection runs through
+**w·∂/∂z, the i·k_z terms, and the 3/2-rule dealiased mode convolution inside
+the stage loop** — the one splitting path §7D could not reach.  N = 12, 3×3,
+Nz = 8, ν = 0.1, t = 0.4:
+
+| `dt` | 0.02 | 0.01 | 0.005 | 0.0025 | order |
+|---|---|---|---|---|---|
+| L2 err (u, w) | 5.724e−07 | 1.431e−07 | 3.577e−08 | 8.942e−09 | **2.00, 2.00, 2.00** |
+
+**Every path of the RKW3/CN splitting is now order-verified through the PDE**:
+implicit half (Stokes, §7A.5), (x,y) convection (§7D), z convection (here).
+
+### 7E.2 TGV Re = 100: vortex stretching, with the books balanced — PASSED
+
+Classical interacting TGV, (2π)³ triply periodic, ν = 0.01, ≈24³ resolution
+(3×3 N = 8, Nz = 24), dt = 0.02, t → 12 (600 steps, 11.1 h numpy):
+
+* **Enstrophy grows 1.72× to a peak at t ≈ 4.8** — vortex stretching, the
+  mechanism 2D cannot have, in Brachet et al. (1983)'s range for Re = 100 —
+  then decays.  Energy decays monotonically; max|u| behaves; **zero capped
+  solves** in 1800 stage solves (~6000 CG/step).
+* **The parameter-free energy balance −dE/dt = 2νΩ holds to 0.7% worst-case**
+  (ratio ∈ [0.993, 1.000], worst near/after peak enstrophy, recovering to
+  0.997 by t = 12).  This is the internal referee that needs no reference
+  data.
+* **The residual gap is NOT vorticity slack and NOT divergence** — measured
+  from saved frames: Ω(state ω) = Ω(∇×u) to **four decimals** at every sampled
+  time (the weak vorticity definition is effectively exact here), and
+  rms div u ≤ 1.4e−4 throughout.  Remaining suspects: SEM-plane aliasing (no
+  (x,y) dealiasing — the known caveat) and the O(dt²) energy error of the
+  explicit convective half.  Open, small, and bounded.
+* Deliverables: `figs/tgv_re100_movie.mp4` (|ω| on three mid-planes with an
+  energy/enstrophy cursor, fixed colour scale), `figs/tgv_re100_diagnostics.png`,
+  49 complex64 frames + 6 float64 checkpoints in `scratch/tgv_frames_re100/`,
+  per-step series in `scratch/tgv_diag_re100.npz`.
+
+### 7E.3 TGV Re = 400 — in flight
+
+48³ (6×6 N = 8, Nz = 48), tol 1e−7, ~3–4 days numpy; judged against Brachet's
+Re = 400 dissipation curve plus the balance ratio.  The 64³ version priced at
+~19 min/step — weeks — and is deferred to M6 (numba); that pricing exercise is
+the step-cost model §8.5 asks for, in miniature.  Expect the balance ratio to
+dip below re100's 0.993 floor near peak enstrophy: at Re = 400 the cascade
+genuinely reaches scales 48³ only marginally resolves, and the ratio is the
+honest meter of exactly how marginally.
+
 ## 9. Inventory
 
 ### Modules (`lssem3d/`)
