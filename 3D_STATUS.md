@@ -1031,6 +1031,50 @@ should be confirmed rather than assumed before M7 inherits the recipe.
 
 ---
 
+## 7F. The solver was over-solving: a CG tolerance policy
+
+Prompted by a simple question — is 872 CG iterations per solve comparable to 2D?
+It was not an apples-to-apples number. The 2D Chan driver runs `cgsfac = 0.01`,
+and `pcg_solve` sets `target = max(cgsfac·‖b‖, tol)`, i.e. an **inexact solve at
+1% relative residual**. Every 3D measurement in this document was taken at
+`tol = 1e-12` — **ten orders tighter**.
+
+Taylor–Green, ν = 0.1, N = 12, where the temporal error is real (the ν = 5.6e−3
+case is nearly steady and cannot set a policy):
+
+| tol | its/solve, `dt`=0.1 | 0.05 | 0.025 | error vs `tol`=1e−12 |
+|---|---|---|---|---|
+| 1e−12 | 648 | 702 | 760 | 1.00× |
+| **1e−08** | 480 | 518 | 581 | **1.00×** |
+| **1e−06** | 386 | 425 | 466 | **1.00×** (≤1%) |
+| 1e−05 | 343 | 375 | 412 | 1.01–1.64× |
+| 1e−04 | 297 | 326 | 352 | 1.8–22× |
+| 1e−03 | 252 | 216 | 227 | 19–238× |
+
+**Policy: `tol` = 1e−06.** Error unchanged to within 1%, **~40% fewer iterations**
+at every `dt`. `tol` = 1e−08 is the conservative option: identical error, 26%
+fewer. Below 1e−05 the solve error starts polluting the time integration, and by
+1e−03 it dominates completely.
+
+The required tolerance **does not tighten as `dt` falls** — 1e−06 holds across an
+8× range — so this is a fixed policy rather than a `dt`-dependent rule.
+
+### Consequences for numbers quoted earlier
+
+* **Every CG count in this document was measured at 1e−12 and is an upper
+  bound**, roughly 1.6× above the 1e−06 policy value.
+* **The "81× AC penalty" was inflated.** It compared AC-off at 1e−12 against
+  AC-on at the same tolerance — but AC-on has an error *floor* of 5.4e−03 at
+  M7's ν, so it never needed a tight solve. At matched accuracy the two are not
+  comparable at all: **AC-on cannot reach the accuracy AC-off delivers, at any
+  tolerance.** The honest framing is a ceiling, not a ratio — if 5.4e−03 is
+  acceptable, AC-on costs ~11 iterations/solve; if it is not, AC-off is the only
+  option and costs ~425 at the 1e−06 policy.
+* **This may be worth more than M6.** A 40% iteration cut is free and available
+  now; compiling a bandwidth-bound matvec is neither.
+
+---
+
 ## 8. What is next
 
 Reordered by §7A.2. The AC accuracy programme is largely dissolved: it was
