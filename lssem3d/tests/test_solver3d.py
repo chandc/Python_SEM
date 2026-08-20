@@ -362,3 +362,63 @@ def test_pcg_still_converges_with_the_safeguard_armed(geom):
     bn = np.sqrt(np.sum(b*b, axis=S3.SPATIAL).sum(axis=0))
     assert it < 8000, 'hit max_iter'
     assert np.all(res <= 1e-10*bn*1.01 + 1e-12), 'left a mode unconverged'
+
+
+# --------------------------------------- analytic Jacobi diagonal (production)
+
+@pytest.mark.parametrize('nu,c,kap', [(0.01, 50.0, 0.0), (0.1, 60.0, 0.0),
+                                      (1/180., 600.0, 600.0)])
+@pytest.mark.parametrize('rowweight', [False, True])
+def test_analytic_diagonal_matches_the_probed_oracle(nu, c, kap, rowweight):
+    """The analytic diagonal must reproduce the probed one to machine precision.
+
+    `jacobi_diagonal` is exact against a continuous-unit-vector ground truth
+    (0.0 at every free dof), which is what makes it usable as an oracle for the
+    fast form.  Swept over viscosity, the AC coefficient and both row
+    weightings, because each enters the coefficient table differently: kap only
+    on the continuity row, c only on the momentum rows, nu on the viscous curl,
+    and the row weights on rows 4-6.
+    """
+    m, D, kz, mask, shape = _jac_geom()
+    rw = OP.momentum_row_weights(c) if rowweight else None
+    kw = dict(mesh=m, mask=mask, wq=m.wq, kap=kap, rw=rw)
+    ref = S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, nu, c, **kw)
+    fast = S3.jacobi_diagonal_analytic(shape, D, m.facx, m.facy, kz, nu, c, **kw)
+    live = np.abs(ref) > 1e-300
+    assert live.sum() > 100, 'too few live dofs to be a real test'
+    err = np.abs(ref[live] - fast[live])/np.abs(ref[live])
+    assert err.max() < 1e-12, f'max rel err {err.max():.3e}'
+    # and the prescribed dofs must be zero in both
+    assert np.all(fast[mask == 0.0] == 0.0)
+
+
+def test_analytic_diagonal_depends_on_every_ingredient():
+    """Negative control.
+
+    If the analytic form ignored kz, kap, c or the row weights, the equality
+    test above would still pass wherever the probed reference happened to agree.
+    Each ingredient must demonstrably change the answer.
+    """
+    m, D, kz, mask, shape = _jac_geom()
+    f = lambda **kw: S3.jacobi_diagonal_analytic(
+        shape, D, m.facx, m.facy, kw.pop('kz', kz), kw.pop('nu', 0.01),
+        kw.pop('c', 50.0), m, mask, m.wq, kw.pop('kap', 0.0), rw=kw.pop('rw', None))
+    base = f()
+    for lbl, kw in (('kz', dict(kz=kz*2 + 1.0)), ('nu', dict(nu=0.5)),
+                    ('c', dict(c=500.0)), ('kap', dict(kap=25.0)),
+                    ('rw', dict(rw=OP.momentum_row_weights(50.0)))):
+        assert not np.allclose(f(**kw), base), f'{lbl} has no effect on the diagonal'
+
+
+def test_analytic_diagonal_is_dramatically_faster():
+    """The whole point: probing was 34-41% of runtime and scales as N^2."""
+    import time
+    m, D, kz, mask, shape = _jac_geom()
+    kw = dict(mesh=m, mask=mask, wq=m.wq, kap=0.0)
+    t0 = time.perf_counter()
+    S3.jacobi_diagonal(shape, D, m.facx, m.facy, kz, 0.01, 50.0, **kw)
+    t_probe = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    S3.jacobi_diagonal_analytic(shape, D, m.facx, m.facy, kz, 0.01, 50.0, **kw)
+    t_fast = time.perf_counter() - t0
+    assert t_fast < t_probe/20, f'only {t_probe/t_fast:.0f}x faster'

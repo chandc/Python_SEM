@@ -178,6 +178,111 @@ def jacobi_inverse(diag, mask=None):
     return np.where(live, 1.0/np.where(live, diag, 1.0), 0.0)
 
 
+# (row, field, a, b, cval) for L0, read off apply_L0_complex row by row.
+#   a    coefficient of d/dx of that field
+#   b    coefficient of d/dy
+#   cval coefficient of the field itself; 'ik' and 'nuik' are filled in per mode
+#
+#   0  kap*p + ux + vy + ik*w        4  c*u + px + nu*(ozy - ik*oy)
+#   1  wy - ik*v - ox                5  c*v + py + nu*(ik*ox - ozx)
+#   2  ik*u - wx - oy                6  c*w + ik*p + nu*(oyx - oxy)
+#   3  vx - uy - oz                  7  oxx + oyy + ik*oz
+_L0_TERMS = (
+    (0, OP.U_,  1.0,  0.0, None),   (0, OP.V_,  0.0,  1.0, None),
+    (0, OP.W_,  0.0,  0.0, 'ik'),   (0, OP.P_,  0.0,  0.0, 'kap'),
+    (1, OP.W_,  0.0,  1.0, None),   (1, OP.V_,  0.0,  0.0, '-ik'),
+    (1, OP.OX_, 0.0,  0.0, '-1'),
+    (2, OP.U_,  0.0,  0.0, 'ik'),   (2, OP.W_, -1.0,  0.0, None),
+    (2, OP.OY_, 0.0,  0.0, '-1'),
+    (3, OP.V_,  1.0,  0.0, None),   (3, OP.U_,  0.0, -1.0, None),
+    (3, OP.OZ_, 0.0,  0.0, '-1'),
+    (4, OP.U_,  0.0,  0.0, 'c'),    (4, OP.P_,  1.0,  0.0, None),
+    (4, OP.OZ_, 0.0,  'nu', None),  (4, OP.OY_, 0.0,  0.0, '-nuik'),
+    (5, OP.V_,  0.0,  0.0, 'c'),    (5, OP.P_,  0.0,  1.0, None),
+    (5, OP.OX_, 0.0,  0.0, 'nuik'), (5, OP.OZ_, '-nu', 0.0, None),
+    (6, OP.W_,  0.0,  0.0, 'c'),    (6, OP.P_,  0.0,  0.0, 'ik'),
+    (6, OP.OY_, 'nu', 0.0, None),   (6, OP.OX_, 0.0, '-nu', None),
+    (7, OP.OX_, 1.0,  0.0, None),   (7, OP.OY_, 0.0,  1.0, None),
+    (7, OP.OZ_, 0.0,  0.0, 'ik'),
+)
+
+
+def jacobi_diagonal_analytic(shape, D, facx, facy, kz, nu, c, mesh=None,
+                             mask=None, wq=None, kap=0.0, rw=None):
+    """diag(A) in closed form -- the production replacement for the probing loop.
+
+    `jacobi_diagonal` costs 2*7*(N+1)^2 operator applications per stage, which
+    measured 34-41% of total runtime and GROWS with N (it scales as N^2 while
+    the solve's iteration count does not).  At N=16: 43 s of probing to set up a
+    62 s solve.
+
+    THE ALGEBRA.  Row r of L0 is  sum_v [ a*dx(U_v) + b*dy(U_v) + cval*U_v ],
+    so at quadrature point (p,q),
+
+        dR_r(p,q)/dU_v(i,j) = a*D[p,i]*facx*delta_qj
+                            + b*D[q,j]*facy*delta_pi
+                            + cval*delta_pi*delta_qj
+
+    which is non-zero only on the row p=i or the column q=j.  Squaring and
+    summing against the weights gives, per (r, v),
+
+        wq[i,j] * |a*D[i,i]*facx + b*D[j,j]*facy + cval|^2      (p,q)=(i,j)
+      + a^2*facx^2 * sum_{p!=i} wq[p,j]*D[p,i]^2                 the column
+      + b^2*facy^2 * sum_{q!=j} wq[i,q]*D[q,j]^2                 the row
+
+    The two sums are (N+1)-point contractions computed once for the whole mesh,
+    so the cost is O(n^2) per element instead of O(n^2) OPERATOR APPLICATIONS.
+
+    SPLIT-REAL.  For a complex coefficient alpha the split-real block is
+    [[Re, -Im], [Im, Re]], whose column norms are both |alpha|^2 -- so the real
+    and imaginary halves of a field share one diagonal value, and the modulus
+    above is the whole story.  That is why this can be derived in complex form
+    and written to both halves.
+
+    Verified against `jacobi_diagonal` to machine precision -- that routine is
+    exact (0.0 against a continuous-unit-vector ground truth), which is what
+    makes it a usable oracle here.
+    """
+    nelem, n = shape[0], shape[1]
+    nk = shape[-1]
+    if wq is None:
+        wq = np.ones((nelem, n, n))
+    rw = np.ones(OP.NROW) if rw is None else np.asarray(rw)
+
+    D2 = D*D
+    dg = np.diag(D2)                                  # D[i,i]^2
+    # column/row contractions, with the (p,q)=(i,j) term removed
+    Sx = np.einsum('epj,pi->eij', wq, D2) - wq*dg[None, :, None]
+    Sy = np.einsum('eiq,qj->eij', wq, D2) - wq*dg[None, None, :]
+    Sx = Sx*(facx**2)[:, None, None]
+    Sy = Sy*(facy**2)[:, None, None]
+
+    Dii = np.diag(D)
+    dxx = Dii[None, :, None]*facx[:, None, None]      # (e, i, 1)
+    dyy = Dii[None, None, :]*facy[:, None, None]      # (e, 1, j)
+
+    ik = 1j*np.asarray(kz).reshape(1, 1, 1, -1)
+    lit = {'ik': ik, '-ik': -ik, 'nuik': nu*ik, '-nuik': -nu*ik,
+           'kap': kap, 'c': c, '-1': -1.0, 'nu': nu, '-nu': -nu}
+    num = lambda x: lit[x] if isinstance(x, str) else x
+
+    diag = np.zeros(shape)
+    for r, f, a, b, cv in _L0_TERMS:
+        a, b = num(a), num(b)
+        cval = 0.0 if cv is None else num(cv)
+        loc = a*dxx[..., None] + b*dyy[..., None] + cval   # (e,i,j,k) complex
+        contrib = rw[r]*(wq[..., None]*np.abs(loc)**2
+                         + (a*a)*Sx[..., None] + (b*b)*Sy[..., None])
+        diag[..., f, :] += contrib                    # real half
+        diag[..., OP.NVAR + f, :] += contrib          # imaginary half
+
+    if mask is not None:
+        diag = diag*mask
+    if mesh is not None:
+        diag = gs(mesh, diag)
+    return diag*mask if mask is not None else diag
+
+
 def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
         tol=1e-10, max_iter=2000, x0=None, wq=None, kap=0.0, rw=None):
     """Preconditioned CG on A x = b, batched over modes.

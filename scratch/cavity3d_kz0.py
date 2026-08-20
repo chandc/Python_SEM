@@ -138,7 +138,7 @@ def run(cfl_target=0.8, tmax=25.0, kap_frac=1.0, nstep_cap=40000, tol=1e-9):
 
     t0 = time.perf_counter(); Minv = []
     for k, c in enumerate(cs):
-        d = S3.jacobi_diagonal(shape, D, mesh.facx, mesh.facy, kz, NU, c,
+        d = S3.jacobi_diagonal_analytic(shape, D, mesh.facx, mesh.facy, kz, NU, c,
                                mesh, mask, mesh.wq, kap, rw=RWS[k])
         Minv.append(S3.jacobi_inverse(d, mask))
     print(f'  jacobi probed (3 stages) in {time.perf_counter()-t0:.0f}s', flush=True)

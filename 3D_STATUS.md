@@ -8,7 +8,7 @@ code reuses `lssem2d.mesh`, `lssem2d.lgl` and `lssem2d.assembly.gather_scatter`
 by calling them, never by editing them. Every place the 2D API did not fit was
 worked around on the 3D side (see §2.4).
 
-**Suite: 147 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`).
+**Suite: 155 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`).
 
 | milestone | state | evidence |
 |---|---|---|
@@ -1130,6 +1130,73 @@ The required tolerance **does not tighten as `dt` falls** — 1e−06 holds acro
 
 ---
 
+## 7G. Analytic Jacobi diagonal: the probing loop was 40% of every run
+
+`jacobi_diagonal` had always been the **probing** loop — one full operator
+application per (node, field), `2·7·(N+1)²` of them per stage. Its own docstring
+called it *"REFERENCE QUALITY, NOT PRODUCTION"* and deferred the analytic form.
+It was deferred long enough to become the largest single cost:
+
+| N | preconditioner setup | 8-step solve | setup share |
+|---|---|---|---|
+| 8 | 2.7 s | 5.2 s | 34% |
+| 12 | 13.3 s | 21.2 s | 39% |
+| 16 | 43.3 s | 62.1 s | **41%** |
+
+It scales as **N²** while the solve's iteration count does not, so the share
+grows with resolution — and with modes: at N=12, `nk`=33 the probing cost was
+**168 seconds**.
+
+### The closed form
+
+Row `r` of `L₀` is `Σ_v [a·∂ₓU_v + b·∂_yU_v + cval·U_v]`, so
+
+```
+∂R_r(p,q)/∂U_v(i,j) = a·D[p,i]·facx·δ_qj + b·D[q,j]·facy·δ_pi + cval·δ_pi·δ_qj
+```
+
+— non-zero only on the row `p=i` or the column `q=j`. Squaring against the
+weights gives, per `(r, v)`:
+
+```
+wq[i,j]·|a·D[i,i]·facx + b·D[j,j]·facy + cval|²     the (i,j) term
++ a²·facx²·Σ_{p≠i} wq[p,j]·D[p,i]²                  the column
++ b²·facy²·Σ_{q≠j} wq[i,q]·D[q,j]²                  the row
+```
+
+The two sums are `(N+1)`-point contractions computed once for the whole mesh, so
+the cost is O(n²) per element instead of O(n²) **operator applications**.
+
+**The split-real simplification:** for a complex coefficient α the split-real
+block is `[[Re, −Im], [Im, Re]]`, whose column norms are both `|α|²`. So the real
+and imaginary halves of a field share one diagonal value, and the whole
+derivation can be done in complex arithmetic and written to both halves.
+
+### Verified and measured
+
+**Machine precision against the probed oracle — 3e−16**, swept over viscosity,
+the AC coefficient, both row weightings, and several `N`/`Nz`. That comparison is
+only meaningful because `jacobi_diagonal` is itself exact (0.0 against a
+continuous-unit-vector ground truth, §2.5), which is what makes it a usable
+reference rather than merely another implementation.
+
+| N | `nk` | probed | analytic | speedup |
+|---|---|---|---|---|
+| 8 | 1 | 0.92 s | 0.0004 s | 2223× |
+| 16 | 1 | 15.44 s | 0.0008 s | 19954× |
+| 12 | 33 | **168.0 s** | **0.008 s** | **21012×** |
+
+End-to-end on a real 8-step run the setup term simply disappears
+(43.3 s → 0.003 s at N=16), giving **1.5–1.7×** overall — and combined with the
+§7F tolerance policy, ~2.4× against where the session started. Three negative
+controls guard it: `k_z`, `ν`, `c`, `κ_p` and the row weights must each
+demonstrably change the answer, or the equality test would be passing on
+coincidence.
+
+All four drivers now use it.
+
+---
+
 ## 8. What is next
 
 Reordered by §7A.2. The AC accuracy programme is largely dissolved: it was
@@ -1316,7 +1383,7 @@ honest meter of exactly how marginally.
 | `solver3d.py` | gather-scatter, multiplicity weight, `normal_op`, batched `pcg`, `rkw3_step` |
 | **`parallel.py`** | **mode-parallel `apply_op` and `pcg` (§3.4)** |
 
-### Tests — 147, all passing
+### Tests — 155, all passing
 
 ```
 uv run --quiet python -m pytest lssem3d/tests -q

@@ -123,7 +123,7 @@ def make_precond(s, dt, kap, rowweight):
     for k in range(T.NSTAGE):
         cc = T.implicit_coeff(dt, k)
         rw = OP.momentum_row_weights(cc) if rowweight else None
-        out.append(S3.jacobi_inverse(S3.jacobi_diagonal(
+        out.append(S3.jacobi_inverse(S3.jacobi_diagonal_analytic(
             shape, s['D'], s['m'].facx, s['m'].facy, s['kz'], s['nu'], cc,
             s['m'], s['mask'], s['m'].wq, kap, rw=rw), s['mask']))
     return out

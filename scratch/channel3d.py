@@ -201,7 +201,7 @@ def make_precond(s, dt, kap, rowweight=False):
     for k in range(T.NSTAGE):
         cc = T.implicit_coeff(dt, k)
         rw = OP.momentum_row_weights(cc) if rowweight else None
-        d = S3.jacobi_diagonal(shape, s['D'], s['m'].facx, s['m'].facy, s['kz'],
+        d = S3.jacobi_diagonal_analytic(shape, s['D'], s['m'].facx, s['m'].facy, s['kz'],
                                s['nu'], cc, s['m'],
                                s['mask'], s['m'].wq, kap, rw=rw)
         # jacobi_inverse, not 1/max(d, 1e-30): the clamp puts 1e30 on every
