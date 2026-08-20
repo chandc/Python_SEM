@@ -15,7 +15,7 @@ worked around on the 3D side (see §2.4).
 | M1 `fourier.py` + Stage 0 | **done** | transform/derivative tests, Hermitian assertions |
 | M2 operator + Stage 1 | **PASSED**\* | §1, `figs/cavity3d_kz0_profiles.png` |
 | M3 Stages 2–3 | **done** | analytic single-mode; dealiasing with negative control |
-| M4 Stage 4 MMS | **PASSED** | §4 — spectral in `N` and `Nz`; temporal gate restated |
+| M4 Stage 4 MMS | **PASSED** | §4 — spectral in `N` and `Nz`; temporal gate restated. **PDE-level order 2.00 confirmed** (§7A.5) |
 | M5 Stage 5 gate | **PASSED in 3D**\* | §7 — stable to `a_mass` = 6000; window spans ~66× in `dt` |
 | M6 numba backend | not started | §3 changes what this should target |
 | M7 `Re_τ` = 180 | not started | — |
@@ -761,17 +761,63 @@ Three, recorded because the sequence is instructive:
 3. **"AC is the enabling technology"** — true for the 2D *outflow* case, and true
    of `lssem3d` only because of the scaling bug.
 
-### 7A.5 What is still open
+### 7A.5 RESOLVED: with row weights and no operator-AC, the scheme is exactly second order
 
-* **Does the scheme now reproduce the 2D result end to end?** The single
-  `dt` = 5e−3 point matches; the full `dt` sweep against
-  `figs/chan_fig1_pref.png` (slope ~2, spatial floor at fine `dt`) has not
-  been run.
-* **Is AC still wanted?** With the functional correctly scaled, re-measure the
-  conditioning benefit honestly — at equal accuracy.
-* **Preconditioner-only AC**: use the AC operator as a *preconditioner* for the
-  true system. Zero bias by construction, conditioning benefit retained. Untried,
-  and the most promising remaining option if AC still helps.
+`scratch/stokes3d.py`, N = 10, 2×4 elements, Stokes decay against the analytic
+σ = 9.3137399. Row weights **on**. No solve hit `max_iter` (guard armed, and it
+matters — a capped solve promotes the preconditioner into the scheme, which is
+how the earlier AC-off "controls" returned two different wrong answers).
+
+| `dt` | 0.01 | 0.005 | 0.0025 | 0.00125 | **order** |
+|---|---|---|---|---|---|
+| **AC off** (`κ_p` = 0) | 1.680e−04 | 4.189e−05 | 1.046e−05 | **2.613e−06** | **2.00, 2.00, 2.00** |
+| AC on, `κ_p` = `a_mass` | 6.477e−03 | 6.063e−03 | 6.062e−03 | 6.072e−03 | 0.10, 0.00, −0.00 |
+
+**Exactly the design order.** RKW3/CN is second order by construction — RK3's
+third order applies to the explicit convective half alone (measured 3.025 on the
+coefficient table), and Crank–Nicolson caps the mixed scheme at 2 (measured 2.189
+on the scalar model). The 3D PDE stepper now delivers that 2, to two decimal
+places, three refinements running.
+
+This is the **first PDE-level demonstration** that the 3D scheme achieves its
+design order. Stage 4's temporal gate ran on a scalar model with no pressure, no
+constraint rows, no assembly and no BCs; the AC-off PDE controls never converged.
+"AC is the whole gap" was a hypothesis until this table.
+
+**And the contrast is total.** Operator-AC at `κ_p` ∝ 1/`dt` is pinned at
+6.1e−03 with zeroth order — 2300× the AC-off error at the finest `dt`, and
+refining time does nothing. The entire accuracy pathology of §7A.1 was
+operator-AC standing on a mis-scaled functional.
+
+#### The consistency ladder, completed
+
+`div u = −κ_p·(p − p_prev) ≈ −κ_p·ṗ·dt`, so the scaling of `κ_p` sets the order
+the scheme is *permitted* to reach:
+
+| `κ_p` scaling | AC error | order permitted | status |
+|---|---|---|---|
+| ∝ 1/`dt` (was production) | O(1) | zeroth | **measured: 0.00** |
+| fixed | O(`dt`) | first | measured: error falls, ~0.4 |
+| ∝ `dt` | O(`dt²`) | second | untested — now moot |
+| **0 (AC off)** | **none** | **second** | **measured: 2.00** |
+
+With row weights the last row is simply available, so the ∝ `dt` compromise is
+unnecessary for production. It remains the fallback if AC is ever wanted back for
+speed on a harder problem.
+
+### 7A.6 What is still open
+
+* **Preconditioner-only AC** — `κ_p` in `jacobi_diagonal`/`M_inv` only, zero in
+  the operator. Zero bias by construction. Much less urgent now that AC-off
+  solves in 17k–147k iterations, but it is the right form if AC is ever wanted
+  back for speed.
+* **Is AC wanted at all?** Cost at `dt` = 0.01: AC-off 17203 CG against AC-on
+  24471 — AC is now *slower as well as less accurate*. The 63× benefit was
+  entirely an artifact of the mis-scaled functional.
+* **The spatial floor** has not been mapped. The 2D figure shows error flattening
+  at fine `dt` as spatial error takes over, and `p`-refinement lowering it. At
+  N = 10 nothing has flattened by `dt` = 1.25e−3 (still 2.00), so the floor is
+  below 2.6e−06 — worth locating before M7 sets its resolution.
 * **`nsub` non-monotonicity**: `nsub` = 10 was worse than `nsub` = 3. Unexplained,
   and possibly a defect in the sub-iteration. Re-check with row weights on.
 * **Row weights everywhere**: only the Stokes rig passes `rw` today. The cavity
@@ -783,20 +829,20 @@ Reordered by §7A.2. The AC accuracy programme is largely dissolved: it was
 measuring a scaling bug. What replaces it is re-validation with the functional
 correctly weighted.
 
-### 8.1 Finish reproducing the 2D Stokes result ⚑
+### 8.1 DONE — the 2D Stokes result is reproduced
 
-One `dt` matches (4.19e−05 against σ_exact at `dt` = 5e−3). Run the full sweep
-against `figs/chan_fig1_pref.png`: slope ~2 through the temporal regime, all
-polynomial orders coincident there, and the spatial floor dropping with `N`.
-**This is the gate that says the 3D scheme is correct**, and it is now within
-reach for the first time.
+Order **2.00, 2.00, 2.00** with row weights and AC off (§7A.5), error 2.6e−06 at
+`dt` = 1.25e−3. The remaining piece is the *p*-refinement half of
+`figs/chan_fig1_pref.png` — locating the spatial floor by sweeping `N`, which
+M7 needs anyway to choose its resolution.
 
-### 8.2 Re-measure AC honestly, with row weights on
+### 8.2 Decide AC's future — the case for it has collapsed
 
-Is AC wanted at all? The 63× conditioning claim was repairing a bug. If it still
-helps, the zero-bias form is **preconditioner-only AC** — use the AC operator as
-a preconditioner for the true system, never in the operator being solved.
-Untried and the most promising remaining option.
+At `dt` = 0.01, AC-off costs **17203** CG against AC-on's **24471**: with the
+functional correctly weighted AC is *slower as well as less accurate*. Unless a
+harder problem revives it, the production configuration is **row weights, no
+operator-AC**. If it is ever wanted back, use **preconditioner-only AC**
+(`κ_p` in `M_inv`, zero in the operator), which cannot bias the answer.
 
 ### 8.3 Propagate row weights to every driver
 
@@ -807,6 +853,13 @@ and Stage 5 was a stability result — but both should be re-run once 8.1 passes
 and until then their numbers carry an asterisk.
 
 ### 8.4 Hardening carried over from review
+
+* **Convergence guards on every order study.** A capped solve promotes the
+  preconditioner into the scheme — that is how two AC-off runs returned σ = 9.384
+  and σ = 14.279. Assert `max_iter` was not reached, and that the solver
+  tolerance sits well below the `dt`-to-`dt` difference being measured; at
+  `dt` = 1.25e−3 the signal is ~2.6e−06, so 1e−12 leaves six decades, but a
+  1e−8 tolerance would have left only two.
 
 * Port the 2D `pcg_solve` **true-residual safeguard** to the 3D `pcg` — it
   restarts on recursive-residual drift, and the `k_z` study already runs to 10⁴+

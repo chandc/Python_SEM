@@ -283,6 +283,17 @@ ignores `div u` and the normal operator is unusable. Measured on Stokes decay
 with AC off — 600000 CG iterations (cap saturated, wrong answer) without row
 weights, **22047 and 11× more accurate** with them.
 
+**RESOLVED 2026-08-19.** With row weights on and AC removed from the operator,
+the 3D stepper is **exactly second order on the Stokes-decay benchmark** —
+measured 2.00, 2.00, 2.00 across `dt` = 1e−2 → 1.25e−3, error 2.6e−06 at the
+finest step, no solve capped. That is the design order (RK3's third order applies
+to the explicit half alone; Crank–Nicolson caps the mixed scheme at 2), and it is
+the first PDE-level confirmation — Stage 4's gate ran on a scalar model with no
+pressure and no constraint rows. Operator-AC at `κ_p` ∝ 1/`dt` sits at 6.1e−03
+with **zeroth** order for comparison, and now costs *more* CG iterations than
+AC-off (24471 vs 17203 at `dt` = 1e−2). **Production configuration: row weights,
+no operator-AC.**
+
 **Consequence for this plan's AC story.** §0.3's "AC is the enabling technology"
 holds for the 2D *outflow* case, but in 3D AC was largely compensating for this
 missing weighting — adding `κ_p·p` lifts the continuity row toward the momentum
