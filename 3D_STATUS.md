@@ -884,12 +884,30 @@ Reordered by §7A.2. The AC accuracy programme is largely dissolved: it was
 measuring a scaling bug. What replaces it is re-validation with the functional
 correctly weighted.
 
-### 8.1 DONE — the 2D Stokes result is reproduced
+### 8.1 DONE — the 2D Stokes result is reproduced, p-refinement included
 
 Order **2.00, 2.00, 2.00** with row weights and AC off (§7A.5), error 2.6e−06 at
-`dt` = 1.25e−3. The remaining piece is the *p*-refinement half of
-`figs/chan_fig1_pref.png` — locating the spatial floor by sweeping `N`, which
-M7 needs anyway to choose its resolution.
+`dt` = 1.25e−3. The *p*-refinement half — the 3D counterpart of
+`figs/chan_fig1_pref.png` — is now measured too (`scratch/stokes3d_pref.py`,
+**`figs/stokes3d_pref.png`**), 2×4 elements, Nz = 8, dt = 0.01 → 6.25e−4,
+every solve guarded against the CG cap:
+
+| N | slope | rel err in σ at dt = 6.25e−4 |
+|---|---|---|
+| 6 | 1.94 | 1.03e−06 — **spatial floor emerging** |
+| 8 | 2.00 | 6.48e−07 |
+| 10 | 2.00 | 6.48e−07 |
+| 8, **SPAN mode** (α = 0, k_z = 1) | 2.00 | 6.48e−07 |
+
+Three findings. (i) N = 8 and N = 10 agree **to four digits at every dt** —
+both fully temporal, so the N = 8 spatial floor is already below 6.5e−07 on
+this mode, and only N = 6 shows the floor beginning to bite. (ii) The **SPAN
+family** (no x-dependence; only v, w, ω_x live, every i·k_z term exercised)
+matches the kz0 family to all displayed digits at every dt — the symmetry
+σ(α=1,k_z=0) = σ(α=0,k_z=1) is delivered exactly, which no k_z = 0 test could
+show. (iii) SPAN costs ~6× the CG of kz0 at the same settings (1.47M vs 230k
+iterations at the finest dt) — the spanwise mode is markedly worse conditioned,
+worth knowing before M7 budgets its solves.
 
 ### 8.2 Decide AC's future — the case for it has collapsed
 
@@ -929,6 +947,26 @@ and until then their numbers carry an asterisk.
 * `nsub` non-monotonicity (`nsub` = 10 worse than 3) — recheck with row weights.
   *(Two stale duplicates of the DONE items above were removed here in the
   closure review.)*
+
+### 8.45 Two suggestions that fell on the floor
+
+Recorded because neither had a trace in any doc, code or queue — an omission is
+worth a line even when the answer turns out to be "no".
+
+* **Zero the Nyquist mode outright.** Standard practice in dealiased spectral
+  DNS: the Nyquist mode carries no reliable physics (its derivative aliases to
+  zero on the grid), and here it is *measurably the worst-conditioned solve* —
+  46% more CG iterations than its neighbour (§6). Freezing its imaginary half
+  fixed a real bug (§5); deleting the mode removes the class **and** the cost.
+  The argument against is that `Nz` becomes effectively `Nz−1` and the rfft
+  layout gains a special case. Cheap to try, and it should be decided rather
+  than left implicit.
+* **A minimal-channel (Jiménez–Moin) intermediate before full M7.** Sustained
+  near-wall turbulence in a box ~5–10× cheaper than the full `Re_τ` = 180
+  domain — an honest rehearsal of every piece of M7 machinery (forcing,
+  statistics, run length, restart) before committing to the expensive run. Given
+  §8.3's compute wall, this is the cheaper way to discover whatever M7 will
+  teach us about cost.
 
 ### 8.5 Then the original queue
 
