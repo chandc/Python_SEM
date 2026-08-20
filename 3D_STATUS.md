@@ -58,6 +58,12 @@ argument. AC in the operator costs **5–7 orders of magnitude of accuracy**; le
 weights are **4.4× cheaper** than the alternative once AC is off; and the
 tolerance policy is worth a **free 40%** of the iteration count.
 
+**Turnaround improved 2.38×** (142.3 s → 59.7 s on a standard run), from two
+changes that cost a day and carried no correctness risk: an analytic Jacobi
+diagonal (the probing loop was 41% of every run) and a CG tolerance policy (the
+solver had been over-solving by ~10 orders). Neither is `numba`, which remains
+deferred.
+
 **Twelve silent bugs, none of which raised an exception.** Every one produced a
 correctly-shaped, plausible array. The two most consequential were found in the
 last day: the **pressure pin covered one copy of a shared node**, making the
@@ -132,6 +138,66 @@ was resolved by finding a knob that separates them:
 row, not a constraint. The meaningful quantity was **2.39× the AC-off floor**,
 not the raw 1.46e−02. Likewise the M2 gate's target was the *2D curve*, not
 Ghia's numbers, because 2D and 3D share a discretisation error that Ghia does not.
+
+### L9. A profile that measures the wrong UNIT hides the biggest cost
+
+§3 profiled a **step** and concluded `normal_op` is **99.4%** of it — FFT and
+gather-scatter not worth touching. That number is correct and it was measured
+carefully, with the alternatives (BLAS threading, processes vs threads) ruled out
+by experiment. It also led me to believe there was nothing left to optimise but
+the matvec.
+
+`scratch/prof3d.py` times `normal_op`, `convective`, `fft` and `gs`. It never
+timed **preconditioner setup**, because setup happens once per *run* and the
+profile measured a *step*. That setup was **34–41% of the run**, growing as N²,
+and reached **168 seconds** at N=12 with 33 modes.
+
+So the conclusion "the matvec is everything" was true of the unit measured and
+false of the thing we actually wait for. **Profile the unit you are impatient
+about** — if you are waiting on a run, profile a run, including everything that
+happens once.
+
+### L10. "Reference quality, not production" is debt with an apology attached
+
+`jacobi_diagonal` carried this in its own docstring from the day it was written:
+
+> REFERENCE QUALITY, NOT PRODUCTION … far too slow for a real run … the 3D
+> analytic form is a later optimisation
+
+The note was accurate, honest, and completely ineffective. The routine stayed
+for the whole project and grew into the single largest cost, while its
+replacement sat in a queue and was at one point *demoted* — because the `k_z`
+study had killed its **conditioning** rationale, and nobody re-checked whether
+its **setup-cost** rationale still stood. It did, and it was worth 40%.
+
+A deferred optimisation with a docstring apology is still debt. What it needs is
+not a better comment but a **periodic measurement**: the cost of the temporary
+thing, quoted next to the cost of the real work.
+
+There is a compensating point, and it is the reason this ended well. The probing
+loop was kept *exact* rather than merely adequate, and it had been fixed (§2.5)
+before the analytic form was written — so it could serve as the oracle its own
+docstring predicted it would be. The analytic diagonal matches it to **3e−16**.
+Had the optimisation been done earlier, it would have been validated against a
+reference that was 1.4% wrong at every interface node, and would very likely
+have been "corrected" until it reproduced the contamination.
+
+### L11. Quote the number you measured, not a product of factors
+
+The combined speed-up was first reported as "~2.4×", built from two measured
+factors with one leg **extrapolated** (the `tol`=1e−12 solve time at N=16, inferred
+from an iteration ratio measured at N=12). Measured directly, all four corners:
+
+| | `tol`=1e−12 | `tol`=1e−06 |
+|---|---|---|
+| probed diagonal | **142.3 s** | 107.9 s |
+| analytic diagonal | 101.3 s | **59.7 s** |
+
+**2.38×** — the estimate was right, which is luck rather than method. Note also
+that the two savings do **not** compose multiplicatively (1.40 × 1.32 = 1.85,
+not 2.38): removing a fixed setup cost is worth proportionally more once the
+solve has shrunk. Quoting a product would have been wrong in the other
+direction.
 
 ### L8. The other implementation is the cheapest oracle, and it was under-used
 
