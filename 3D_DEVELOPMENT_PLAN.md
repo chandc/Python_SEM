@@ -763,3 +763,8 @@ expensive. Once Stage 4 passes:
   or needs work (the 2D code has periodic-channel cases; confirm at M2).
 * Whether the split-real doubling can be dropped later for a Hermitian CG once
   the real version is trusted — a performance option, not a correctness one.
+* If the 3D problem ever grows an **outflow boundary** (an inflow/outflow BFS or
+  LES target), two 2D results transfer directly: every constraint of
+  `AMASS_RESOLVED.md`/plan §0.3 re-applies in full, and the **Dong outlet**
+  (`bc = 6`, `DONG_OBC_RESULTS.md`) decisively beat P+Z on truncated domains —
+  port it rather than re-deriving an outflow treatment.

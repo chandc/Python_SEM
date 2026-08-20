@@ -73,10 +73,17 @@ def test_mms_convergence():
         # But for MMS, pressure is uniquely defined by U_exact if we start from U_exact!
         # Actually, let's just do 1 Newton step to get the residual/update.
         from lssem2d.solver import newton_step
+        from lssem2d.assembly import gather_scatter
         su_history = np.zeros_like(U_0)
-        
-        # First Newton step
-        U_1, dU, iters = newton_step(state, U_0, su_history, time=0.0, f_known=f_known, pin_p=True)
+
+        # First Newton step.  M_inv is ignored by newton_step (it rebuilds the
+        # preconditioner internally); multiplicity_weight is required.  This
+        # call was missing both positionals for the life of the file -- a
+        # latent TypeError, never hit because this script is not
+        # pytest-collected (no test_ prefix).
+        mult = gather_scatter(state.mesh, np.ones_like(U_0))
+        mw = 1.0 / np.where(mult < 1e-10, 1.0, mult)
+        U_1, dU, iters = newton_step(state, U_0, su_history, None, mw, time=0.0, f_known=f_known, pin_p=True)
         
         err = np.sqrt(np.sum(dU**2) / np.sum(U_exact**2))
         errors.append(err)

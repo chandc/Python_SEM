@@ -871,11 +871,9 @@ and until then their numbers carry an asterisk.
   `dt` = 1.25e−3 the signal is ~2.6e−06, so 1e−12 leaves six decades, but a
   1e−8 tolerance would have left only two.
 
-* Port the 2D `pcg_solve` **true-residual safeguard** to the 3D `pcg` — it
-  restarts on recursive-residual drift, and the `k_z` study already runs to 10⁴+
-  iterations without it.
-* Standardise `M_inv` construction on `solver3d.jacobi_inverse` in every driver.
 * `nsub` non-monotonicity (`nsub` = 10 worse than 3) — recheck with row weights.
+  *(Two stale duplicates of the DONE items above were removed here in the
+  closure review.)*
 
 ### 8.5 Then the original queue
 
@@ -884,17 +882,24 @@ M7 step-cost model, the Stage 6 forcing decision (constant mass flux vs constant
 pressure gradient — undecided, and it changes the per-step constraint), and
 closing M2 by restarting from the saved field.
 
-### Noted, not owned
+### Noted, not owned — CLOSED by the OBC session (commit 7ddcda5)
 
-Two defects in `lssem2d`, left alone under the "do not modify the 2D code"
-constraint and handed to the OBC session:
+Two defects in `lssem2d`, handed to the OBC session and since fixed there:
 
-* `newton_step` builds `M_inv` from the linearisation at `U/2` but solves against
-  the Jacobian at full `U` — the preconditioner is the exact diagonal of a
-  different operator. Harmless to the converged answer, real for efficiency in
-  convection-dominated runs.
-* `step_bdf` computes `state.M_inv` every step and `newton_step` immediately
-  shadows it — one full Jacobi build per step, computed and discarded.
+* ~~`newton_step` builds `M_inv` at `U/2` but solves at full `U`~~ **fixed** —
+  the diagonal is now built from the same linearisation the CG solves.
+  Measured impact on the convection-dominated Re = 1000 cavity: **1.2%** fewer
+  CG iterations (18925 → 18696). Small by structure: the GLL differentiation
+  matrix has zero diagonal at interior nodes, so first-derivative convection
+  barely reaches a *diagonal* preconditioner — which is also why the defect
+  survived every study unnoticed.
+* ~~the dead per-step `state.M_inv` build~~ **removed** — numerics-neutral
+  (identical iteration counts), one full Jacobi build per time step saved.
+  The `M_inv` parameter of `newton_step` is kept for call-site compatibility
+  and documented as ignored.
+
+Converged fixed points are unaffected by both (a preconditioner is invisible
+in a converged solve); the 2D and 3D suites pass, `test_stage1_vs_2d` included.
 
 ## 9. Inventory
 
