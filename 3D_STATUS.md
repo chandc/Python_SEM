@@ -1,7 +1,8 @@
 # 3D expansion — status, the M2 gate, and where the cores go
 
-*Companion to `3D_DEVELOPMENT_PLAN.md`. That document is the plan; this one
-records what was measured against it.*
+*Companion to `3D_DEVELOPMENT_PLAN.md` (the plan and its gates) and
+[3D_FORMULATION.md](./3D_FORMULATION.md) (the equations and the time-marching
+steps, transcribed from the code). This document records what was measured.*
 
 `lssem3d/` is a **new module**. `lssem2d/` is untouched, as required — the 3D
 code reuses `lssem2d.mesh`, `lssem2d.lgl` and `lssem2d.assembly.gather_scatter`
