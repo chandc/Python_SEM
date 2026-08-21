@@ -173,6 +173,73 @@ class _Level:
         self.mw = 1.0/np.where(mult < 1e-10, 1.0, mult)
 
 
+class DirectCoarse:
+    """EXACT solve on the coarsest level, factorised once.
+
+    A V-cycle needs the coarsest grid SOLVED, not smoothed.  Measured with a
+    Chebyshev coarse "solve" the cycle converged at 0.99 per iteration, and
+    raising its degree from 4 to 40 changed nothing (0.9898 -> 0.9897) -- a
+    polynomial saturates well short of a solve on an ill-conditioned operator,
+    so degree-independence does NOT mean the coarse level is fine.
+
+    Cheap here because the MODES ARE INDEPENDENT: the coarse operator is block
+    diagonal in k_z, so this factorises one small dense block per mode rather
+    than one huge one.  At p = 2 on a 3x3 mesh that is ~700 dofs per mode.
+
+    Built in the GLOBAL (continuous) basis, since the assembled operator acts on
+    continuous fields: a basis vector is `gs` of a one-hot, deduplicated by
+    support, and the inner product carries the multiplicity weight so each
+    global node counts once.
+    """
+
+    name = 'direct'
+
+    def __init__(self, level):
+        self.lev = level
+        shape, m, mask = level.shape, level.m, level.mask
+        nk = shape[-1]
+        self.B, self.lu = [], []
+        for k in range(nk):
+            cols, seen = [], set()
+            for e in range(shape[0]):
+                for i in range(shape[1]):
+                    for j in range(shape[2]):
+                        for f in range(OP.NVAR_R):
+                            if mask[e, i, j, f, k] == 0.0:
+                                continue
+                            ed = np.zeros(shape)
+                            ed[e, i, j, f, k] = 1.0
+                            g = S3.gs(m, ed)
+                            key = tuple(np.flatnonzero(np.abs(g.ravel()) > 0.5))
+                            if not key or key in seen:
+                                continue
+                            seen.add(key)
+                            cols.append(g)
+            if not cols:
+                self.B.append(None); self.lu.append(None); continue
+            B = np.stack([c.ravel() for c in cols], axis=1)
+            mw = level.mw.ravel()
+            Amat = np.empty((B.shape[1], B.shape[1]))
+            for a in range(B.shape[1]):
+                Av = level.A(B[:, a].reshape(shape)).ravel()
+                Amat[:, a] = B.T @ (Av*mw)
+            Amat = 0.5*(Amat + Amat.T)          # symmetrise against round-off
+            self.B.append(B)
+            self.lu.append(np.linalg.pinv(Amat))
+        self.mw = level.mw.ravel()
+
+    def __call__(self, r):
+        shape = self.lev.shape
+        z = np.zeros(shape)
+        rf = r.ravel()
+        for k, (B, Ai) in enumerate(zip(self.B, self.lu)):
+            if B is None:
+                continue
+            g = B.T @ (rf*self.mw)
+            z += (B @ (Ai @ g)).reshape(shape)
+        return z*self.lev.mask
+
+
 class PMG:
     """Recursive p-multigrid V-cycle, usable as a `pcg` preconditioner.
 
@@ -186,7 +253,7 @@ class PMG:
 
     def __init__(self, mesh, nk, nz, nu, c, kz, kap=0.0, rw=None,
                  orders=(8, 4, 2), deg=6, coarse_deg=10, pin_p=True,
-                 optimised=True):
+                 optimised=True, direct_coarse=True):
         assert len(orders) >= 2 and list(orders) == sorted(orders, reverse=True), \
             f'orders must be descending, got {orders}'
         assert orders[0] == mesh.N, f'finest order {orders[0]} != mesh.N {mesh.N}'
@@ -201,10 +268,12 @@ class PMG:
         self.smooth = [Chebyshev4(l.A, l.M_inv, l.shape, deg=deg,
                                   optimised=optimised)
                        for l in self.levels[:-1]]
-        # coarsest: a FIXED linear operator (rule 3)
+        # coarsest: SOLVED, not smoothed.  A direct factorisation is also a
+        # fixed linear operator, so rule 3 is satisfied a fortiori.
         lc = self.levels[-1]
-        self.coarse = Chebyshev4(lc.A, lc.M_inv, lc.shape, deg=coarse_deg,
-                                 optimised=optimised)
+        self.coarse = (DirectCoarse(lc) if direct_coarse else
+                       Chebyshev4(lc.A, lc.M_inv, lc.shape, deg=coarse_deg,
+                                  optimised=optimised))
 
     def _restrict(self, x, lev):
         """Fine residual -> coarse.  Multiplicity-weighted (rule 2), then P^T,
