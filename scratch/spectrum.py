@@ -16,6 +16,11 @@ convenient-but-invalid measurements and each was wrong:
      0.9899, i.e. not at all.
   4. "The coarse operator is 100x worse conditioned" -- compared p=6 at
      nu=1/180, c=525 against p=3 at nu=1/100, c=600.  Different parameters.
+  5. AND THIS FILE ITSELF, in its first version: it symmetrised M^-1 A with
+     0.5*(M + M.T).  M^-1 A is a product of two symmetric matrices and is NOT
+     symmetric, so the eigenvalues of its symmetric part are not the operator's
+     -- the giveaway was NEGATIVE eigenvalues for an SPD operator.  The tool
+     written to prevent this class of error contained an instance of it.
 
 Every one was caught by the NEXT test contradicting it.  The common fault was
 reaching for whatever was convenient rather than something invariant to the
@@ -53,7 +58,16 @@ def global_basis(mesh, mask, shape, mode=0):
 
 
 def spectrum(p, ex=2, nu=1/100., c=600., precond=True, rowweight=True):
-    """Eigenvalues of M^-1 A (or A) at order p, single mode."""
+    """Eigenvalues at order p, single mode.
+
+    UNPRECONDITIONED: A is symmetric, so `eigvalsh` is exact and unambiguous.
+
+    PRECONDITIONED: M^-1 A is NOT symmetric (a product of symmetric matrices
+    rarely is), so it must be posed as the GENERALISED problem A v = lam M v --
+    equivalently the spectrum of M^-1/2 A M^-1/2, which is symmetric and has the
+    same eigenvalues.  Symmetrising M^-1 A instead is wrong and gives negative
+    eigenvalues for an SPD operator.
+    """
     m = build_channel(1., 1., ex, ex, p, bcs=(1, 1, 1, 2))
     D = diff_matrix(p)
     kz = np.zeros(1)
@@ -65,14 +79,25 @@ def spectrum(p, ex=2, nu=1/100., c=600., precond=True, rowweight=True):
         shape, D, m.facx, m.facy, kz, nu, c, **kw), mask) if precond else 1.0)
     B = global_basis(m, mask, shape)
     mw = S3.multiplicity_weight(m, shape).ravel()
-    M = np.empty((B.shape[1],)*2)
+    Amat = np.empty((B.shape[1],)*2)
     for a in range(B.shape[1]):
         Av = S3.normal_op(B[:, a].reshape(shape), D, m.facx, m.facy, kz, nu,
                           c, **kw).ravel()
-        M[:, a] = B.T @ ((Mi.ravel() if precond else 1.0)*Av*mw)
-    M = 0.5*(M + M.T)
-    ev = np.sort(np.real(np.linalg.eigvals(M)))
-    return ev[np.abs(ev) > 1e-14], B.shape[1]
+        Amat[:, a] = B.T @ (Av*mw)
+    Amat = 0.5*(Amat + Amat.T)          # A IS symmetric; this only kills round-off
+    if not precond:
+        ev = np.linalg.eigvalsh(Amat)
+        return ev[ev > 1e-13*ev.max()], B.shape[1]
+    # generalised: A v = lam M v, with M the Jacobi diagonal in the same basis
+    dinv = Mi.ravel()
+    dmat = np.empty_like(Amat)
+    for a in range(B.shape[1]):
+        col = np.where(dinv > 0, 1.0/np.where(dinv > 0, dinv, 1.0), 0.0)*B[:, a]
+        dmat[:, a] = B.T @ (col*mw)
+    dmat = 0.5*(dmat + dmat.T)
+    from scipy.linalg import eigh
+    ev = eigh(Amat, dmat, eigvals_only=True)
+    return ev[ev > 1e-13*ev.max()], B.shape[1]
 
 
 if __name__ == '__main__':
@@ -90,6 +115,7 @@ if __name__ == '__main__':
               f'{np.sqrt(cond):>12.0f}', flush=True)
     json.dump(out, open('scratch/spectrum.json', 'w'), indent=1)
     print('\n  cond grows ~p^4-p^6 -- Jacobi DOES degrade with order, as SEM must.')
-    print('  But cond ~ 1.8e8 even at p = 2: the ill-conditioning is intrinsic to')
-    print('  the least-squares VVP operator at EVERY order, so p-coarsening')
-    print('  cannot hand multigrid an easy coarse problem.')
+    print('  And p = 2 is EASY: cond 7.6e3, sqrt ~ 87.  Coarsening p=10 -> p=2')
+    print('  improves conditioning 24,000x, so p-multigrid DOES get an easy')
+    print('  coarse problem.  An earlier claim to the contrary came from the')
+    print('  symmetrisation bug above (error 5) and is retracted.')
