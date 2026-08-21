@@ -1394,6 +1394,49 @@ this operator.
 
 ---
 
+## 7F. Fast-diagonalization preconditioning of the LS solve: measured and REJECTED
+
+`lssem3d/fastdiag.py`, `tests/test_fastdiag.py`. The Step-1 idea from the
+performance discussion: the field-by-field diagonal blocks of the normal
+operator are separable Helmholtz operators on the tensor mesh, so precondition
+CG with their **exact** fast-diagonalization inverses (Lynch–Rice–Thomas; two
+1D eigenproblems, four small matmuls per application — cheaper than a matvec).
+The machinery is built and pinned by test: inverts an explicitly-assembled
+Kronecker surrogate to **6.7e−16**, symmetric in the multiplicity-weighted
+inner product, null directions zeroed.
+
+**As a preconditioner for the LS normal equations it LOSES to plain Jacobi**,
+measured on a production stage solve (re100 grid, peak-enstrophy state,
+c = 300, tol = 1e−6, legacy row weights):
+
+| preconditioner | CG iterations |
+|---|---|
+| analytic Jacobi (production) | **259** |
+| fast-diag block inverse (α = 1) | 759 |
+| …with velocity stiffness scaled α = 0.5 / 0.25 / 0.1 / 0 | 847 / 934 / 1272 / 8214 |
+
+Two lessons, both worth keeping:
+
+1. **The "small coupling" premise was wrong at the O(1) level.** The u–p and
+   momentum-row u–ω couplings are indeed O(1/c) — but the **continuity row
+   couples u, v, w at full strength, and the vorticity-definition rows couple
+   velocity to vorticity at full strength**. A field-decoupled surrogate,
+   however exact per block, misrotates those coupled modes, and CG pays more
+   for the misrotation than it gains from the exact block interiors.
+2. **The α sweep killed the rescue hypothesis in one table.** A
+   Schur-cancellation argument predicted the surrogate was over-stiff; scaling
+   the stiffness down made things monotonically *worse*. One cheap sweep
+   separated "wrong magnitude" from "wrong structure" — it is the structure.
+
+Also learned in passing: at the tol = 1e−6 policy with legacy row weights, the
+production Jacobi solve needs only ~260 iterations on the re100-size stage —
+the conditioning problem is far less dire than the 1e−12-era numbers implied.
+
+**The machinery is NOT wasted**: the exact tensor-product inverse is precisely
+the direct solver a projection/fractional-step stage uses (scalar Helmholtz
+and Poisson per mode — no inter-field coupling exists there to defeat it).
+If Step 2 is taken, `fastdiag.py` is its solver core, already validated.
+
 ## 8. What is next
 
 Reordered by §7A.2. The AC accuracy programme is largely dissolved: it was
