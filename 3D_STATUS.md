@@ -72,10 +72,15 @@ assembled operator non-symmetric on every periodic mesh (a 240× error floor tha
 made the convection-active measurement impossible), and the **Jacobi probe was
 1.4% wrong at every interface node**.
 
-**Status:** M1–M4 complete and verified; M5 passed but measured before two later
-fixes; M6 (numba) and M7 (`Re_τ` = 180) remain. The open risk is §8.2 — whether
-the recipe survives walls, since the cavity needed AC and the reason is inferred
-rather than measured.
+**The recipe survives walls** (§7H) — the risk that dominated the queue is
+closed. The channel runs AC-off at every `a_mass` from 120 to 6000, at a cost
+ratio of **4.3×** against the cavity's **490×**, so the cavity's AC dependence is
+a property of its lid and corner singularities rather than of walls or
+viscosity. M7's geometry inherits the recipe.
+
+**Status:** M1–M5 complete and verified (M5 re-run on corrected code, §7H); M6
+(numba, demoted) and M7 (`Re_τ` = 180) remain. M2 still carries an asterisk — the
+cavity driver has not been re-run since the row-weight fix.
 
 **What is *not* established:** a general recipe. The three benchmarks agree only
 because they were driven to agree at M7's viscosity; the cavity still behaves

@@ -14,6 +14,9 @@ __nbcache__/
 # compared without re-solving, but they are working data (30 MB and growing),
 # not artefacts.  Regenerate with the driver scripts.
 scratch/*.npz
+scratch/**/*.npz          # frame dumps from long runs land in subdirectories,
+                          # which `scratch/*.npz` does not match -- a multi-week
+                          # TGV run would otherwise commit its checkpoints
 *.log
 
 # Third-party publications: fetch locally, never commit.  See reference/README.md
