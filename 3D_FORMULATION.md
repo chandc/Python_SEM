@@ -55,9 +55,10 @@ row.
 > it loads their Jacobi diagonal with derivative-squared terms while
 > contributing nothing to $\mathcal{A}$ for divergence-free vorticity. Measured
 > cost: **10.5× the CG iterations** and a conditioning penalty growing with
-> order (139× at $p$=4, 2885× at $p$=10). `operator.ROW7_WEIGHT` = $10^{-4}$. Everything is first
-order, which is what permits a single $C^0$ spectral-element space for every
-variable.
+> order (139× at $p$=4, 2885× at $p$=10). `operator.ROW7_WEIGHT` = $10^{-4}$.
+
+Everything is first order, which is what permits a single $C^0$ spectral-element
+space for every variable.
 
 ## 3. Fourier expansion in $z$
 
