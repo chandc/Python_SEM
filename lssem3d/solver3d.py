@@ -157,6 +157,122 @@ def jacobi_diagonal(shape, D, facx, facy, kz, nu, c, mesh=None, mask=None,
     return diag
 
 
+def block_diagonal(shape, D, facx, facy, kz, nu, c, mesh=None, mask=None,
+                   wq=None, kap=0.0, rw=None):
+    """The 7x7 COMPLEX Hermitian block coupling all fields at one node.
+
+    Jacobi uses diag(A) only, so it rescales each dof independently and is blind
+    to the fact that the seven fields are coupled AT THE SAME NODE -- `omega` to
+    the velocity through the vorticity-definition rows, `p` to the velocity
+    through momentum.  Inverting that 7x7 block instead captures the coupling.
+
+    Same derivation as `jacobi_diagonal_analytic`, with the cross terms kept:
+
+        H[v,v'] = sum_r rho_r [ wq[i,j]*conj(L_v)*L_v'
+                                + a_v*a_v' * Sx + b_v*b_v' * Sy ]
+
+        L_v = a_v*D[i,i]*facx + b_v*D[j,j]*facy + cval_v
+        Sx  = facx^2 * sum_{p!=i} wq[p,j]*D[p,i]^2
+        Sy  = facy^2 * sum_{q!=j} wq[i,q]*D[q,j]^2
+
+    v = v' reproduces the diagonal exactly, which is the cheapest check that
+    this is the same object generalised rather than a different one.
+
+    Returns (nelem, n, n, nmode, 7, 7) complex, Hermitian in the last two axes.
+    """
+    nelem, n = shape[0], shape[1]
+    nk = shape[-1]
+    if wq is None:
+        wq = np.ones((nelem, n, n))
+    rw = np.ones(OP.NROW) if rw is None else np.asarray(rw)
+
+    D2 = D*D
+    dg = np.diag(D2)
+    Sx = (np.einsum('epj,pi->eij', wq, D2) - wq*dg[None, :, None])*(facx**2)[:, None, None]
+    Sy = (np.einsum('eiq,qj->eij', wq, D2) - wq*dg[None, None, :])*(facy**2)[:, None, None]
+    Dii = np.diag(D)
+    dxx = Dii[None, :, None]*facx[:, None, None]
+    dyy = Dii[None, None, :]*facy[:, None, None]
+
+    ik = 1j*np.asarray(kz).reshape(1, 1, 1, -1)
+    lit = {'ik': ik, '-ik': -ik, 'nuik': nu*ik, '-nuik': -nu*ik,
+           'kap': kap, 'c': c, '-1': -1.0, 'nu': nu, '-nu': -nu}
+    num = lambda x: lit[x] if isinstance(x, str) else x
+
+    # per row: the fields it touches, and their (a, b, L) contributions
+    rows = {}
+    for r, f, a, b, cv in _L0_TERMS:
+        a, b = num(a), num(b)
+        cval = 0.0 if cv is None else num(cv)
+        L = a*dxx[..., None] + b*dyy[..., None] + cval        # (e,i,j,k)
+        rows.setdefault(r, []).append((f, a, b, L))
+
+    H = np.zeros((nelem, n, n, nk, OP.NVAR, OP.NVAR), dtype=complex)
+    wqk = wq[..., None]
+    for r, terms in rows.items():
+        for fv, av, bv, Lv in terms:
+            for fw, aw, bw, Lw in terms:
+                H[..., fv, fw] += rw[r]*(wqk*np.conj(Lv)*Lw
+                                         + (av*aw)*Sx[..., None]
+                                         + (bv*bw)*Sy[..., None])
+    return H
+
+
+def block_inverse(H, mask, mesh=None, shape=None):
+    """Invert the per-node block, in the SPLIT-REAL form the solver uses.
+
+    A Hermitian complex block `H` corresponds to the real symmetric
+    [[Re H, -Im H], [Im H, Re H]] -- the same 2x2 embedding that makes the whole
+    operator real-symmetric rather than Hermitian.
+
+    Prescribed dofs are removed from the block (row and column zeroed, unit on
+    the diagonal) rather than inverted, so the block stays non-singular and the
+    preconditioner returns exactly zero there -- the same contract as
+    `jacobi_inverse`.
+    """
+    nelem, n, _, nk = H.shape[:4]
+    nv = OP.NVAR
+    B = np.empty(H.shape[:4] + (2*nv, 2*nv))
+    B[..., :nv, :nv] = H.real
+    B[..., :nv, nv:] = -H.imag
+    B[..., nv:, :nv] = H.imag
+    B[..., nv:, nv:] = H.real
+
+    # mask is (nelem, n, n, 14, nk) -> (nelem, n, n, nk, 14)
+    live = np.moveaxis(mask, -1, 3) != 0.0
+    kill = ~live
+    B[kill] = 0.0                                   # zero the rows
+    Bt = np.swapaxes(B, -1, -2)
+    Bt[kill] = 0.0                                  # and the columns
+    B = np.swapaxes(Bt, -1, -2)
+    idx = np.arange(2*nv)
+    diagB = B[..., idx, idx]
+    B[..., idx, idx] = np.where(kill, 1.0, diagB)
+    return np.linalg.inv(B), live
+
+
+def block_jacobi(shape, D, facx, facy, kz, nu, c, mesh=None, mask=None,
+                 wq=None, kap=0.0, rw=None):
+    """Block-Jacobi preconditioner as a callable `z = P(r)`.
+
+    `pcg` accepts either an array (scaled diagonally) or a callable, so this
+    drops in wherever `jacobi_inverse` does.
+    """
+    H = block_diagonal(shape, D, facx, facy, kz, nu, c, mesh, mask, wq, kap, rw)
+    if mesh is not None:                            # assemble across elements
+        flat = H.reshape(shape[0], shape[1], shape[2], -1)
+        H = gs(mesh, flat.reshape(shape[0], shape[1], shape[2], -1, 1)
+               ).reshape(H.shape)
+    Binv, live = block_inverse(H, mask)
+
+    def apply(r):
+        rr = np.moveaxis(r, -1, 3)                  # (e,i,j,k,14)
+        z = np.einsum('eijkab,eijkb->eijka', Binv, rr)
+        z = np.where(live, z, 0.0)
+        return np.moveaxis(z, 3, -1)
+    return apply
+
+
 def jacobi_inverse(diag, mask=None):
     """1/diag on free dofs, ZERO on prescribed ones -- never 1/eps.
 
@@ -297,7 +413,9 @@ def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
         x = x*mask
     A = lambda v: normal_op(v, D, facx, facy, kz, nu, c, mesh, mask, wq, kap, rw)
     mw = None if mesh is None else multiplicity_weight(mesh, b.shape)
-    P = (lambda r: r) if M_inv is None else (lambda r: r*M_inv)
+    # M_inv may be an array (diagonal scaling) or a callable (block-Jacobi)
+    P = ((lambda r: r) if M_inv is None else
+         M_inv if callable(M_inv) else (lambda r: r*M_inv))
 
     r = b - A(x)
     z = P(r)
