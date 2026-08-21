@@ -14,7 +14,7 @@ worked around on the 3D side (see §2.4).
 | milestone | state | evidence |
 |---|---|---|
 | M1 `fourier.py` + Stage 0 | **done** | transform/derivative tests, Hermitian assertions |
-| M2 operator + Stage 1 | **PASSED**\* | §1, `figs/cavity3d_kz0_profiles.png` |
+| M2 operator + Stage 1 | **PASSED** | §1; re-validated on the new operator, bit-identical (§7J.1) |
 | M3 Stages 2–3 | **done** | analytic single-mode; dealiasing with negative control |
 | M4 Stage 4 MMS | **PASSED** | §4 — spectral in `N` and `Nz`; temporal gate restated. **PDE-level order 2.00 confirmed** (§7A.5) |
 | M5 Stage 5 gate | **PASSED in 3D** | §7 — stable to `a_mass` = 6000; re-verified on corrected code (§7H) |
@@ -24,7 +24,7 @@ worked around on the 3D side (see §2.4).
 **Five of seven milestones complete** (M1–M5). M6 (numba) and M7 (`Re_τ` = 180)
 remain.
 
-\* **M2 was measured before the row-weight fix** (§7A.2) and so ran on a
+~~\* M2 was measured before the row-weight fix~~ **re-validated, §7J.1.** Earlier note: (§7A.2) and so ran on a
 mis-scaled least-squares functional. Neither verdict is expected to flip — M2
 compared 3D against 2D at matched settings, and M5 was a stability result — but
 it should be re-run (§8.3), and until then it carries this asterisk. **M5 has
@@ -1579,6 +1579,53 @@ which is everything M7 cares about — see the 10×.
 the least-squares functional benefits from it."* **Refuted.** At weight 1 it
 costs 10× in solve time and buys a `div ω` improvement of 5× at a level nine
 orders below the signal.
+
+### 7J.1 Milestone re-validation — and the asymmetry that makes it convincing
+
+The operator changed, so **M2 and M5 had to be re-established rather than
+assumed**. Both were run as controlled A/B tests, same session, both legs
+instrumented identically.
+
+**Stage 5 (M5)** — channel, `dt` = 0.01, 60 steps, AC off:
+
+| | CG/step | wall | `E/E₀` | mean-profile err |
+|---|---|---|---|---|
+| w7 = 1 | 3577 | 2277 s | 0.833326 | 1.95e−03 |
+| **w7 = 1e−4** | **649** | **421 s** | **0.833326** | 1.95e−03 |
+
+**5.5× fewer iterations, 5.4× faster, physics agreeing to a relative difference
+of 4.13e−10.** Both stable, 60/60 steps.
+
+**M2 (cavity, `k_z` = 0)** — the *negative* control:
+
+| | RMS u | RMS v | CG/step |
+|---|---|---|---|
+| w7 = 1 | 1.997774e−01 | 2.806728e−01 | 23 |
+| w7 = 1e−4 | 1.997774e−01 | 2.806728e−01 | 23 |
+| **difference** | **0.000e+00** | **0.000e+00** | — |
+
+**Bit-for-bit identical** — not "agrees to N figures", *exactly zero*.
+
+#### Why the asymmetry is the real result
+
+| case | transverse vorticity | effect |
+|---|---|---|
+| channel (Stage 5) | `max\|ω_x\|` ≈ 8 | **5.5× faster**, physics to 4.1e−10 |
+| cavity (M2) | ≡ 0 | **bit-identical** |
+| Stokes decay, `k_z` = 0 | ≡ 0 | identical to five digits |
+| Taylor–Green, `k_z` = 0 | ≡ 0 | identical |
+
+A fix that accelerated *everything* would be suspicious. This one delivers 5.5×
+in exactly the case whose mechanism it targets and provably **nothing** in the
+three cases where `ω_x = ω_y ≡ 0` and row 7 is inert. That selectivity is
+stronger evidence than the speed-up alone.
+
+**Production figure is 5.5×**, not the 10.5× measured on a single stage solve —
+the driver includes stages where the cluster is less excited. Quote 5×.
+
+*Caveat: both M2 legs hit the step cap at `t` = 2.0, so those are transient
+values, not a fresh M2 gate measurement. The comparison is unaffected — both legs
+are identically transient — but the gate itself was not re-run to convergence.*
 
 ---
 

@@ -184,6 +184,13 @@ rescale a near-null mode, block-Jacobi is still pointwise and the cluster is a
 *global* mode, and the p-MG V-cycle stalled at reduction factor exactly 1.0000 on
 those same modes. **One structural defect; three remedies aimed at the symptom.**
 
+**Re-validated, and the asymmetry is the point.** Stage 5 (channel,
+`max|ω_x|`≈8): 3577 → 649 CG/step, 5.4× faster, physics agreeing to 4.13e−10.
+M2 (cavity, `ω_x = ω_y ≡ 0`): **bit-for-bit identical**, 0.000e+00 relative
+difference. Same for Stokes decay and Taylor–Green at `k_z` = 0. A fix that sped
+up everything would be suspicious; this one delivers 5.5× exactly where its
+mechanism applies and provably nothing where it does not.
+
 Not free: a Taylor–Green error floor near 5e−08 appears once the temporal error
 drops below it (order 2.00 → 1.72 at the finest `dt`). That floor is a step
 change from w7 = 1, not a function of the value below it. Problems whose
