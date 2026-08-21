@@ -86,7 +86,14 @@ def q_criterion(s, Uc):
 
 
 def _arr(name, data, ncomp=1):
-    flat = np.asarray(data, dtype=np.float32).reshape(-1)
+    flat = np.asarray(data, dtype=np.float32).reshape(-1).copy()
+    # FLUSH SUBNORMALS TO ZERO.  VTK's ASCII Float32 parser rejects tokens
+    # below FLT_MIN (strtof underflow -> treated as a failed conversion), and
+    # reports the array "too short" -- found by bisection to the exact token,
+    # 2.448951e-40, in the first exported frame.  complex64 frame storage
+    # leaves round-off-level denormals in the high modes; they are 30+ orders
+    # below physical values and carry no information.
+    flat[np.abs(flat) < np.finfo(np.float32).tiny] = 0.0
     body = '\n'.join(' '.join(f'{v:.7g}' for v in flat[k:k+6])
                      for k in range(0, len(flat), 6))
     return (f'<DataArray type="Float32" Name="{name}" '
