@@ -154,6 +154,20 @@ Supporting: `CV.convective` is spectrally exact against the analytic `u·∇u`
 (4.9e−13 at N = 16), and `mesh.periodic_y` — unused anywhere in the repo until
 this test — is spectrally accurate.
 
+## 8c. Preconditioning: a negative result, established properly
+
+Block-Jacobi (1.10×/1.00×/0.89×) and 3-level p-multigrid (V-cycle factor 0.99,
+unchanged by an exact direct coarse solve) were both implemented, verified
+correct, and **not adopted**. The reason is the operator, not the methods: dense
+spectra at matched parameters give cond = 1.75e8 at p=2 rising to 7.04e9 at p=8,
+so **the ill-conditioning is intrinsic at every polynomial order** and
+p-coarsening yields a coarse problem that is still nearly singular.
+
+Getting there took four wrong turns, all from measurements that depended on
+something other than the thing under test — a random right-hand side, a
+preconditioner's arbitrary scaling, mismatched parameters. See `3D_STATUS.md`
+L12: *reach for the invariant measurement first*.
+
 ## 9. Gates that were wrong as written
 
 Four acceptance criteria would each have **failed correct code**. Recording them

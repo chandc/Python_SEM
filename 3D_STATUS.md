@@ -146,6 +146,48 @@ row, not a constraint. The meaningful quantity was **2.39× the AC-off floor**,
 not the raw 1.46e−02. Likewise the M2 gate's target was the *2D curve*, not
 Ghia's numbers, because 2D and 3D share a discretisation error that Ghia does not.
 
+### L12. Reach for the invariant measurement FIRST, not after four wrong turns
+
+The preconditioner investigation produced **four confident claims in a row, all
+wrong**, each refuted by the next test rather than by foresight:
+
+| claim | why it was wrong |
+|---|---|
+| "Jacobi is resolution-independent in 3D" | the RHS was `b = A x` with `x` **random**, so the problem got *rougher* as it got finer. A rough RHS is dominated by the well-conditioned high end and hides the growing low end |
+| "PMG is actively harmful on smooth modes" | compared `‖e − P(Ae)‖` across two preconditioners with **different scalings**. A preconditioner is not `A⁻¹`; its output scale is arbitrary |
+| "the coarse solve is too weak" | refuted by replacing Chebyshev with an **exact direct solve**: 0.9904 → 0.9899, i.e. nothing |
+| "the coarse operator is 100× worse conditioned" | compared p=6 at ν=1/180, c=525 against p=3 at ν=1/100, **c=600** |
+
+Every one came from reaching for whatever was easy to compute rather than
+something **invariant to the thing being varied**. Iteration counts depend on the
+right-hand side. Preconditioner outputs depend on scaling. Cross-parameter
+comparisons depend on the parameters being equal.
+
+**The dense condition number of `M⁻¹A` was available from the start and settles
+all four in one step** — it depends on neither the RHS, nor a scaling, nor a
+convergence criterion. It is now `scratch/spectrum.py`, with the four errors
+written at the top so the next person reaches for it first.
+
+The generalisable rule: **before measuring a method, ask what the measurement
+depends on besides the thing under test.** If the answer includes the right-hand
+side, an arbitrary scale factor, or a parameter you are also changing, find a
+different measurement.
+
+### L13. A negative result needs the same standard of evidence as a positive one
+
+p-multigrid does not work here — coarsening buys 40× in conditioning from p=8 to
+p=2 while the coarsest level still sits at cond ≈ 1.8e8, so an exact coarse solve
+is an exact solve of a nearly-singular problem. That is a *real* finding, and it
+took the same dense-spectrum evidence to establish as any positive claim would.
+
+The temptation with a negative result is to stop at the first plausible
+explanation — "the coarse solve is too weak", "the transfers are wrong" — because
+the conclusion (don't use it) is the same either way. It is not the same: the
+wrong reason would have sent us to Galerkin coarsening, which the measurements
+show differs from rediscretisation by 27% and has identical conditioning. **The
+reason a thing fails determines what you try next**, so it has to be right even
+when the verdict does not depend on it.
+
 ### L9. A profile that measures the wrong UNIT hides the biggest cost
 
 §3 profiled a **step** and concluded `normal_op` is **99.4%** of it — FFT and
@@ -1320,6 +1362,35 @@ These are also the Stage 5 sweeps re-run on corrected code, so the **asterisk on
 M5 is removed**. Stable and decaying at every `a_mass` from 120 to 6000, with
 `E/E₀` matching the pre-fix values to three digits (0.245 vs 0.2448 etc.) — the
 fixes changed the cost, not the physics, which is what they should have done.
+
+---
+
+## 7I. Preconditioning: what was tried and what it cost
+
+Three preconditioners beyond Jacobi, all measured, none adopted:
+
+| | result | why |
+|---|---|---|
+| **block-Jacobi** (7×7 node block) | 1.10× / 1.00× / **0.89×** | still *pointwise* — a node block cannot reach a global soft mode. Implementation verified sound (SPD, symmetric to 3e−12, diagonal exact to 1e−16) |
+| **p-multigrid**, 3 levels | V-cycle factor **0.99** | p-coarsening does not produce an easy coarse problem: cond ≈ 1.8e8 even at p=2 |
+| **direct coarse solve** | 0.9904 → **0.9899** | confirms the coarse *solve* was never the issue |
+
+The governing fact, from matched-parameter dense spectra:
+
+| p | 2 | 3 | 4 | 6 | 8 |
+|---|---|---|---|---|---|
+| cond | 1.75e8 | 5.28e8 | 1.14e9 | 3.26e9 | 7.04e9 |
+
+**The ill-conditioning is intrinsic to the least-squares VVP operator at every
+polynomial order.** Jacobi *does* degrade with order (cond ~p⁴–p⁶, contradicting
+an earlier claim of mine — see L12), but coarsening improves it only 40× across
+p=8→2 while dropping 15× of the DOF. Multigrid needs the coarse problem to be
+*easy*, not merely *less impossible*.
+
+What this leaves: the ~2700–5400 iterations per stage solve are a property of the
+formulation, and the remaining levers are **making each matvec cheaper** (M6,
+numba fusion) or **changing the formulation** — not better preconditioning of
+this operator.
 
 ---
 
