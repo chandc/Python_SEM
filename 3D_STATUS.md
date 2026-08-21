@@ -1519,6 +1519,35 @@ is identically zero (Taylor–Green at `k_z` = 0, the `k_z` = 0 Stokes mode) see
 *no speed-up at all*, because they never excite the cluster. Genuinely 3D flows —
 which is everything M7 cares about — see the 10×.
 
+### Independent verification at production scale (review session, 2026-08-21)
+
+* **Re = 400 TGV stage solve** (48³, c = 525, tol 1e−6, from the running job's
+  own t = 2.5 checkpoint): **6193 → 519 iterations (12×)**, solutions agreeing
+  to 2.6e−07 — below solve tolerance. The "genuinely 3D flows see the 10×"
+  claim holds at the largest configuration in the repo.
+* **Stokes decay** re-measured under the new default: σ = 9.3141300,
+  **identical to all seven digits** — and, consistent with the inertness note
+  above, no w7 speedup is claimed there (an earlier 2.4× reading was a
+  cross-tolerance-protocol artifact, not a w7 effect).
+* **Operational consequence, taken:** the in-flight w7 = 1 Re = 400 run
+  (t → 3.5 of 15, ~2.5 days remaining) was stopped, archived
+  (`scratch/tgv_re400_w7-1_archive/`), and relaunched fresh under 1e−4:
+  **16286 → 1563 CG/step, 285 → 28 s/step**, ETA ~10 h — faster than the old
+  run's remaining time, with a homogeneous single-weighting dataset. Live
+  cross-weighting check: the new trajectory matches the archived w7 = 1 run's
+  E and Ω **to every printed digit** at matched times.
+* **Blast radius of stale numbers**, all now upper bounds by up to ~10×:
+  the SPAN 6× conditioning cost (§8.1 — likely mostly this cluster), the
+  `kz_iterations` absolute counts, the AC-on/off cost comparisons, the
+  fastdiag rejection baseline (§7F), and the **M7 step-cost model** — whose
+  ~10× improvement materially weakens the case for the fractional-step pivot
+  and should trigger a re-pricing before that decision is made.
+* One residual nit: `row7_weight.py`'s check 4 solves a **random-RHS**
+  problem, so its div ω reads ~78×|ω| at every weight including w7 = 1 —
+  uninformative about constraint quality. The physical-channel table above is
+  the evidence that matters; the script's check should be rebuilt on a
+  physical RHS so it certifies what it claims to.
+
 ### Retraction
 
 `3D_FORMULATION.md` §2 said `∇·ω = 0` is *"retained as an independent row because
