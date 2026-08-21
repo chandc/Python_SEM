@@ -184,12 +184,44 @@ def apply_L_complex(U, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
     return R if wq is None else R*wq[..., None, None]
 
 
-def momentum_row_weights(c):
+# The vorticity-divergence row is REDUNDANT and, at weight 1, ruinous.
+#
+# div(omega) = 0 is implied by omega = curl(u), so row 7 constrains nothing the
+# vorticity-definition rows do not already impose.  But it is the ONE row 2D does
+# not have, and at k_z = 0 it involves only omega_x and omega_y -- the two fields
+# with no 2D counterpart.  It contributes a derivative-SQUARED term to their
+# Jacobi diagonal while contributing NOTHING to A for a divergence-free
+# vorticity field: large denominator, zero numerator, a near-null mode cluster.
+#
+# Measured: the softest eigenmodes of the preconditioned operator carry 100% of
+# their energy in (omega_x, omega_y) and none in u, v, w, omega_z, p.  That
+# cluster is why Jacobi needed thousands of iterations, why block-Jacobi did
+# nothing (it is a GLOBAL mode, unreachable by anything pointwise), and why the
+# p-multigrid V-cycle stalled with reduction factor exactly 1.0000 on those modes.
+#
+#   condition number, 2x2 elements, k_z = 0
+#     p            4          6          8         10
+#     w7 = 1     4.24e5     5.55e6     3.95e7    1.82e8
+#     w7 = 1e-4  3.04e3     1.01e4     2.74e4    6.32e4
+#     gain         139x       552x      1442x     2885x     <- grows with N
+#
+# On a channel with genuine transverse vorticity: 11132 -> 1063 iterations,
+# 76.8 s -> 7.3 s, with the solution unchanged to 1.9e-07 (below the solve
+# tolerance) and rms div(omega) still nine orders below |omega|.
+ROW7_WEIGHT = 1.0e-4
+
+
+def momentum_row_weights(c, w7=ROW7_WEIGHT):
     """lssem2d's legacy scaling: momentum rows divided by c so their mass
     coefficient is 1, matching the constraint rows.  Squared, because the
-    functional squares the residual."""
+    functional squares the residual.
+
+    `w7` down-weights the redundant vorticity-divergence row -- see above.  Pass
+    w7=1.0 to reproduce the original, un-weighted behaviour.
+    """
     rw = np.ones(NROW)
     rw[4:7] = 1.0/(c*c)
+    rw[7] = w7
     return rw
 
 

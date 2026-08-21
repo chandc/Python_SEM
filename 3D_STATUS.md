@@ -9,7 +9,7 @@ code reuses `lssem2d.mesh`, `lssem2d.lgl` and `lssem2d.assembly.gather_scatter`
 by calling them, never by editing them. Every place the 2D API did not fit was
 worked around on the 3D side (see §2.4).
 
-**Suite: 155 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`).
+**Suite: 164 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`).
 
 | milestone | state | evidence |
 |---|---|---|
@@ -1437,6 +1437,97 @@ the direct solver a projection/fractional-step stage uses (scalar Helmholtz
 and Poisson per mode — no inter-field coupling exists there to defeat it).
 If Step 2 is taken, `fastdiag.py` is its solver core, already validated.
 
+## 7J. The answer: 3D carries a redundant row that 2D does not
+
+Prompted by the question *"why did none of this happen in 2D — we are solving a
+series of 2D problems in Fourier space?"* That reframing found in three
+measurements what six preconditioner experiments had not.
+
+### The mechanism
+
+At `k_z` = 0 the softest eigenmodes of the preconditioned operator carry **100%
+of their energy in `ω_x, ω_y`** and none in `u, v, w, ω_z, p`:
+
+| rank | eigenvalue | u | v | w | ω_x | ω_y | ω_z | p |
+|---|---|---|---|---|---|---|---|---|
+| 0 | 8.30e−07 | 0 | 0 | 0 | **0.500** | **0.500** | 0 | 0 |
+| 1 | 8.40e−07 | 0 | 0 | 0 | **0.689** | **0.310** | 0 | 0 |
+
+Those two fields appear in exactly one row that 2D does not have: **`R₇ = ∇·ω =
+0`**, which at `k_z` = 0 reduces to `∂ₓω_x + ∂_yω_y` — the transverse
+vorticities alone. The 2D VVP system has four rows (continuity, one vorticity
+definition, two momentum) and **no vorticity-divergence row at all**.
+
+`R₇` is *redundant* — implied by `ω = ∇×u` — but at weight 1 it loads the Jacobi
+diagonal of `ω_x, ω_y` with **derivative-squared** terms while contributing
+**nothing** to `A` for a divergence-free vorticity field. Large denominator, zero
+numerator, near-null cluster.
+
+### It explains the three failed remedies
+
+* **Jacobi** needs thousands of iterations — it cannot rescale a near-null mode.
+* **Block-Jacobi** did nothing (1.10×/1.00×/0.89×) — the cluster is a *global*
+  mode, unreachable by anything pointwise, however good the block.
+* **The p-multigrid V-cycle stalled at reduction factor exactly 1.0000** on those
+  same softest modes while working (0.03–0.26) everywhere else.
+
+One structural defect; three remedies aimed at the symptom.
+
+### The fix and what it buys
+
+`operator.ROW7_WEIGHT = 1e-4`, applied by `momentum_row_weights`.
+
+| p | 4 | 6 | 8 | 10 |
+|---|---|---|---|---|
+| cond, w7 = 1 | 4.24e+05 | 5.55e+06 | 3.95e+07 | 1.82e+08 |
+| cond, w7 = 1e−4 | 3.04e+03 | 1.01e+04 | 2.74e+04 | 6.32e+04 |
+| **gain** | 139× | 552× | 1442× | **2885×** |
+
+**The gain grows with `N`**, and the down-weighted operator degrades far more
+slowly (21× over p=4→10 against 431×). It also holds at `k_z` ≠ 0 (552×, 618×,
+648×), so it is not a `k_z` = 0 artefact.
+
+On a channel with genuine transverse vorticity (`max|ω_x|` = 8.3):
+
+| w7 | its | wall | Δ solution | rms `div ω` |
+|---|---|---|---|---|
+| 1 | 11132 | 76.8 s | — | 2.21e−10 |
+| **1e−4** | **1063** | **7.3 s** | 1.9e−07 | 1.04e−09 |
+
+**10.5× faster, same answer** to 1.9e−07 (below the 1e−6 solve tolerance), and
+`div ω` still **nine orders below** `|ω|`. The constraint is carried by
+`ω = ∇×u` regardless — which is what "redundant" means.
+
+### Validation, including the cost
+
+| check | result |
+|---|---|
+| Stokes decay order | **2.00, 2.00, 2.00** — errors identical to five digits (that mode has `ω_x = ω_y ≡ 0`, so `R₇` is inert) |
+| Taylor–Green order | 2.00, 1.98, **1.72** at the finest `dt` |
+| TG error floor | 3.95e−08 → **4.87e−08** (1.23×) |
+| 164 tests | passing |
+
+**It is not free.** Down-weighting a constraint enforces it less, and on
+Taylor–Green a floor near 5e−08 appears once the temporal error falls below it,
+costing the clean order-2 at `dt` = 0.0125. The floor is a **step change from
+w7 = 1, not a function of the value below it** — 1e−2, 1e−3 and 1e−4 give
+bit-identical results (4.8691e−08, 48315 CG) — so the choice within that range is
+free and 1e−4 is taken for its better conditioning.
+
+**Where it matters and where it does not:** problems whose transverse vorticity
+is identically zero (Taylor–Green at `k_z` = 0, the `k_z` = 0 Stokes mode) see
+*no speed-up at all*, because they never excite the cluster. Genuinely 3D flows —
+which is everything M7 cares about — see the 10×.
+
+### Retraction
+
+`3D_FORMULATION.md` §2 said `∇·ω = 0` is *"retained as an independent row because
+the least-squares functional benefits from it."* **Refuted.** At weight 1 it
+costs 10× in solve time and buys a `div ω` improvement of 5× at a level nine
+orders below the signal.
+
+---
+
 ## 8. What is next
 
 Reordered by §7A.2. The AC accuracy programme is largely dissolved: it was
@@ -1623,7 +1714,7 @@ honest meter of exactly how marginally.
 | `solver3d.py` | gather-scatter, multiplicity weight, `normal_op`, batched `pcg`, `rkw3_step` |
 | **`parallel.py`** | **mode-parallel `apply_op` and `pcg` (§3.4)** |
 
-### Tests — 155, all passing
+### Tests — 164, all passing
 
 ```
 uv run --quiet python -m pytest lssem3d/tests -q

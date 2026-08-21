@@ -144,3 +144,64 @@ def test_c_enters_only_the_momentum_rows(geom):
         assert np.abs(d[..., r, :]).max() < 1e-300, f'c leaked into row {r}'
     for r, f in ((4, OP.U_), (5, OP.V_), (6, OP.W_)):
         assert np.abs(d[..., r, :] - 3.0*U[..., f, :]).max() < 1e-12
+
+
+# ------------------------- the redundant vorticity-divergence row
+
+def test_row7_weight_is_down_weighted_by_default():
+    """Row 7 (div omega = 0) is redundant and ruinous at weight 1.
+
+    It is implied by omega = curl u, so it constrains nothing new -- but at
+    k_z = 0 it involves only omega_x and omega_y and loads their Jacobi diagonal
+    with derivative-squared terms while contributing nothing to A for a
+    divergence-free vorticity field.  Measured cost at weight 1: 10.5x the CG
+    iterations, and a conditioning penalty that GROWS with order (139x at p=4,
+    2885x at p=10).
+    """
+    rw = OP.momentum_row_weights(500.0)
+    assert rw[7] == OP.ROW7_WEIGHT < 1.0, 'row 7 must be down-weighted by default'
+    assert np.allclose(rw[:4], 1.0), 'constraint rows 0-3 keep weight 1'
+    assert np.allclose(rw[4:7], 1.0/500.0**2), 'momentum rows keep the legacy scaling'
+    assert OP.momentum_row_weights(500.0, w7=1.0)[7] == 1.0, 'w7=1 must be reachable'
+
+
+def test_row7_weight_does_not_change_the_operator_rows():
+    """The weighting lives in the FUNCTIONAL, not in L0.
+
+    apply_L0_complex is the raw differential operator and must be untouched by
+    any row weight -- if a weight leaked into it, the residual rows themselves
+    would be wrong and every MMS test would be measuring a different system.
+    """
+    m = build_channel(1.0, 1.0, 2, 2, 4, bcs=(1, 1, 1, 2))
+    D = diff_matrix(4)
+    kz = np.array([1.5])
+    U = (np.random.default_rng(0).standard_normal((m.nelem, 5, 5, OP.NVAR, 1))
+         + 1j*np.random.default_rng(1).standard_normal((m.nelem, 5, 5, OP.NVAR, 1)))
+    R = OP.apply_L0_complex(U, D, m.facx, m.facy, kz, 0.05, 3.0)
+    # row 7 of the RAW operator is div(omega); no weight may appear in it
+    from lssem3d import deriv as DV
+    want = (DV.ddx(U[..., OP.OX_, :], D, m.facx)
+            + DV.ddy(U[..., OP.OY_, :], D, m.facy)
+            + 1j*kz*U[..., OP.OZ_, :])
+    assert np.abs(R[..., 7, :] - want).max() < 1e-12
+
+
+def test_row7_weight_appears_in_the_weighted_operator(cav_geom=None):
+    """...but it MUST appear in apply_L, which carries the functional weights."""
+    m = build_channel(1.0, 1.0, 2, 2, 4, bcs=(1, 1, 1, 2))
+    D = diff_matrix(4)
+    kz = np.array([1.5])
+    Ur = np.random.default_rng(2).standard_normal((m.nelem, 5, 5, OP.NVAR_R, 1))
+    c = 300.0
+    a = OP.apply_L(Ur, D, m.facx, m.facy, kz, 0.05, c, m.wq, 0.0,
+                   OP.momentum_row_weights(c, w7=1.0))
+    b = OP.apply_L(Ur, D, m.facx, m.facy, kz, 0.05, c, m.wq, 0.0,
+                   OP.momentum_row_weights(c, w7=1e-4))
+    # rows 7 and 15 (its imaginary twin) must differ by exactly the weight ratio
+    for r in (7, OP.NROW + 7):
+        nz = np.abs(a[..., r, :]) > 1e-300
+        assert np.allclose(b[..., r, :][nz]/a[..., r, :][nz], 1e-4), \
+            f'row {r} did not pick up the weight'
+    # every other row must be untouched
+    others = [r for r in range(2*OP.NROW) if r not in (7, OP.NROW + 7)]
+    assert np.allclose(a[..., others, :], b[..., others, :])

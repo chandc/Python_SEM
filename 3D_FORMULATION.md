@@ -43,10 +43,19 @@ $$
 $$
 
 **Seven unknowns** — $u, v, w, \omega_x, \omega_y, \omega_z, p$ — and **eight
-equations**. The system is overdetermined by one, deliberately:
+equations**. The system is overdetermined by one:
 $\nabla\cdot\boldsymbol{\omega} = 0$ is implied by
-$\boldsymbol{\omega} = \nabla\times\mathbf{u}$ but is retained as an independent
-row because the least-squares functional benefits from it. Everything is first
+$\boldsymbol{\omega} = \nabla\times\mathbf{u}$ and is retained as an independent
+row.
+
+> **This row must be DOWN-WEIGHTED.** An earlier version of this document said
+> the functional "benefits from it"; that is refuted (3D_STATUS §7J). At weight 1
+> it is the single largest source of ill-conditioning in the system: it is the
+> one row 2D does not have, it involves only $\omega_x,\omega_y$ at $k_z=0$, and
+> it loads their Jacobi diagonal with derivative-squared terms while
+> contributing nothing to $\mathcal{A}$ for divergence-free vorticity. Measured
+> cost: **10.5× the CG iterations** and a conditioning penalty growing with
+> order (139× at $p$=4, 2885× at $p$=10). `operator.ROW7_WEIGHT` = $10^{-4}$. Everything is first
 order, which is what permits a single $C^0$ spectral-element space for every
 variable.
 
