@@ -1728,6 +1728,46 @@ dip below re100's 0.993 floor near peak enstrophy: at Re = 400 the cascade
 genuinely reaches scales 48³ only marginally resolves, and the ratio is the
 honest meter of exactly how marginally.
 
+### 8.6 The M7 step-cost model — measured, post-row-7 (2026-08-21)
+
+The re-pricing §7J's addendum called for. Anchored on measured quantities:
+the running Re = 400 job (48³, w7 = 1e−4: **28 s/step, ~520 CG/solve,
+0.018 s/iteration** on 12 P-cores, mode-parallel), plus one decisive probe:
+
+**Iterations are FLAT in the implicit coefficient.** Stage solves on the
+Re = 400 state at c = 525 / 1500 / 3000 / 6000 → **519 / 512 / 519 / 520**
+iterations. Under legacy weighting the momentum mass coefficient is
+normalised to 1 and the couplings shrink as 1/c, so conditioning saturates:
+**M7's small dt costs nothing in iterations.** (Caveat: probed on the
+periodic TGV rig; wall masks and a graded y-mesh may shift the constant.)
+
+Configurations, at N = 8, KMM-adequate resolution, dt ≈ 1.5e−3 (CFL),
+~20k steps for transition + statistics, iterations bracketed [flat … 2×]:
+
+| case | grid | DOF vs re400 | s/step (numpy) | wall, 20k steps |
+|---|---|---|---|---|
+| **minimal channel** (Jiménez–Moin box) | 4×12 elems, Nz = 24 | 0.7× | ~20 | **~4.5 days** |
+| **full M7** (4πδ × 2δ × 4πδ/3) | 20×12 elems, Nz = 128 | 17× | ~480–950 | **~110–220 days** |
+| full M7 + M6 numba (×4, *assumed*) | — | — | ~120–240 | **~28–55 days** |
+| full M7, fractional-step (direct solves) | — | — | ~10–20 | **~2–5 days** |
+
+**What this decides:**
+
+1. **The minimal channel is feasible TODAY** with the LS solver as-is — no
+   new code, ~5 days of numpy. It sustains genuine near-wall turbulence and
+   rehearses every piece of M7 (walls + periodic x + Fourier z + transition
+   + statistics machinery) at 1/17th the cost. It should be the next run
+   after the Re = 400 TGV lands.
+2. **Full M7 no longer *requires* the fractional method** — with M6's fusing
+   it is a ~1-month run. Painful but possible; before row 7 it was ~a year.
+3. **The fractional-step case is now purely economic**: it buys full M7 in
+   days instead of a month, at the price of a new solver core (its hardest
+   component, `fastdiag.py`, is already built and tested). Take it only if
+   M7-class runs will be *repeated* — a one-shot validation can ride M6.
+
+Priority consequence: **M6 (numba, fusing) moves to the front of the
+queue**, with the minimal channel as its first customer.
+
 ## 9. Inventory
 
 ### Modules (`lssem3d/`)
