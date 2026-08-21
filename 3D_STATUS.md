@@ -1437,6 +1437,31 @@ the direct solver a projection/fractional-step stage uses (scalar Helmholtz
 and Poisson per mode — no inter-field coupling exists there to defeat it).
 If Step 2 is taken, `fastdiag.py` is its solver core, already validated.
 
+## 7K. PMG re-tested post-row-7: iterations vindicated, wall time lost — the preconditioner chapter is CLOSED
+
+`scratch/pmg_sweep_postrow7.log` (2026-08-21). The retraction (spectrum bug)
+had restored PMG's premise — the coarse problem is easy — and the row-7 fix
+removed the ω cluster that pinned the V-cycle at reduction 1.0000. Both
+predictions were confirmed by re-running the existing sweep under the new
+default (N = 8, 3×3, nz = 16, tol 1e−6):
+
+* **Iterations: PMG now works.** 755 (Jacobi) → **102** at the best
+  configuration — 7.4× fewer, exactly what an unblocked V-cycle should do.
+* **Wall time: PMG loses everywhere.** Best case **0.28× vs Jacobi** (3.6×
+  slower); every one of 30 configurations is 3.5–6× slower. Each cycle spends
+  ~2·deg fine-level smoother matvecs (~13 at the best deg = 6) against
+  Jacobi's one — the iteration win is eaten by per-iteration cost. **This
+  ratio is invariant under M6**: numba accelerates the same matvec on both
+  sides.
+
+**The chapter closes with a complete file**: block-Jacobi (null effect,
+measured), fastdiag exact block inverses (structurally beaten by the O(1)
+inter-field couplings, §7F), PMG (iterations 7.4× better, wall 3.6× worse —
+smoother economics). The production configuration is settled: **plain Jacobi
+(analytic diagonal) + legacy row weights + w7 = 1e−4 + tol 1e−6**, ~520
+iterations/solve flat in c. Further speed comes from M6's matvec, not from
+preconditioning.
+
 ## 7J. The answer: 3D carries a redundant row that 2D does not
 
 Prompted by the question *"why did none of this happen in 2D — we are solving a
