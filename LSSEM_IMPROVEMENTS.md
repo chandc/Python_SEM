@@ -154,6 +154,41 @@ Supporting: `CV.convective` is spectrally exact against the analytic `u·∇u`
 (4.9e−13 at N = 16), and `mesh.periodic_y` — unused anywhere in the repo until
 this test — is spectrally accurate.
 
+## 8b2. The largest single fix: a redundant row that 2D does not have
+
+Found by asking **why 2D never had these conditioning problems**, given that 3D
+solves a series of 2D problems in Fourier space. That reframing found in three
+measurements what six preconditioner experiments had not.
+
+At `k_z` = 0 the softest eigenmodes of the preconditioned operator carry **100%
+of their energy in `ω_x, ω_y`** and none in `u, v, w, ω_z, p`. Those two fields
+appear in exactly one row 2D lacks: **`∇·ω = 0`**. It is *redundant* — implied by
+`ω = ∇×u` — but at weight 1 it loads their Jacobi diagonal with
+derivative-squared terms while contributing **nothing** to `A` for
+divergence-free vorticity. Large denominator, zero numerator, near-null cluster.
+
+`operator.ROW7_WEIGHT = 1e-4`:
+
+| p | 4 | 6 | 8 | 10 |
+|---|---|---|---|---|
+| cond, w7 = 1 | 4.24e5 | 5.55e6 | 3.95e7 | 1.82e8 |
+| cond, w7 = 1e−4 | 3.04e3 | 1.01e4 | 2.74e4 | 6.32e4 |
+| **gain** | 139× | 552× | 1442× | **2885×** |
+
+**10.5× faster** on a channel with genuine transverse vorticity (11132 → 1063
+iterations), solution unchanged to 1.9e−07, `div ω` still nine orders below
+`|ω|`, and the gain **grows with N**.
+
+It also explains the three preconditioners that failed (§8c): Jacobi cannot
+rescale a near-null mode, block-Jacobi is still pointwise and the cluster is a
+*global* mode, and the p-MG V-cycle stalled at reduction factor exactly 1.0000 on
+those same modes. **One structural defect; three remedies aimed at the symptom.**
+
+Not free: a Taylor–Green error floor near 5e−08 appears once the temporal error
+drops below it (order 2.00 → 1.72 at the finest `dt`). That floor is a step
+change from w7 = 1, not a function of the value below it. Problems whose
+transverse vorticity is identically zero see no speed-up at all.
+
 ## 8c. Preconditioning: a negative result, established properly
 
 Block-Jacobi (1.10×/1.00×/0.89×) and 3-level p-multigrid (V-cycle factor 0.99,
