@@ -9,7 +9,8 @@ code reuses `lssem2d.mesh`, `lssem2d.lgl` and `lssem2d.assembly.gather_scatter`
 by calling them, never by editing them. Every place the 2D API did not fit was
 worked around on the 3D side (see §2.4).
 
-**Suite: 200 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`).
+**Suite: 237 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`),
+green on the Mac and **on the GB10 in-container**.
 
 | milestone | state | evidence |
 |---|---|---|
@@ -19,9 +20,12 @@ worked around on the 3D side (see §2.4).
 | M4 Stage 4 MMS | **PASSED** | §4 — spectral in `N` and `Nz`; temporal gate restated. **PDE-level order 2.00 confirmed** (§7A.5) |
 | M5 Stage 5 gate | **PASSED in 3D** | §7 — stable to `a_mass` = 6000; re-verified on corrected code (§7H) |
 | M6 numba backend | **DONE** | §7M — fused single-pass kernels, **3.5–6.2×** on the matvec; parity to 1e-16 and the analytic Stokes rate reproduced |
-| M7 `Re_τ` = 180 | not started | — |
+| M7 `Re_τ` = 180 | **unblocked** | minimal-channel rig built and gated (`scratch/minchan.py`); PyTorch/CUDA backend Phases 1–2 verified (`TORCH_VERIFY_PLAN.md`) |
 
-**Six of seven milestones complete** (M1–M6). M7 (`Re_τ` = 180) remains.
+**Six of seven milestones complete** (M1–M6). M7 (`Re_τ` = 180) remains, and is
+no longer cost-blocked: the minimal channel measured at ~35 days on the Mac and
+~9–10 days on the GB10. See [SESSION_2026-08-22.md](./SESSION_2026-08-22.md) for
+the whole performance arc.
 
 ~~\* M2 was measured before the row-weight fix~~ **re-validated, §7J.1.** Earlier
 note: M2 was measured before the row-weight fix (§7A.2) and so ran on a
@@ -70,6 +74,11 @@ NumPy code, which already calls BLAS, but by **fusing ~30 passes over the state
 into one**, the only lever that helps a memory-bandwidth-bound kernel. Verified
 bit-for-bit against the NumPy operator (33 parity cases) and against the analytic
 Stokes rate, which it reproduces to **8 significant figures**.
+
+**A PyTorch/CUDA backend now runs the whole CG loop on the GB10** — **4.23×** a
+full solve against the Spark's own numba, **3.7×** against the Mac's, with 237/237
+green in-container (`TORCH_VERIFY_PLAN.md`). The minimal channel drops from ~35
+days to ~9–10.
 
 **GPU triage (§7N), corrected:** **MLX cannot run this solver on a GPU at all**
 — Metal has no FP64, and FP32 is not an option when the normal equations square
