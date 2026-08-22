@@ -27,18 +27,18 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
 
 ## Executive summary
 
-1. **AC is accuracy-neutral at sensible `κ_p`, and provably so.** On plane
+1. **AC is accuracy-neutral at sensible $\kappa_p$, and provably so.** On plane
    Poiseuille — where the exact solution is representable in the discrete space —
-   AC on at `κ_p` = 0.5 … 15 returns `Δp` = 1.44000 (exact 1.44000) and
-   `L2(u − u_exact)` ≤ 1.2e−08, *better* than the 2.4e−07 with AC off. The
-   solution only starts to move at `κ_p` ≳ 3·`a_mass` and is destroyed at
-   `κ_p` = 500 (`Δp` off by 39%).
+   AC on at $\kappa_p$ = 0.5 … 15 returns $\Delta p$ = 1.44000 (exact 1.44000) and
+   $L_2(u - u_\mathrm{exact})$ ≤ 1.2e−08, *better* than the 2.4e−07 with AC off. The
+   solution only starts to move at $\kappa_p$ ≳ 3·`a_mass` and is destroyed at
+   $\kappa_p$ = 500 ($\Delta p$ off by 39%).
 
 2. **It opens a stability window on the Gartling BFS that does not exist without
    it.** At `a_mass` ≥ 12.1 every AC-off run diverges (34-run result, no
    crossover). With AC, `dt` = 0.1, 0.05 and 0.025 — `a_mass` = 15, 30 and 60 —
    all run to t = 140 and land within 0.9% of Gartling's reattachment. The
-   working value is `κ_p ≈ a_mass/2`, and the window closes again by
+   working value is $\kappa_p$ ≈ `a_mass`/2, and the window closes again by
    `a_mass` = 120.
 
 3. **The main pay-off is conditioning, not stability.** On the closed cavity
@@ -58,17 +58,17 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
    ~2% of the lid speed. (§5.1)
 
 5. **The mechanism is a missing preconditioner diagonal.** Pressure appears only
-   in the momentum rows of the VVP system, so the pressure block of `LᵀL` scales
-   as `a_flux²` and `compute_jacobi` has **no `a33` entry at all** without AC.
-   AC supplies `a33 = κ_p·P`, which is exactly the block that was unscaled.
+   in the momentum rows of the VVP system, so the pressure block of $L^\top L$ scales
+   as $a_\mathrm{flux}^2$ and `compute_jacobi` has **no `a33` entry at all** without AC.
+   AC supplies `a33` $= \kappa_p P$, which is exactly the block that was unscaled.
 
 6. **On pressure specifically — the field AC acts on — it is better on both
-   axes at once.** At `a_mass` = 30, `κ_p` = `a_mass` reaches a *further*
-   converged pressure than AC off (`max|Δp|` 1.88e−04 vs 2.54e−04) for **30×
+   axes at once.** At `a_mass` = 30, $\kappa_p$ = `a_mass` reaches a *further*
+   converged pressure than AC off ($\max|\Delta p|$ 1.88e−04 vs 2.54e−04) for **30×
    fewer CG iterations and 18× less wall time**. Not a speed/accuracy trade.
    A cost-model fit puts per-iteration cost at 0.480 ms with AC and 0.483 ms
    without — identical — so AC is free per iteration and the wall figure
-   understates it. `κ_p` = `a_mass` is the optimum: 2·`a_mass` is cheaper but
+   understates it. $\kappa_p$ = `a_mass` is the optimum: 2·`a_mass` is cheaper but
    converges the pressure *less* well. (§5.2a)
 
 7. **The time-derivative term is load-bearing for correctness, not just
@@ -96,16 +96,16 @@ Companions: `GARTLING_VALIDATION.md` (where the `a_mass` limit was measured),
 
 The continuity row of the least-squares functional carries weight exactly 1 (it
 is a constraint, not a flux), while the momentum rows carry the time-derivative
-coefficient `a_mass = w_mass·fac1/dt`. Refining `dt` therefore drives the
+coefficient $a_\mathrm{mass} = w_\mathrm{mass}\,\mathrm{fac}_1/\Delta t$. Refining `dt` therefore drives the
 momentum rows up relative to continuity — this is the imbalance
 `GARTLING_VALIDATION.md` traces to the `a_mass` limit.
 
 AC restores the balance by giving the continuity row its own scale. The
 classical Chorin form
 
-    (1/(β² dτ))·(p − p_prev) + div u = 0
+$$\frac{1}{\beta^2\,\Delta\tau}\,(p - p_\mathrm{prev}) + \nabla\cdot u = 0$$
 
-has two knobs, `β` and `dτ`, which only ever appear as a product. `ls_pseudo_p`
+has two knobs, $\beta$ and $\Delta\tau$, which only ever appear as a product. `ls_pseudo_p`
 collapses them:
 
     κ_p = 1/dtau_p          # lssem2d/lssem.py:139
@@ -117,8 +117,8 @@ and the continuity row of `L` becomes
 with the matching transpose contribution at `lssem2d/lssem.py:425` and the
 Jacobi diagonal at `lssem2d/solver.py:90`.
 
-**`p_prev` lives in the right-hand side, not here.** The `κ_p·p` term is the
-operator part; the `−κ_p·p_prev` part rides in the residual, which is why
+**`p_prev` lives in the right-hand side, not here.** The $\kappa_p p$ term is the
+operator part; the $-\kappa_p p_\mathrm{prev}$ part rides in the residual, which is why
 `_drop_pseudo` (`lssem2d/solver.py:214`) must subtract it — otherwise the
 pseudo-time term would leak into the reported physical residual.
 
@@ -130,8 +130,8 @@ pressure and would break BDF accuracy — every run here uses `max_newton` ≥ 5
 
 **Caveat on the converged state.** The sub-iterations converge to a *tolerance*,
 not to zero, so the least-squares normal equations see a perturbation of
-O(`κ_p`·R) where R is the sub-iteration residual. This is what sets the upper
-end of the usable `κ_p` window in §3.
+$O(\kappa_p R)$ where $R$ is the sub-iteration residual. This is what sets the upper
+end of the usable $\kappa_p$ window in §3.
 
 **Backend restriction.** AC is implemented in the numpy backend only.
 `_check_ac_backend` (`lssem2d/lssem.py:469`) raises `NotImplementedError` rather
@@ -141,15 +141,15 @@ than let the numba kernels silently solve the AC-free system.
 
 ## 2. Verification
 
-**Symmetry.** `LᵀL` must stay symmetric or CG is not applicable. Measured
-relative asymmetry `|⟨b,LᵀLa⟩ − ⟨a,LᵀLb⟩| / |⟨b,LᵀLa⟩|` on a 2×2 element N = 4
+**Symmetry.** $L^\top L$ must stay symmetric or CG is not applicable. Measured
+relative asymmetry $|\langle b, L^\top L a\rangle - \langle a, L^\top L b\rangle| \,/\, |\langle b, L^\top L a\rangle|$ on a 2×2 element N = 4
 mesh with a random linearisation and random `a`, `b`:
 
-| | ⟨b, LᵀLa⟩ | relative asymmetry |
+| | $\langle b, L^\top L a\rangle$ | relative asymmetry |
 |---|---|---|
 | AC off | 8.6924712425e+01 | 3.27e−16 |
-| `κ_p` = 15 | 9.6005552073e+01 | 0.00e+00 |
-| `κ_p` = 60 | 1.9433033442e+02 | 2.93e−16 |
+| $\kappa_p$ = 15 | 9.6005552073e+01 | 0.00e+00 |
+| $\kappa_p$ = 60 | 1.9433033442e+02 | 2.93e−16 |
 
 **Regression.** `82 passed` — the full `lssem2d/tests` suite, unchanged. The
 AC branches are all guarded on `κ_p != 0`, so with `dtau_p = None` (the default)
@@ -160,12 +160,12 @@ the operator is bit-identical to the pre-AC code.
 ## 3. Accuracy: plane channel, Re = 100, P+Z outlet
 
 12 × 2 elements N = 10 on [0,12] × [0,1], `dt` = 0.1 (`a_mass` = 15), nsub = 8.
-Two inlets. The **parabolic** inlet makes `u = 6y(1−y)`, `v = 0`, `ω = 12y−6`,
-`Δp = 12L/Re = 1.44` exactly representable, so any departure is the AC term and
+Two inlets. The **parabolic** inlet makes $u = 6y(1-y)$, $v = 0$, $\omega = 12y - 6$,
+$\Delta p = 12L/Re = 1.44$ exactly representable, so any departure is the AC term and
 nothing else. The **uniform** inlet forces the flow to develop, so the residual
 is genuinely non-zero and there is something for the weighting to trade off.
 
-| inlet | `κ_p` | max\|u\| | rms div | L2(u − u_exact) | Δp |
+| inlet | $\kappa_p$ | max\|u\| | rms div | L2(u − u_exact) | $\Delta p$ |
 |---|---|---|---|---|---|
 | parabolic | 0 (off) | 1.5000 | 1.19e−07 | 2.42e−07 | **1.44000** |
 | parabolic | 0.5 | 1.5000 | 9.95e−09 | 3.11e−08 | **1.44000** |
@@ -184,29 +184,29 @@ is genuinely non-zero and there is something for the weighting to trade off.
 | uniform | 150 | 1.3628 | 7.05e−02 | 1.36e−01 | 1.62523 |
 | uniform | 500 | 1.2285 | 8.29e−02 | 3.99e−01 | 0.84373 |
 
-*(For the uniform inlet, L2(u − u_exact) and Δp are measured against the
+*(For the uniform inlet, $L_2(u - u_\mathrm{exact})$ and $\Delta p$ are measured against the
 fully-developed profile over the whole domain, so the ~9e−02 and the excess over
 1.44 are the entrance region, not error. The defensible reading is agreement
-**across `κ_p`**, not against the analytic value.)*
+**across $\kappa_p$**, not against the analytic value.)*
 
 Three things follow.
 
-* **AC does not perturb an exactly-representable solution** for `κ_p` up to
-  `a_mass`. `Δp` is unchanged in all six significant figures.
+* **AC does not perturb an exactly-representable solution** for $\kappa_p$ up to
+  `a_mass`. $\Delta p$ is unchanged in all six significant figures.
 * **AC improves the divergence.** rms div drops two orders, 1.19e−07 → 1.69e−09,
   because the better-conditioned system reaches the sub-iteration tolerance
   properly instead of stalling.
-* **The window has a top.** Damage sets in near `κ_p` ≈ 3·`a_mass` and is total
-  by 30×. This is the O(`κ_p`·R) perturbation of §1 becoming visible.
+* **The window has a top.** Damage sets in near $\kappa_p$ ≈ 3·`a_mass` and is total
+  by 30×. This is the $O(\kappa_p R)$ perturbation of §1 becoming visible.
 
 ---
 
 ## 4. Stability: Gartling Re = 800 BFS, 11×4 N = 6, P+Z outlet
 
-`w_mom = w_mass = 1` (time-accurate), nsub = 5, from rest, `a_mass` = 1.5/`dt`.
+`w_mom = w_mass = 1` (time-accurate), nsub = 5, from rest, $a_\mathrm{mass} = 1.5/\Delta t$.
 Reattachment quoted at the final time; Gartling's value is **6.10**.
 
-| `dt` | `a_mass` | `κ_p` | outcome | t_end | x_r | upper sep | upper reatt | pk-pk max\|v\| (last 20 t) |
+| `dt` | `a_mass` | $\kappa_p$ | outcome | t_end | x_r | upper sep | upper reatt | pk-pk max\|v\| (last 20 t) |
 |---|---|---|---|---|---|---|---|---|
 | 0.5 | 3 | 15 | **ok** | 140.0 | 6.062 | 4.870 | 10.543 | 1.87e−02 |
 | 0.25 | 6 | 15 | **ok** | 140.0 | 5.957 | 4.728 | 10.493 | 1.31e−02 |
@@ -229,14 +229,14 @@ Reattachment quoted at the final time; Gartling's value is **6.10**.
 Streamlines for the surviving runs: `figs/gartling_ac_dt_streamlines.png`.
 
 **The window is real but bounded.** Three `dt` values that diverge without AC
-(0.1, 0.05, 0.025) survive with it, and all three land at x_r = 5.88–6.15 against
+(0.1, 0.05, 0.025) survive with it, and all three land at $x_r$ = 5.88–6.15 against
 Gartling's 6.10 — within 0.9%. That is a genuine extension of the usable time
 step by a factor of 4.
 
-**`κ_p ≈ a_mass/2` is the rule, and it is a window, not a floor.** At
-`a_mass` = 60 only `κ_p` = 30 survives: 15 is too little, 45 and 60 too much.
+**$\kappa_p$ ≈ `a_mass`/2 is the rule, and it is a window, not a floor.** At
+`a_mass` = 60 only $\kappa_p$ = 30 survives: 15 is too little, 45 and 60 too much.
 This is the opposite of the cavity's *iteration-count* preference (§5, where
-`κ_p = a_mass` is fastest) — stability and conditioning want different values,
+$\kappa_p$ = `a_mass` is fastest) — stability and conditioning want different values,
 and stability wins.
 
 **It closes at `a_mass` = 120.** Five values spanning 15 … 120 all diverge at
@@ -245,7 +245,7 @@ limit.
 
 **Caveat on the upper-wall bubble.** Upper reattachment ranges 5.98 … 10.54
 across the surviving runs. These are the pk-pk ≈ 1e−02 oscillating states of
-`GARTLING_VALIDATION.md` §fig-5/6 on the 11×4 grid, not fixed points, so the
+`GARTLING_VALIDATION.md` §5 (figs 5/6) on the 11×4 grid, not fixed points, so the
 upper bubble has not settled at t = 140. Lower reattachment is the stable
 diagnostic here.
 
@@ -264,7 +264,7 @@ where the weighting actually bites. Benchmark: Ghia, Ghia & Shin (1982).
 `max_newton` = 5. RMS against Ghia's 17 tabulated points on each centreline
 (`figs/cavity_ac_centrelines.png`).
 
-| `dt` | `a_mass` | `κ_p` | steps | \|dU\| | RMS u | RMS v |
+| `dt` | `a_mass` | $\kappa_p$ | steps | \|dU\| | RMS u | RMS v |
 |---|---|---|---|---|---|---|
 | 0.05 | 30 | 0 (off) | 518 (conv) | 5.37e−10 | 1.792e−02 | 2.040e−02 |
 | 0.05 | 30 | 15 | 513 (conv) | 6.55e−10 | 1.554e−02 | 2.025e−02 |
@@ -341,9 +341,9 @@ states the threshold without that qualifier is over-general.
 
 Measured by wrapping `solver.pcg_solve` and accumulating the iteration count it
 returns. 40 steps from rest, nsub = 5, `cg_tol` = 1e−8, `cgsfac` = 1e−3, so 200
-CG calls per case — identical work, only `κ_p` differs.
+CG calls per case — identical work, only $\kappa_p$ differs.
 
-| `dt` | `a_mass` | `κ_p` | total CG its | its / solve | reduction | wall |
+| `dt` | `a_mass` | $\kappa_p$ | total CG its | its / solve | reduction | wall |
 |---|---|---|---|---|---|---|
 | 1.0 | 1.5 | 0 (off) | 245 431 | 1227.2 | — | 132.8 s |
 | 1.0 | 1.5 | 0.75 | 209 097 | 1045.5 | 1.2× | 114.9 s |
@@ -369,12 +369,12 @@ no hand-copied numbers. The iteration counts are deterministic: re-measuring
 Only the wall column moves with machine load, so run the sweep serially.
 
 **The AC-off cost is U-shaped in `a_mass`, with a minimum near 6.** Reading the
-`κ_p` = 0 rows: **6747** (`a_mass` = 0) → 1227 → 832 → **690** → 976 → 1379.
+$\kappa_p$ = 0 rows: **6747** (`a_mass` = 0) → 1227 → 832 → **690** → 976 → 1379.
 Cost rises in *both* directions from `a_mass` ≈ 6 — refining `dt` past that
 point makes each solve harder, but so does coarsening it below, and the left
 branch runs away hard: the steady form is **5× worse than the worst transient
 point and 135× worse than the best AC-on one.** That is the mass term acting as
-a diagonal regulariser on `LᵀL`; remove it and there is nothing holding the
+a diagonal regulariser on $L^\top L$; remove it and there is nothing holding the
 momentum rows together.
 
 `a_mass` = 0 has no position on a log axis, so the plot carries it as a
@@ -388,36 +388,36 @@ horizontal reference line rather than a point.
 > below.
 
 **With AC the cost is monotone in `dt`, and lower everywhere.** Both AC curves
-fall steadily as `dt` is refined — 843 → 440 → 228 → 97 → 50 at `κ_p` = `a_mass`
+fall steadily as `dt` is refined — 843 → 440 → 228 → 97 → 50 at $\kappa_p$ = `a_mass`
 — with no interior minimum, and every AC row beats the AC-off row at the same
 `a_mass`. So AC does not merely shift the curve down, it removes the penalty for
 refining past `a_mass` ≈ 6, which is the regime a time-accurate run wants to be
 in.
 
 **The mechanism is a missing diagonal.** In the VVP first-order system pressure
-enters only through `∇p` in the momentum rows. The pressure block of `LᵀL`
-therefore scales as `a_flux²` while the velocity blocks pick up `a_mass²`, and
+enters only through $\nabla p$ in the momentum rows. The pressure block of $L^\top L$
+therefore scales as $a_\mathrm{flux}^2$ while the velocity blocks pick up $a_\mathrm{mass}^2$, and
 `compute_jacobi` has no `a33` term to normalise it with. As `a_mass` grows the
 pressure block becomes relatively tiny and the Jacobi preconditioner does nothing
-for it. AC contributes `a33 = κ_p·P` (`lssem2d/solver.py:90`) directly to the
+for it. AC contributes `a33` $= \kappa_p P$ (`lssem2d/solver.py:90`) directly to the
 diagonal that was empty — which is why the benefit *grows monotonically* with
 `a_mass` (1.5× → 1.9× → 3.0× → 10.1× → 27.5× over 1.5 … 30) rather than being a
 fixed constant. Five points, no reversal: this is the one trend in the table
 that is genuinely monotone.
 
-**Iterations and stability want different `κ_p`.** On the cavity `κ_p = a_mass`
+**Iterations and stability want different $\kappa_p$.** On the cavity $\kappa_p$ = `a_mass`
 beats `a_mass/2` on iterations at every time step (50 vs 74, 97 vs 145, 228 vs
 337, 440 vs 568, 843 vs 1046). On the
-BFS at `a_mass` = 60, `κ_p = a_mass` **diverges** and only `a_mass/2` survives.
+BFS at `a_mass` = 60, $\kappa_p$ = `a_mass` **diverges** and only `a_mass/2` survives.
 Choose for stability first; the iteration count at `a_mass/2` is still within
 50% of the best.
 
 ### 5.2a Pressure convergence per unit cost
 
 AC acts *on* the continuity row, so pressure is the field it should move most.
-300 steps from rest, nsub = 5, `cg_tol` = 1e−8, AC-off plus `κ_p` at four
+300 steps from rest, nsub = 5, `cg_tol` = 1e−8, AC-off plus $\kappa_p$ at four
 fractions of `a_mass`, run **serially on an idle machine** so the wall column is
-comparable. `max|Δp|` is tracked separately from `max|Δu|`: the combined `|dU|`
+comparable. $\max|\Delta p|$ is tracked separately from $\max|\Delta u|$: the combined `|dU|`
 used elsewhere is dominated by vorticity, whose magnitude here is ~300× the
 pressure's, and hides the effect entirely.
 
@@ -428,9 +428,9 @@ costs far more than how many steps are needed**, so a per-step plot shows almost
 nothing.
 
 **`dt` = 0.25 (`a_mass` = 6).** All five reach the *same* fixed point
-(`|Δp|` = 2–5e−11) at step 150; only the cost differs.
+($|\Delta p|$ = 2–5e−11) at step 150; only the cost differs.
 
-| `κ_p` | CG its (300 steps) | wall | CG to `\|Δp\|` < 1e−6 | wall to 1e−6 | speed-up |
+| $\kappa_p$ | CG its (300 steps) | wall | CG to `\|Δp\|` < 1e−6 | wall to 1e−6 | speed-up |
 |---|---|---|---|---|---|
 | 0 (off) | 1 070 937 | 543 s | 355 627 | 180 s | — |
 | 1.5 = `a/4` | 740 343 | 389 s | 268 490 | 141 s | 1.3× |
@@ -442,7 +442,7 @@ nothing.
 yet reached the fixed point — compare the rows against each other, *not* against
 the `dt` = 0.25 block.
 
-| `κ_p` | CG its | wall | `\|Δp\|` at step 300 | `\|Δu\|` at step 300 |
+| $\kappa_p$ | CG its | wall | `\|Δp\|` at step 300 | `\|Δu\|` at step 300 |
 |---|---|---|---|---|
 | 0 (off) | 2 345 907 | 1158 s | 2.54e−04 | 1.32e−03 |
 | 7.5 = `a/4` | 224 885 | 135 s | 2.43e−04 | 1.32e−03 |
@@ -451,17 +451,17 @@ the `dt` = 0.25 block.
 | 60 = `2a` | 67 117 | 56 s | 3.03e−04 | 1.29e−03 |
 
 **AC is better on both axes at once — this is not a speed/accuracy trade.** At
-`κ_p` = `a_mass` the pressure is *further* converged than AC off (1.88e−04 vs
+$\kappa_p$ = `a_mass` the pressure is *further* converged than AC off (1.88e−04 vs
 2.54e−04) for **30× fewer CG iterations** and **18× less wall time**.
 
-**Pressure convergence has an optimum near `κ_p` = `a_mass`.** Going on to
+**Pressure convergence has an optimum near $\kappa_p$ = `a_mass`.** Going on to
 2·`a_mass` is marginally cheaper (67k vs 79k iterations) but ends *worse* in
-`|Δp|` (3.03e−04 vs 1.88e−04). The plain iteration-count metric of §5.2 showed
-no such turn — more `κ_p` simply looked better there — so this is the sharper
-criterion of the two, and it agrees with the `κ_p` ≲ `a_mass` accuracy window
+$|\Delta p|$ (3.03e−04 vs 1.88e−04). The plain iteration-count metric of §5.2 showed
+no such turn — more $\kappa_p$ simply looked better there — so this is the sharper
+criterion of the two, and it agrees with the $\kappa_p$ ≲ `a_mass` accuracy window
 of §3.
 
-**AC does not alter the trajectory, only its cost.** `max|Δu|` at step 300 is
+**AC does not alter the trajectory, only its cost.** $\max|\Delta u|$ at step 300 is
 1.32, 1.32, 1.31, 1.32, 1.29 (×1e−03) across all five — indistinguishable — and
 at `dt` = 0.25 all five land on the same fixed point. Consistent with §3 and
 §5.1.
@@ -474,7 +474,7 @@ at `dt` = 0.25 all five land on the same fixed point. Consistent with §3 and
 | `dt` = 0.25 | 0.480 ms | 101.7 ms | 8.9 ms |
 | `dt` = 0.05 | 0.483 ms | 84.8 ms | 4.5 ms |
 
-`c` is the **same to three digits** at both `dt` and across every `κ_p`,
+`c` is the **same to three digits** at both `dt` and across every $\kappa_p$,
 including AC off. So **AC adds no measurable per-iteration cost** — the extra
 `a33` term and its transpose are free at this scale — and the wall speed-up is
 capped only by the fixed per-step overhead `h` (assembly, line search, BCs),
@@ -490,12 +490,12 @@ flow, mesh and boundary conditions as well, so nothing about N could be extracte
 from them. This sweep varies N alone: mesh fixed at 6×6 elements, `dt` = 0.05
 (`a_mass` = 30), 40 steps from rest, the same protocol as §5.2.
 
-It matters because the `κ_p` ≈ `a_mass` rule balances `κ_p` against `a_mass`,
+It matters because the $\kappa_p$ ≈ `a_mass` rule balances $\kappa_p$ against `a_mass`,
 which carries **no N dependence at all**, while the operator norms it is
 balancing against certainly do. If the optimum drifted with N, §6 would only be
 valid at N = 10.
 
-| N | dof | AC off | `κ_p` = `a/2` | `κ_p` = `a` | gain at `a/2` | gain at `a` |
+| N | dof | AC off | $\kappa_p$ = `a/2` | $\kappa_p$ = `a` | gain at `a/2` | gain at `a` |
 |---|---|---|---|---|---|---|
 | 4 | 3 600 | 405.7 | 22.1 | 14.1 | 18.4× | 28.8× |
 | 6 | 7 056 | 722.4 | 37.8 | 24.5 | 19.1× | 29.5× |
@@ -508,14 +508,14 @@ valid at N = 10.
 `figs/cavity_ac_n_sweep.png`, from `scratch/cavity_ac_nsweep.py` and
 `scratch/cavity_ac_nsweep_plot.py`.)*
 
-**The benefit is essentially N-independent.** `κ_p` = `a_mass` gives 26.4–29.5×
-(mean 27.8×) and `κ_p` = `a_mass`/2 gives 18.1–19.1× (mean 18.5×) across the
+**The benefit is essentially N-independent.** $\kappa_p$ = `a_mass` gives 26.4–29.5×
+(mean 27.8×) and $\kappa_p$ = `a_mass`/2 gives 18.1–19.1× (mean 18.5×) across the
 whole range. Both AC-off and AC-on iteration counts grow **roughly linearly in
 N** — AC-off by ~330 iterations per 2 orders, near-constant — so the ratio stays
-flat. There is a slight decline at `κ_p` = `a_mass` (28.8× → 26.4×, about 8%
+flat. There is a slight decline at $\kappa_p$ = `a_mass` (28.8× → 26.4×, about 8%
 over N = 4 … 14); at `a_mass`/2 even that is absent.
 
-**So §6's recommendation is not an artefact of N = 10**, and `κ_p` needs no N
+**So §6's recommendation is not an artefact of N = 10**, and $\kappa_p$ needs no N
 scaling over this range. Whether that survives to N ≫ 14, or on a mesh refined in
 h rather than p, is untested.
 
@@ -528,7 +528,7 @@ comparable and is deliberately not tabulated above.
 **Accuracy across N, on converged runs.** The 18 fields above are 40 steps
 (t = 2) and are a *conditioning* measurement only — their profiles would show
 early-transient shape, not discretisation error. Re-running each N to the stall
-exit at `κ_p` = `a_mass` gives the p-convergence picture
+exit at $\kappa_p$ = `a_mass` gives the p-convergence picture
 (`figs/cavity_n_profiles.png`, `scratch/cavity_n_profiles.py`):
 
 | N | dof | steps to converge | RMS u | RMS v |
@@ -610,9 +610,9 @@ either: the iteration walks off the correct answer and lands elsewhere.
 *different least-squares problems* whenever the residual cannot be driven to
 zero — which is the case here: rms momentum ≈ 2.0e−01, set by the lid corner
 singularities at 6×6 N = 10. The mass terms cancel at steady state
-(`fac1 = Σ α_m`), so both forms see the *same residual vector* `r`, but the
-operator `L` differs, and `Lᵀ_transient·r = 0` does **not** imply
-`Lᵀ_steady·r = 0` when `r ≠ 0`. Different weightings therefore minimise different
+(`fac1` $= \sum \alpha_m$), so both forms see the *same residual vector* $r$, but the
+operator $L$ differs, and $L^\top_\mathrm{transient} r = 0$ does **not** imply
+$L^\top_\mathrm{steady} r = 0$ when $r \neq 0$. Different weightings therefore minimise different
 things and land on different minimisers.
 
 This is the same mechanism as `GARTLING_VALIDATION.md` §8, where Poiseuille is
@@ -666,7 +666,7 @@ The spurious fixed point **overshoots Ghia everywhere**: `max|v|` = 0.62 against
 0.52 (+21%), the v peak at x ≈ 0.2 reaches 0.565 against 0.37 (+53%), and u dips
 to −0.56 against −0.38. The correct run slightly *under*shoots (0.489 vs 0.516),
 which is the ordinary N = 10 discretisation error. Its u profile also carries a
-visible kink near y ≈ 0.65, at an element boundary — the field is C⁰ but its
+visible kink near y ≈ 0.65, at an element boundary — the field is $C^0$ but its
 derivative jumps there, which no integral diagnostic in §5.3 registered.
 
 **The middle panel of the streamline figure is the dangerous one, and it is a
@@ -735,9 +735,9 @@ st.dtau_p = 2.0/a_mass          # kappa_p = a_mass/2
 
 * **`dtau_p = None` (default) disables AC entirely** and is bit-identical to the
   pre-AC operator.
-* **Start at `κ_p = a_mass/2`.** It is the value that survives on the BFS and
+* **Start at $\kappa_p$ = `a_mass`/2.** It is the value that survives on the BFS and
   costs little against the optimum on the cavity.
-* **Keep `κ_p` ≲ `a_mass`.** Above ≈ 3·`a_mass` the O(`κ_p`·R) perturbation of
+* **Keep $\kappa_p$ ≲ `a_mass`.** Above ≈ 3·`a_mass` the $O(\kappa_p R)$ perturbation of
   the converged state becomes measurable (§3).
 * **`max_newton` ≥ 5.** The term only cancels at sub-iteration convergence. With
   `max_newton = 1` it becomes a physical-time term on the pressure and breaks
@@ -751,22 +751,22 @@ st.dtau_p = 2.0/a_mass          # kappa_p = a_mass/2
 
 * **It does not remove the `a_mass` limit**, it moves it. On the BFS the usable
   range went from `a_mass` ≤ 6.05 to `a_mass` ≤ 60 — one decade — and 120 fails
-  at every `κ_p` tried.
+  at every $\kappa_p$ tried.
 * **It does not improve the converged accuracy.** The cavity RMS u improves from
   1.79e−02 to 1.55e−02, but RMS **v** over the same runs does not move
   consistently at all (±2%, both directions), and a real improvement would move
   both. What the u column reflects is *how well converged* the run is, not the
   discretisation. The honest statement is that AC is accuracy-*neutral* and gets
   you to the same answer faster. (§5.1)
-* **It does not help exactly-representable flows.** Poiseuille has R ≈ 0, so
+* **It does not help exactly-representable flows.** Poiseuille has $R \approx 0$, so
   there is nothing for AC to fix; the 2.4e−07 → 1.7e−09 divergence improvement is
   the only visible effect and it is below any meaningful tolerance.
 
 ## 8. Open
 
-* Whether the `a_mass` = 120 failure is recoverable at some `κ_p` outside
+* Whether the `a_mass` = 120 failure is recoverable at some $\kappa_p$ outside
   15 … 120, or whether a second mechanism takes over there.
-* Whether the `κ_p` = 500 damage in §3 is purely non-convergence of the
+* Whether the $\kappa_p$ = 500 damage in §3 is purely non-convergence of the
   sub-iterations (raise `max_newton` and re-test) or a genuine perturbation of
   the fixed point.
 * Whether the BFS `a_mass` instability is specifically an interaction with the
@@ -804,19 +804,19 @@ with no artificial-compressibility or penalty term on the continuity row.
 
 1. **Why the formulation exists.** LSFEM yields a **symmetric positive-definite**
    system from a non-symmetric PDE and **avoids the inf-sup/LBB condition**, so
-   `u`, `p`, `ω` can share equal-order interpolation — which is what this code
+   $u$, $p$, $\omega$ can share equal-order interpolation — which is what this code
    does. Boundary-condition residuals can also be folded into the functional.
 
 2. **Poor mass conservation is the known Achilles heel.** Continuity is enforced
-   only in a least-squares sense, so `∇·u` is *traded off* against momentum.
+   only in a least-squares sense, so $\nabla\cdot u$ is *traded off* against momentum.
    Reported to become severe with certain boundary conditions and on
    high-aspect-ratio domains. Published remedies: weighting the functional,
    Lagrange multipliers on continuity, piecewise divergence-free bases, and
    **strengthening the pressure–velocity coupling**.
 
 3. **Penalty / pseudo-compressibility.** The penalty formulation replaces
-   `∇·u = 0` with `∇·u = −p/Λ`, and there is a spectral/hp penalty least-squares
-   NS formulation (Pontaza & Reddy). Classic dilemma: smaller Λ enforces
+   $\nabla\cdot u = 0$ with $\nabla\cdot u = -p/\Lambda$, and there is a spectral/hp penalty least-squares
+   NS formulation (Pontaza & Reddy). Classic dilemma: smaller $\Lambda$ enforces
    incompressibility better but worsens conditioning and adds consistency error.
 
 4. **Space–time coupled LSFEM** (Pontaza & Reddy, JCP 2004) has no time-step
@@ -830,28 +830,28 @@ with no artificial-compressibility or penalty term on the continuity row.
 * **§4's `a_mass` limit is the mass-conservation defect in a new guise.** The
   literature treats the continuity weight as a free parameter to be chosen — and
   chooses it *large*. In a time-marching VVP code it is not free: the constraint
-  rows carry weight exactly 1 while `a_mass = w_mass·fac1/dt` grows, so
+  rows carry weight exactly 1 while $a_\mathrm{mass} = w_\mathrm{mass}\,\mathrm{fac}_1/\Delta t$ grows, so
   **refining `dt` silently down-weights continuity.** We have not seen it stated
   that the weight is set by the time step.
 
 * **AC is "strengthening the pressure–velocity coupling", item 2's named
   remedy** — it puts `p` into a row that otherwise contains only velocities. Our
-  data agrees quantitatively: rms `∇·u` on Poiseuille improved 1.19e−07 →
+  data agrees quantitatively: rms $\nabla\cdot u$ on Poiseuille improved 1.19e−07 →
   1.69e−09 (§3).
 
 * **Our term is formally the penalty row, but behaves nothing like it.**
-  `κ_p·p + ∇·u = 0` is item 3 with `κ_p = 1/Λ`. The difference is decisive:
+  $\kappa_p p + \nabla\cdot u = 0$ is item 3 with $\kappa_p = 1/\Lambda$. The difference is decisive:
   penalty is consistency-breaking — at convergence the solution really does
-  satisfy `∇·u = −p/Λ`, an O(1/Λ) error, so Λ must be large. Ours uses
+  satisfy $\nabla\cdot u = -p/\Lambda$, an $O(1/\Lambda)$ error, so $\Lambda$ must be large. Ours uses
   `(p − p_prev)` in **pseudo**-time, so the term vanishes identically at
-  sub-iteration convergence and the perturbation is O(`κ_p`·R), not O(`κ_p`).
-  §3 is the proof: at `κ_p` = 15 we measure `Δp` = 1.44000 (exact) and rms
-  `∇·u` = 1.69e−09, where a penalty with Λ = 1/15 would be imposing
-  `∇·u = −15p`. That is why `κ_p` can be as large as `a_mass` rather than
+  sub-iteration convergence and the perturbation is $O(\kappa_p R)$, not $O(\kappa_p)$.
+  §3 is the proof: at $\kappa_p$ = 15 we measure $\Delta p$ = 1.44000 (exact) and rms
+  $\nabla\cdot u$ = 1.69e−09, where a penalty with $\Lambda = 1/15$ would be imposing
+  $\nabla\cdot u = -15p$. That is why $\kappa_p$ can be as large as `a_mass` rather than
   vanishingly small.
 
 * **Item 5 is consistent with §5.2, and we identify the missing entry.** Jacobi
-  helps, but has **no `a33`** because pressure enters only through `∇p`. AC
+  helps, but has **no `a33`** because pressure enters only through $\nabla p$. AC
   supplies exactly that diagonal.
 
 ### Where our measurements contradict a standard claim
@@ -867,7 +867,7 @@ one:
 | transient, `dt` = 0.05 | 2.025e−01 | 1.435e−01 | 6.756e−02 | **1.57e−02** |
 
 Indistinguishable in J — 1% apart, and the *wrong* solution is even better on
-`∇·u` — while the actual error differs 10×. The lid corner singularities dominate
+$\nabla\cdot u$ — while the actual error differs 10×. The lid corner singularities dominate
 the domain integral and swamp the signal.
 
 The claim needs stating precisely, because J is not useless here: on the same

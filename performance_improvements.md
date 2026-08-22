@@ -3,7 +3,7 @@
 This document summarizes the core performance improvements and algorithmic enhancements made to the Python 2D Spectral Element (`lssem2d`) solver, which culminated in an **8.7x speedup** on our 72-element $N=10$ baseline.
 
 ## 1. Exact Jacobi Preconditioner
-**Problem:** The unpreconditioned BiCGSTAB solver was stalling on high-aspect-ratio meshes (like the Backward-Facing Step at Re=389) and taking over 5000 iterations without converging.
+**Problem:** The unpreconditioned BiCGSTAB solver was stalling on high-aspect-ratio meshes (like the Backward-Facing Step at $Re=389$) and taking over 5000 iterations without converging.
 **Improvement:** 
 We implemented an exact Jacobi (diagonal) preconditioner for the fully-coupled VVP (Velocity-Vorticity-Pressure) operator. Because the $L$ operator is local to each element, we extract the exact matrix diagonal in just $4 \times (N+1)^2$ passes of unit vectors through $L$. 
 **Result:** 

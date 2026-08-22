@@ -36,7 +36,7 @@ Fortran's `cavity_36_7_elem_grid.dat`):
 | `apply_LT` | 111.8 µs | 25.9 | **4.32×** |
 | **`apply_A`** | **209.5 µs** | **60.3** | **3.47×** |
 
-End-to-end, lid-driven cavity Re=100, dt=0.1, 6×6 at N=8, run to steady state
+End-to-end, lid-driven cavity $Re=100$, dt=0.1, 6×6 at N=8, run to steady state
 (`max|dU| < 1e-7`):
 
 | config | steps | wall | speedup | max\|u−u_ref\| |

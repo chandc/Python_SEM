@@ -31,8 +31,8 @@ proceedings**, and fig. 2 there is the profile comparison, not the grid.
    steady solver gives lower reattachment **6.100** against Chan's 6.1, upper
    separation 4.863 (4.8) and upper reattachment 10.484 (10.5). Figures 5 and 6
    reproduce as a pair: the 11×4 grid sustains an oscillation
-   (peak-to-peak `max|v|` = 1.8e-01 at t = 200) that the 18×4 grid damps to a
-   true fixed point (**1.6e-10** at t = 400).
+   (peak-to-peak `max|v|` = 1.8e-01 at $t = 200$) that the 18×4 grid damps to a
+   true fixed point (**1.6e-10** at $t = 400$).
 
 2. **There is a floor on the usable time step, and it is structural.** The
    continuity and vorticity rows of the least-squares functional carry weight
@@ -93,8 +93,8 @@ velocity is 800". Taken literally with `S = 0.5` and mean inlet velocity 1 that
 is `ν = 0.5/800 = 6.25e-04`. The value that reproduces his own quoted
 reattachment of 6.1 is `ν = 1/800`, i.e. Re built on the inlet hydraulic
 diameter `2h = 1`. Check: `x_r = 6.1` with `S = 0.5` is `x_r/S = 12.2`, and
-Armaly's curve gives `x1/S ≈ 12` at Re = 800 in that convention. Taking the
-literal reading would put the case at Re = 1600. This is the same convention slip
+Armaly's curve gives `x1/S ≈ 12` at $Re = 800$ in that convention. Taking the
+literal reading would put the case at $Re = 1600$. This is the same convention slip
 already documented for the Armaly runs in `armaly_run.py`.
 
 ### Grids
@@ -245,7 +245,7 @@ does. `figs/gartling_fig5_nx11_evolution.png`,
 
 **Nine orders of magnitude** between the two grids, and the 11×4 periodicity is
 invariant to timestep, `a_mass` and weights — only the mesh changes it. The 18×4
-case needed t ≈ 400 to show it: at Chan's t = 140 it was still climbing at 94.5%
+case needed $t \approx 400$ to show it: at Chan's $t = 140$ it was still climbing at 94.5%
 of its final reattachment, and a geometric extrapolation from that data
 (projecting a limit of ~6.03) turned out to be wrong.
 
@@ -257,8 +257,8 @@ cannot be time-integrated at all — see §6.
 ## 6. The `a_mass` stability threshold
 
 At `w_mom = w_mass = 1`, dt = 0.1 (`a_mass` = 15) the Gartling flow diverges from
-rest by t ≈ 19 — and, decisively, **diverges even when started exactly on the
-converged steady field**, at t = 62.1 on the 11×4 grid and t = 74.0 on the 18×4.
+rest by $t \approx 19$ — and, decisively, **diverges even when started exactly on the
+converged steady field**, at $t = 62.1$ on the 11×4 grid and $t = 74.0$ on the 18×4.
 So the discrete steady state is *unstable* under that time-stepping operator; it
 is not a basin-of-attraction problem, and refining the mesh only delays it.
 
@@ -274,7 +274,7 @@ grids, both initial conditions, sub-iterations 1/3/5/10, `a_flux` from 0.1 to 1,
 dt from 0.01 to 2. None of those predict the outcome; `a_mass` does.
 
 > **Scope.** The threshold is measured on *this flow*, which has an outflow
-> boundary. It does **not** transfer to a closed domain: the Ghia Re = 1000
+> boundary. It does **not** transfer to a closed domain: the Ghia $Re = 1000$
 > lid-driven cavity converges at `a_mass` = 30 with no remedy at all
 > (`|dU|` = 5.4e−10 after 518 steps, `ARTIFICIAL_COMPRESSIBILITY.md` §5.1). Read
 > 6.05 / 12.1 as a property of the weighting imbalance *interacting with an
@@ -292,7 +292,7 @@ with nothing in between. That includes the `nsub=1` run that never tripped a
 20.0 cutoff but reached 11.5 and is correctly classed as diverged.
 
 **`a_flux` sets the timescale of failure, not the outcome.** At `a_mass` = 15,
-`a_flux` = 1 survives to t ≈ 9–19 while `a_flux` = 0.1 dies at 7.90; same at
+`a_flux` = 1 survives to $t \approx 9$–$19$ while `a_flux` = 0.1 dies at 7.90; same at
 `a_mass` = 30 (18.45 vs 5.26). So lowering `w_mom` *alone* makes failure sooner.
 
 > **Retraction.** This study initially reported that "`w_mom` = 0.1 fixes the

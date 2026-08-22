@@ -9,7 +9,7 @@ code reuses `lssem2d.mesh`, `lssem2d.lgl` and `lssem2d.assembly.gather_scatter`
 by calling them, never by editing them. Every place the 2D API did not fit was
 worked around on the 3D side (see §2.4).
 
-**Suite: 164 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`).
+**Suite: 200 tests passing** (`uv run --quiet python -m pytest lssem3d/tests -q`).
 
 | milestone | state | evidence |
 |---|---|---|
@@ -18,13 +18,13 @@ worked around on the 3D side (see §2.4).
 | M3 Stages 2–3 | **done** | analytic single-mode; dealiasing with negative control |
 | M4 Stage 4 MMS | **PASSED** | §4 — spectral in `N` and `Nz`; temporal gate restated. **PDE-level order 2.00 confirmed** (§7A.5) |
 | M5 Stage 5 gate | **PASSED in 3D** | §7 — stable to `a_mass` = 6000; re-verified on corrected code (§7H) |
-| M6 numba backend | not started | §3 changes what this should target |
+| M6 numba backend | **DONE** | §7M — fused single-pass kernels, **3.5–6.2×** on the matvec; parity to 1e-16 and the analytic Stokes rate reproduced |
 | M7 `Re_τ` = 180 | not started | — |
 
-**Five of seven milestones complete** (M1–M5). M6 (numba) and M7 (`Re_τ` = 180)
-remain.
+**Six of seven milestones complete** (M1–M6). M7 (`Re_τ` = 180) remains.
 
-~~\* M2 was measured before the row-weight fix~~ **re-validated, §7J.1.** Earlier note: (§7A.2) and so ran on a
+~~\* M2 was measured before the row-weight fix~~ **re-validated, §7J.1.** Earlier
+note: M2 was measured before the row-weight fix (§7A.2) and so ran on a
 mis-scaled least-squares functional. Neither verdict is expected to flip — M2
 compared 3D against 2D at matched settings, and M5 was a stability result — but
 it should be re-run (§8.3), and until then it carries this asterisk. **M5 has
@@ -63,8 +63,15 @@ tolerance policy is worth a **free 40%** of the iteration count.
 **Turnaround improved 2.38×** (142.3 s → 59.7 s on a standard run), from two
 changes that cost a day and carried no correctness risk: an analytic Jacobi
 diagonal (the probing loop was 41% of every run) and a CG tolerance policy (the
-solver had been over-solving by ~10 orders). Neither is `numba`, which remains
-deferred.
+solver had been over-solving by ~10 orders).
+
+**A `numba` backend then bought another 3.5–6.2× on the matvec** (§7M) — not by
+compiling the NumPy code, which already calls BLAS, but by **fusing ~30 passes
+over the state into one**, the only lever that helps a memory-bandwidth-bound
+kernel. Verified bit-for-bit against the NumPy operator (33 parity cases) and
+against the analytic Stokes rate, which it reproduces to **8 significant
+figures**. It composes with the other two multipliers: measured **10.3×** over
+serial NumPy on a full solve. Opt in with `LSSEM3D_BACKEND=numba`.
 
 **Twelve silent bugs, none of which raised an exception.** Every one produced a
 correctly-shaped, plausible array. The two most consequential were found in the
@@ -79,8 +86,8 @@ ratio of **4.3×** against the cavity's **490×**, so the cavity's AC dependence
 a property of its lid and corner singularities rather than of walls or
 viscosity. M7's geometry inherits the recipe.
 
-**Status:** M1–M5 complete and verified (M5 re-run on corrected code, §7H); M6
-(numba, demoted) and M7 (`Re_τ` = 180) remain. M2 still carries an asterisk — the
+**Status:** M1–M5 complete and verified (M5 re-run on corrected code, §7H); **M6
+(numba) complete** (§7M); M7 (`Re_τ` = 180) remains. M2 still carries an asterisk — the
 cavity driver has not been re-run since the row-weight fix.
 
 **What is *not* established:** a general recipe. The three benchmarks agree only
@@ -96,9 +103,9 @@ project.
 
 ### L1. Tests that compare the operator to itself cannot find a wrong operator
 
-Four missing factors of `A = M Qᵀ Q L₀ᵀ W L₀ M` (§2.1) survived a full suite of
-symmetry, adjointness and convergence tests, because **`L₀ᵀL₀` is symmetric
-whether or not `W` is there**, and CG converges happily on a mis-weighted inner
+Four missing factors of $A = M\,Q^{T}Q\,L_0^{T}WL_0M$ (§2.1) survived a full suite of
+symmetry, adjointness and convergence tests, because **$L_0^{T}L_0$ is symmetric
+whether or not $W$ is there**, and CG converges happily on a mis-weighted inner
 product. Only two kinds of test caught them: comparison against an *independent
 implementation* (Stage 1, vs `lssem2d`) and against a *hand-derived analytic
 forcing* (Stage 2). Every project should own at least one of each.
@@ -112,8 +119,7 @@ are cheap: **assert the layout on entry** to anything taking the 5-D state, and
 **write the negative control** (a test that must fail when the thing under test
 is disabled).
 
-### L3. Four gates and diagnostics were wrong *as written* — and each would have
-### condemned correct code
+### L3. Four gates and diagnostics were wrong *as written* — and each would have condemned correct code
 
 This is the most surprising pattern in the project, and the reason gates are
 worth re-deriving rather than inheriting:
@@ -133,11 +139,23 @@ was resolved by finding a knob that separates them:
 
 - **flat `div u` under `dt` refinement** could be an AC error *or* an ordinary
   spatial residual (also `dt`-independent). Fixing `κ_p` instead of scaling it as
-  1/`dt` made it fall — O(1) vs O(`dt`), diagnosis settled (§7A.1).
+  $1/\Delta t$ made it fall — $O(1)$ vs $O(\Delta t)$, diagnosis settled (§7A.1).
 - **threads plateauing at 6.7×** could be the GIL *or* memory bandwidth.
   Processes are immune to the GIL and tied threads exactly ⇒ bandwidth (§3.3).
 - **flat `k_z` iteration profile** could be a bad preconditioner *or* `a_mass`
-  swamping the `k_z²` term. Sweeping `a_mass` made the trend appear (§6).
+  swamping the $k_z^2$ term. Sweeping `a_mass` made the trend appear (§6).
+
+### L4b. A performance fix can be silently *undone* by a flag you did not set
+
+The numba kernels needed `nogil=True`. Without it every njit call holds the GIL,
+which would have **serialised `parallel.pcg`'s ThreadPoolExecutor** — the mode
+parallelism that was already worth 6.7×. The failure mode is the nasty kind:
+answers stay correct, the microbenchmark still shows 6× on one matvec, and only
+the *end-to-end* number quietly regresses. It is invisible unless you measure
+thread scaling specifically, which is why `bench_numba_threads.py` exists as a
+gate rather than a curiosity: a **flat numba row** in that table is the
+signature. The general rule — when a new layer sits *underneath* an existing
+parallel one, re-measure the outer layer, not just the inner one (§7M).
 
 ### L5. Know your floor before calling something an error
 
@@ -334,7 +352,7 @@ Eight are below; the ninth is §5, and the tenth and eleventh are §2.5.
 
 ### 2.1 Four missing pieces of the operator
 
-The assembled operator is `A = M Qᵀ Q L₀ᵀ W L₀ M`. Each omission below drops one
+The assembled operator is $A = M\,Q^{T}Q\,L_0^{T}WL_0M$. Each omission below drops one
 factor, and each was invisible to the tests that existed at the time:
 
 | omission | symptom | why the tests missed it |
@@ -386,7 +404,7 @@ A ninth is in §5 — it needed the integrator under test, which came later.
 ### 2.5 Two more, found by comparison and by review
 
 **10. No row weights in the least-squares functional** (§7A.2). The momentum rows
-outweighed the constraints by `c²` ≈ 1.4×10⁶, so the minimiser ignored `div u`
+outweighed the constraints by $c^2 \approx 1.4\times10^6$, so the minimiser ignored `div u`
 and the AC-free system could not be solved at all. Invisible to every test in the
 suite: the operator is *correct*, it is the **functional** that was mis-weighted,
 and Stage 1 compared against 2D at matched `a_mass` rather than matched row
@@ -400,7 +418,7 @@ operator and keeping the gather is exact (0.000e+00 over all 441 free dofs).
 
 The second is the more embarrassing one, and the more instructive. The test that
 "confirmed" the earlier assembly fix **spot-checked five nodes on the velocity
-field** — and velocity contamination shrinks like 1/`c²`, so it is invisible at
+field** — and velocity contamination shrinks like $1/c^2$, so it is invisible at
 production `a_mass`; the error lives on the `c`-independent pressure and vorticity
 rows. That is exactly L1 — a test comparing the operator against itself — written
 by the author of L1, in the same file that states it. The replacement sweeps every
@@ -572,7 +590,7 @@ still pass on noise.
 The plan asked for **RKW3 slope 3.0 ± 0.15**, adding that measuring 2.0 means
 "the `α/β/γ/ζ` table is mis-transcribed **or** Crank–Nicolson is limiting". One
 convergence run on the PDE cannot separate those two diagnoses, so the scalar
-model `u' = (λ_e + λ_i)u` — precisely the problem the coefficients were designed
+model $u' = (\lambda_e + \lambda_i)u$ — precisely the problem the coefficients were designed
 for — was run three ways:
 
 | configuration | measured order |
@@ -591,15 +609,15 @@ accuracy — it is the imaginary-axis stability interval (√3) that AB2 lacks
 *entirely* (plan §0.4). CN's unconditional stability is exactly what the stiff
 `a_mass` term needs, and viscous error is not what limits a DNS at these steps.
 
-A negative control keeps the order test honest: corrupting `γ₂` from 3/4 to 0.7
+A negative control keeps the order test honest: corrupting $\gamma_2$ from 3/4 to 0.7
 must collapse the explicit-only order below 2.5, otherwise the test is not
 actually sensitive to the coefficient table.
 
 ### 4.3 A trap pinned in passing
 
-`solver3d.rkw3_step` builds `rhs = U + dt(γ N + ζ N_prev)` — the **`α_k L^{k-1}`
+`solver3d.rkw3_step` builds `rhs = U + dt(γ N + ζ N_prev)` — the **$\alpha_k L^{k-1}$
 term is not in it**, and is left to `solve_stage`. A `solve_stage` that forgets
-`α` loses an order silently, with no shape error and a plausible field. That
+$\alpha$ loses an order silently, with no shape error and a plausible field. That
 interface is now pinned by test rather than left as an accident.
 
 ---
@@ -610,7 +628,7 @@ Everything in §2 was found before the integrator was under test. The driver
 itself lives in `scratch/cavity3d_kz0.py` — a *script*, not the library — so the
 assembled sequence (explicit convection → defect-corrected stage RHS → solve →
 update, ×3) had never run under test. And the M2 gate that did exercise it ran at
-`k_z` = 0, where every `i·k_z` term vanishes and there is exactly one mode. **No
+`k_z` = 0, where every $ik_z$ term vanishes and there is exactly one mode. **No
 test had ever run the driver with the mode axis populated.**
 
 `test_integration_multimode.py` does, and immediately found this:
@@ -629,7 +647,7 @@ against a real part of **6.1e−03** — comparable, not a rounding artefact. Th
 solver's own state would have failed `assert_hermitian_ok`.
 
 Why nothing caught it earlier: at `k_z` = 0 the real and imaginary halves
-decouple (no `i·k` term), so an imaginary half that starts at zero *stays* zero.
+decouple (no $ik$ term), so an imaginary half that starts at zero *stays* zero.
 The whole class is invisible to every `k_z` = 0 test, which is all the driver had.
 
 Fixed in `bc.py` via `real_mode_columns`, a single source of truth shared by
@@ -652,7 +670,7 @@ vacuously again.
 ## 6. Conditioning: `k_z` is not what limits the solve
 
 `scratch/kz_iterations.py`. The plan (§4) states an expectation and a diagnosis
-together: iterations-per-solve should *fall* with `k_z`, because the `k_z²` term
+together: iterations-per-solve should *fall* with `k_z`, because the $k_z^2$ term
 makes the operator more diagonally dominant, and **"a flat profile is evidence
 the preconditioner is not using `k_z`"**. Measured before optimising the
 preconditioner — because if the profile were flat, the Jacobi diagonal would be
@@ -672,8 +690,8 @@ which would condemn the preconditioner. **That verdict would have been wrong.**
 
 ### Why: `a_mass` dominates the diagonal by three orders of magnitude
 
-The `k_z²` term enters scaled by viscosity. At `Re` = 180 and the largest
-wavenumber here, `ν·k_z²` = **1.42**, against `c` = `a_mass` = **1200**. It
+The $k_z^2$ term enters scaled by viscosity. At `Re` = 180 and the largest
+wavenumber here, $\nu k_z^2$ = **1.42**, against `c` = `a_mass` = **1200**. It
 cannot possibly shift the conditioning. Sweeping `a_mass` with everything else
 fixed confirms the mechanism directly:
 
@@ -685,8 +703,8 @@ fixed confirms the mechanism directly:
 | **1** | **0.249 — falls steeply** |
 
 The `k_z` trend is real and appears exactly when `a_mass` stops swamping it. For
-the `k_z²` term to compete at production settings one would need
-`k_z ~ √(c/ν)` = √(1200·180) ≈ **465**; at `Nz` = 128 the largest `k_z` is 64.
+the $k_z^2$ term to compete at production settings one would need
+$k_z \sim \sqrt{c/\nu} = \sqrt{1200\cdot180}$ ≈ **465**; at `Nz` = 128 the largest `k_z` is 64.
 **The regime the plan's diagnostic assumes is unreachable in this formulation.**
 
 ### Consequences
@@ -697,7 +715,7 @@ the `k_z²` term to compete at production settings one would need
 2. **Tuning the preconditioner's `k_z` handling would buy nothing** — `k_z` is
    not what limits conditioning. `a_mass` is. This removes the conditioning
    motivation for the analytic Jacobi diagonal; that work is now justified only
-   as a setup-cost saving (§8.2), which is a much smaller prize.
+   as a setup-cost saving (§7G), which is a much smaller prize.
 3. The Nyquist mode costs **46% more** iterations than its neighbour (906 vs
    621) because its imaginary half is frozen (§5), leaving a different — and
    evidently worse-conditioned — system. Worth knowing before it is mistaken for
@@ -722,21 +740,22 @@ is infeasible as specified" — and until now it had only ever been answered wit
 
 With RKW3/CN the two constraints pull in opposite directions:
 
-```
-a_mass = 1/(β₂·dt) = 6/dt        (worst stage)
-CFL    ∝ dt                       (limit √3 for RKW3)
-```
+$$
+a_\mathrm{mass} = \frac{1}{\beta_2\,\Delta t} = \frac{6}{\Delta t} \quad(\text{worst stage}),
+\qquad
+\mathrm{CFL} \propto \Delta t \quad(\text{limit } \sqrt{3} \text{ for RKW3})
+$$
 
-so the feasible window is `6/a_max < dt < dt_CFL`, and it is non-empty iff
-`a_max > 6/dt_CFL`. **`a_mass` instability therefore appears at SMALL `dt`** —
+so the feasible window is $6/a_\mathrm{max} < \Delta t < \Delta t_\mathrm{CFL}$, and it is non-empty iff
+$a_\mathrm{max} > 6/\Delta t_\mathrm{CFL}$. **`a_mass` instability therefore appears at SMALL `dt`** —
 the opposite of the usual intuition, and the reason the sweep decreases `dt`.
 
 ### 7.2 The rig, and its control
 
 Walls in `y`, periodic in `x` (SEM connectivity, `mesh.periodic_x`) and `z`
-(Fourier). Base flow `u = 6y(1−y)` held by a body force `f_x = 12ν`. Perturbation
+(Fourier). Base flow $u = 6y(1-y)$ held by a body force $f_x = 12\nu$. Perturbation
 is an analytic, divergence-free roll pair from a streamfunction in `(y,z)`,
-`ψ = A sin²(πy)cos(kz)`, which puts energy in `w` and the transverse
+$\psi = A\sin^2(\pi y)\cos(kz)$, which puts energy in `w` and the transverse
 vorticities — the components every `k_z` = 0 test is blind to.
 
 Validated before use: the base flow is held to **2.2e−15** over 5 steps, which
@@ -771,17 +790,19 @@ t = 0.2); the decay *rate* is consistent throughout.
 
 `dt_CFL` = **0.0665** on this grid, so the constraints are
 
-```
-CFL:     dt < 0.0665   ⇒  a_mass > 90
-a_mass:  clean to 6000 ⇒  dt > 0.001
-```
+$$
+\begin{aligned}
+\text{CFL:}&\quad \Delta t < 0.0665 \;\Rightarrow\; a_\mathrm{mass} > 90\\
+a_\mathrm{mass}\text{:}&\quad \text{clean to } 6000 \;\Rightarrow\; \Delta t > 0.001
+\end{aligned}
+$$
 
 **The window spans a factor of ~66 in `dt`.** The gate passes, and not
 marginally. The plan's worst-case fear — that no operating point exists and the
 formulation would need semi-implicit convection and a re-plan — is resolved
 against.
 
-**Scaling to M7.** The requirement is `a_mass > 6/dt_CFL`, and `dt_CFL` shrinks
+**Scaling to M7.** The requirement is $a_\mathrm{mass} > 6/\Delta t_\mathrm{CFL}$, and `dt_CFL` shrinks
 with resolution:
 
 | grid | `dt_CFL` | `a_mass` required |
@@ -831,11 +852,13 @@ symptoms were real; the diagnosis attached to them was not.
 Artificial compressibility is a **steady-state** device unless sub-iterated. The
 continuity row solves
 
-```
-κ_p·p + div u = κ_p·p_prev     ⇒     div u = −κ_p·(p − p_prev)
-```
+$$
+\kappa_p\,p + \operatorname{div}u = \kappa_p\,p_\mathrm{prev}
+\;\;\Rightarrow\;\;
+\operatorname{div}u = -\kappa_p\,(p - p_\mathrm{prev})
+$$
 
-At a steady state `p = p_prev` and it is exact — which is why the M2 cavity gate
+At a steady state $p = p_\mathrm{prev}$ and it is exact — which is why the M2 cavity gate
 could never see a problem. The driver had **no sub-iterations at all**, a
 configuration never tested in this project, 2D or 3D. Four measurements followed:
 
@@ -852,8 +875,8 @@ true *rate* toward the scheme's own limit, and that limit was simply wrong (L5).
 
 **Two contributions to the 12.5% were then separated.** The initial condition set
 `p` = 0, which is inconsistent — for the Stokes mode
-`p = σ·(A sinh(αy) + B cosh(αy))·sin(αx)`, derived by hand from
-`−σu = −p_x + ν∇²u`, where the hyperbolic terms cancel. Supplying it cut the
+$p = \sigma\,(A\sinh(\alpha y) + B\cosh(\alpha y))\sin(\alpha x)$, derived by hand from
+$-\sigma u = -p_x + \nu\nabla^2 u$, where the hyperbolic terms cancel. Supplying it cut the
 error **12.5% → 1.0%**. So most of the headline number was an initial-condition
 artifact, and only ~1% was attributable to AC.
 
@@ -874,15 +897,17 @@ validation runs, is `a_mass = fac1 = 1`, `a_flux = dt`: **every row O(1)** in th
 velocity.
 
 **`lssem3d` had no row weighting whatsoever.** Its momentum rows carried
-`c = 1/(β_k·dt)` against constraint rows of O(1). At `dt` = 5e−3 that is
+$c = 1/(\beta_k\,\Delta t)$ against constraint rows of O(1). At `dt` = 5e−3 that is
 `c` = 1200, and the functional *squares* the rows:
 
-```
-J₃D = ∫ [ (c·u + p_x + ν∇×ω)²  +  (div u)²  +  (ω-definitions)² ]
-J₂D = ∫ [ (u − u_old + dt·N)²   +  (div u)²  +  (ω-definitions)² ]
-```
+$$
+\begin{aligned}
+J_{3D} &= \int \bigl[\, (c\,u + p_x + \nu\nabla\times\omega)^2 \;+\; (\operatorname{div}u)^2 \;+\; (\omega\text{-definitions})^2 \,\bigr]\\
+J_{2D} &= \int \bigl[\, (u - u_\text{old} + \Delta t\,N)^2 \;+\; (\operatorname{div}u)^2 \;+\; (\omega\text{-definitions})^2 \,\bigr]
+\end{aligned}
+$$
 
-Momentum outweighed continuity by **c² ≈ 1.4×10⁶**. The minimiser therefore
+Momentum outweighed continuity by **$c^2 \approx 1.4\times10^6$**. The minimiser therefore
 essentially ignored `div u`, and the normal operator was hopelessly conditioned.
 
 Stokes decay, AC **off**, `dt` = 5e−3, σ_exact = 9.3137399:
@@ -926,8 +951,8 @@ sharply. Cavity, Re = 1000, `dt` = 1.74e−3, CG per step:
 
 Legacy weighting is **27× worse at best** on the cavity, while it is what makes
 the Stokes case solvable at all. The plausible discriminant is viscosity: legacy
-scales the momentum row to `u + β·dt·(p_x + ν∇×ω)`, and at ν = 1e−3 with
-β·dt ≈ 3e−4 the vorticity coupling is ~3e−7 — effectively absent. At ν = 1
+scales the momentum row to $u + \beta\,\Delta t\,(p_x + \nu\nabla\times\omega)$, and at ν = 1e−3 with
+$\beta\,\Delta t$ ≈ 3e−4 the vorticity coupling is ~3e−7 — effectively absent. At ν = 1
 (Stokes) it is not.
 
 **Consequences for the claims in §7A.3:**
@@ -948,7 +973,7 @@ the weighting per problem is an open design question** — exactly as it is in 2
 ### 7A.3 What this does to the AC findings
 
 **AC was never a solver requirement.** It was compensating for the row scaling:
-adding `κ_p·p` to the continuity row lifts that row toward the momentum rows.
+adding $\kappa_p\,p$ to the continuity row lifts that row toward the momentum rows.
 One fact explains the whole tangle —
 
 * the **63× "conditioning benefit"** of AC: it was repairing a scaling bug, not
@@ -957,7 +982,7 @@ One fact explains the whole tangle —
 * why **AC cost accuracy**: it rebalanced by *changing the equation* rather than
   by rescaling it, so incompressibility was traded away;
 * why **`nsub` could not rescue it**: with `κ_p` large,
-  `κ_p(p−p_prev) + div u = 0` is satisfiable by a tiny pressure change for *any*
+  $\kappa_p(p - p_\mathrm{prev}) + \operatorname{div}u = 0$ is satisfiable by a tiny pressure change for *any*
   `div u`, so the sub-iteration that would restore incompressibility converges
   ever more slowly as `κ_p` grows.
 
@@ -1009,14 +1034,14 @@ design order. Stage 4's temporal gate ran on a scalar model with no pressure, no
 constraint rows, no assembly and no BCs; the AC-off PDE controls never converged.
 "AC is the whole gap" was a hypothesis until this table.
 
-**And the contrast is total.** Operator-AC at `κ_p` ∝ 1/`dt` is pinned at
+**And the contrast is total.** Operator-AC at $\kappa_p \propto 1/\Delta t$ is pinned at
 6.1e−03 with zeroth order — 2300× the AC-off error at the finest `dt`, and
 refining time does nothing. The entire accuracy pathology of §7A.1 was
 operator-AC standing on a mis-scaled functional.
 
 #### The consistency ladder, completed
 
-`div u = −κ_p·(p − p_prev) ≈ −κ_p·ṗ·dt`, so the scaling of `κ_p` sets the order
+$\operatorname{div}u = -\kappa_p\,(p - p_\mathrm{prev}) \approx -\kappa_p\,\dot p\,\Delta t$, so the scaling of `κ_p` sets the order
 the scheme is *permitted* to reach:
 
 | `κ_p` scaling | AC error | order permitted | status |
@@ -1064,7 +1089,7 @@ is shared it is the wrong operation:
 
 Two consequences: the global dof is **not pinned** (its siblings still carry it),
 and the mask **disagrees with itself across copies of one global node** — so `M`
-is not well defined on the global space and `A = M Qᵀ Q Lᵀ W L M` stops being
+is not well defined on the global space and $A = M\,Q^{T}Q\,L^{T}WLM$ stops being
 symmetric. CG was being run on a non-symmetric operator.
 
 Measured on the **continuous** subspace — and that qualifier is the reason this
@@ -1126,10 +1151,12 @@ Taylor–Green decay on a doubly-periodic box is an exact unsteady Navier–Stok
 solution where `u·∇u` is non-zero and balanced **pointwise** by the pressure
 gradient — the coupling Stokes cannot exercise:
 
-```
-u = −cos x sin y·F(t),  v = sin x cos y·F(t),  F = e^{−2νt}
-ω_z = 2 cos x cos y·F,  p = −¼(cos 2x + cos 2y)·F²
-```
+$$
+\begin{aligned}
+u &= -\cos x \sin y \cdot F(t), & v &= \sin x \cos y \cdot F(t), & F &= e^{-2\nu t}\\
+\omega_z &= 2\cos x \cos y \cdot F, & p &= -\tfrac{1}{4}(\cos 2x + \cos 2y)\cdot F^2
+\end{aligned}
+$$
 
 N = 12, 3×3 elements, ν = 0.1, `t` = 0.4:
 
@@ -1151,7 +1178,7 @@ was a 240× error floor that made the measurement impossible.
 
 ---
 
-## 7E. The recipe, settled at M7's viscosity
+## 7B. The recipe, settled at M7's viscosity
 
 Three benchmarks had disagreed about the row weighting, and they disagreed along
 the **viscosity** axis — Stokes (ν = 1) and Taylor–Green (ν = 0.1) wanted legacy
@@ -1186,9 +1213,9 @@ simultaneously at every viscosity tested, including M7's.
 
 ### The caveat that limits this
 
-**Taylor–Green becomes nearly steady as ν → 0.** `F(t)` = e^{−2νt} → 1, so at
-ν = 5.6e−3 the exact solution barely evolves and `u·∇u` sits in equilibrium with
-`∇p`. That is why the AC-off error falls to 1.2e−10 — the temporal error has
+**Taylor–Green becomes nearly steady as $\nu \to 0$.** $F(t) = e^{-2\nu t} \to 1$, so at
+ν = 5.6e−3 the exact solution barely evolves and $\mathbf{u}\cdot\nabla\mathbf{u}$ sits in equilibrium with
+$\nabla p$. That is why the AC-off error falls to 1.2e−10 — the temporal error has
 almost nothing to act on. So this sweep is a strong result about **conditioning
 and cost** at low ν, and a weak one about **accuracy under genuine unsteady
 dynamics** there.
@@ -1264,26 +1291,34 @@ grows with resolution — and with modes: at N=12, `nk`=33 the probing cost was
 
 ### The closed form
 
-Row `r` of `L₀` is `Σ_v [a·∂ₓU_v + b·∂_yU_v + cval·U_v]`, so
+Row $r$ of $L_0$ is $\sum_v \bigl[a\,\partial_x U_v + b\,\partial_y U_v + c_\mathrm{val}\,U_v\bigr]$, so
 
-```
-∂R_r(p,q)/∂U_v(i,j) = a·D[p,i]·facx·δ_qj + b·D[q,j]·facy·δ_pi + cval·δ_pi·δ_qj
-```
+$$
+\frac{\partial R_r(p,q)}{\partial U_v(i,j)}
+= a\,D_{pi}\,\mathrm{fac}_x\,\delta_{qj}
++ b\,D_{qj}\,\mathrm{fac}_y\,\delta_{pi}
++ c_\mathrm{val}\,\delta_{pi}\,\delta_{qj}
+$$
 
-— non-zero only on the row `p=i` or the column `q=j`. Squaring against the
-weights gives, per `(r, v)`:
+— non-zero only on the row $p=i$ or the column $q=j$. Squaring against the
+weights gives, per $(r, v)$:
 
-```
-wq[i,j]·|a·D[i,i]·facx + b·D[j,j]·facy + cval|²     the (i,j) term
-+ a²·facx²·Σ_{p≠i} wq[p,j]·D[p,i]²                  the column
-+ b²·facy²·Σ_{q≠j} wq[i,q]·D[q,j]²                  the row
-```
+$$
+\begin{aligned}
+&\;W_{ij}\,\bigl|a\,D_{ii}\,\mathrm{fac}_x + b\,D_{jj}\,\mathrm{fac}_y + c_\mathrm{val}\bigr|^2
+  && \text{the } (i,j) \text{ term}\\
++&\; a^2\,\mathrm{fac}_x^2 \sum_{p\neq i} W_{pj}\,D_{pi}^2
+  && \text{the column}\\
++&\; b^2\,\mathrm{fac}_y^2 \sum_{q\neq j} W_{iq}\,D_{qj}^2
+  && \text{the row}
+\end{aligned}
+$$
 
 The two sums are `(N+1)`-point contractions computed once for the whole mesh, so
-the cost is O(n²) per element instead of O(n²) **operator applications**.
+the cost is $O(n^2)$ per element instead of $O(n^2)$ **operator applications**.
 
 **The split-real simplification:** for a complex coefficient α the split-real
-block is `[[Re, −Im], [Im, Re]]`, whose column norms are both `|α|²`. So the real
+block is `[[Re, −Im], [Im, Re]]`, whose squared column norms are both $|\alpha|^2$. So the real
 and imaginary halves of a field share one diagonal value, and the whole
 derivation can be done in complex arithmetic and written to both halves.
 
@@ -1314,7 +1349,7 @@ All four drivers now use it.
 
 ## 7H. The recipe survives walls — and the cavity was the outlier
 
-The open risk since §7E: the cavity needed AC (**25 vs 12320** CG/step), and I had
+The open risk since §7B: the cavity needed AC (**25 vs 12320** CG/step), and I had
 attributed that to its lid and corner singularities rather than to viscosity or
 walls — an inference, not a measurement. M7 has walls, so if the true cause were
 walls the recipe would fracture at exactly the geometry that matters.
@@ -1349,11 +1384,11 @@ cavity's **490×**:
 So the cavity's AC dependence is a property of its **lid and corner
 singularities**, not of walls and not of viscosity. **The recipe carries to M7's
 geometry**, where 2–4× is a trivial price against AC's 5–7 orders of accuracy
-(§7E).
+(§7B).
 
 Note the opposite trends: without AC the cost **rises** as `dt` falls
-(3037 → 3750), while with AC it **falls** (1783 → 881). That is `κ_p` = `a_mass`
-∝ 1/`dt` compensating the stiffness — AC's conditioning benefit grows with
+(3037 → 3750), while with AC it **falls** (1783 → 881). That is
+$\kappa_p = a_\mathrm{mass} \propto 1/\Delta t$ compensating the stiffness — AC's conditioning benefit grows with
 `a_mass` even as its accuracy cost stays fixed.
 
 ### M5 re-established
@@ -1394,7 +1429,7 @@ this operator.
 
 ---
 
-## 7F. Fast-diagonalization preconditioning of the LS solve: measured and REJECTED
+## 7L. Fast-diagonalization preconditioning of the LS solve: measured and REJECTED
 
 `lssem3d/fastdiag.py`, `tests/test_fastdiag.py`. The Step-1 idea from the
 performance discussion: the field-by-field diagonal blocks of the normal
@@ -1439,6 +1474,80 @@ If Step 2 is taken, `fastdiag.py` is its solver core, already validated.
 
 ## 7K. PMG re-tested post-row-7: iterations vindicated, wall time lost — the preconditioner chapter is CLOSED
 
+### 7K.1 The high-N challenge, measured (2026-08-21, prompted in review)
+
+The closure below was measured at N = 8 only, and "PMG excels at high order"
+is the standard expectation — so the sweep was repeated at N = 12 and 16
+(`scratch/pmg_sweep_N12.log`, `pmg_sweep_N16.log`, same protocol):
+
+| N | Jacobi its | PMG best its | iteration ratio | wall vs Jacobi |
+|---|---|---|---|---|
+| 8 | 755 | 102 | 7.4× | 0.28× |
+| 12 | 1183 | 159 | 7.4× | 0.43× |
+| 16 | 1580 | 217 | **7.3×** | **0.48×** |
+
+The gap **closes with N, but decelerating** (+0.15 then +0.05), and the
+mechanism is telling: the **iteration ratio is pinned at 7.3–7.4×** — the
+V-cycle's iteration count grows with N nearly in lockstep with Jacobi's,
+rather than staying flat as textbook multigrid should. The wall improvement
+comes from cost-structure amortisation (the fixed-p coarse level shrinking
+relative to the fine level), not from N-independent convergence. Extrapolated,
+the crossover — if it exists — lies beyond N ≈ 22, a regime the project's own
+CFL economics avoids (explicit convection shrinks `dt` ∝ 1/N² per element, so
+production sits at N = 8–12 with h-refinement). One untested rescue is noted
+for completeness: the sweep holds the Chebyshev smoother degree fixed while
+the resolved spectrum widens with N; scaling `deg` ∝ N might restore
+N-independence, at proportionally higher cycle cost — the deg = 6 rows'
+plateau at 0.45× does not suggest it would close a 2× gap. **The closure
+stands, now with the high-N caveat measured rather than assumed.**
+
+![PMG vs Jacobi across N](figs/pmg_N_sweep.png)
+
+### 7K.2 The audit: why the ratio is pinned — the slow modes are ROUGH (2026-08-21, prompted in review)
+
+The pinned 7.4× contradicted standard p-MG experience, so the implementation
+was audited end-to-end and the anomaly chased to its root. Findings:
+
+1. **The implementation is sound.** Transfers verified as true adjoints in the
+   multiplicity-weighted inner products; coarse level solved EXACTLY
+   (`DirectCoarse` — which also means the sweep's `coarse_deg` column was a
+   red herring: `direct_coarse=True` is the default, so that knob was ignored,
+   which is why its three values gave identical iterations in every row).
+2. **The decomposition experiment**: a coarse-grid-free Chebyshev(deg 6)
+   preconditioner alone gives 171/359 iterations at N = 8/16 vs PMG's
+   102/217 — so PMG's 7.4× factors as **4.4× (smoother, fixed by degree) ×
+   1.7× (coarse grid, fixed)**. The coarse correction works, but captures a
+   constant slice of the slow modes, not the asymptotically-all that
+   N-independence requires.
+3. **The root cause, measured** (generalised spectrum in the Jacobi metric,
+   N = 6, w7 = 1e−4 — cond 1.005e4, reproducing §7J's table): **the softest
+   modes are the ROUGHEST fields in the system** — rank 0 is 100% pressure
+   with gradient-to-value ratio ~1300; ranks 1–5 are (ω_x, ω_y) pairs with
+   roughness 2300–9000. They live exactly in the deliberately down-weighted
+   directions: rough p costs only $(1/c^2)|\nabla p|^2$ under legacy
+   weighting, rough transverse ω only $w_7|\nabla\cdot\omega|^2$.
+   **Multigrid's premise — slow = smooth — is inverted on this operator.**
+   A p = 2 coarse space can represent none of this rough content, so no
+   polynomial-coarsening multigrid can be N-independent here, at any
+   implementation quality.
+4. **This reconciles the prior experience instead of contradicting it.** The
+   2D BFS where PMG cut 9.9× had a *smooth* global pressure near-null mode —
+   textbook coarse-representable prey. The 3D conditioning fixes (legacy row
+   weights, w7) bought a benign operator precisely by pushing the residual
+   softness into rough, weakly-penalised directions. PMG excelled on the old
+   operator family; **the fixes moved the problem out of multigrid's reach
+   and simultaneously made multigrid unnecessary** — the two facts have the
+   same cause.
+5. Open micro-mechanism note, honestly: how a pure-ω rough mode attains
+   A-energy ~3e−4 despite the O(1) definition-row mass is not fully derived
+   (suspicion: concentration on small-`wq` GLL corner nodes); it does not
+   affect the conclusions above, which are direct measurements.
+
+A second observation riding along: **Jacobi's own iteration growth is only
+~linear in N** (755 → 1580 over N = 8 → 16), far gentler than the
+$\sqrt{\mathrm{cond}} \sim N^2$ that raw SEM conditioning folklore implies —
+further evidence the post-row-7 operator is mass-dominated and benign.
+
 `scratch/pmg_sweep_postrow7.log` (2026-08-21). The retraction (spectrum bug)
 had restored PMG's premise — the coarse problem is easy — and the row-7 fix
 removed the ω cluster that pinned the V-cycle at reduction 1.0000. Both
@@ -1456,7 +1565,7 @@ default (N = 8, 3×3, nz = 16, tol 1e−6):
 
 **The chapter closes with a complete file**: block-Jacobi (null effect,
 measured), fastdiag exact block inverses (structurally beaten by the O(1)
-inter-field couplings, §7F), PMG (iterations 7.4× better, wall 3.6× worse —
+inter-field couplings, §7L), PMG (iterations 7.4× better, wall 3.6× worse —
 smoother economics). The production configuration is settled: **plain Jacobi
 (analytic diagonal) + legacy row weights + w7 = 1e−4 + tol 1e−6**, ~520
 iterations/solve flat in c. Further speed comes from M6's matvec, not from
@@ -1471,20 +1580,19 @@ measurements what six preconditioner experiments had not.
 ### The mechanism
 
 At `k_z` = 0 the softest eigenmodes of the preconditioned operator carry **100%
-of their energy in `ω_x, ω_y`** and none in `u, v, w, ω_z, p`:
+of their energy in $\omega_x, \omega_y$** and none in $u, v, w, \omega_z, p$:
 
 | rank | eigenvalue | u | v | w | ω_x | ω_y | ω_z | p |
 |---|---|---|---|---|---|---|---|---|
 | 0 | 8.30e−07 | 0 | 0 | 0 | **0.500** | **0.500** | 0 | 0 |
 | 1 | 8.40e−07 | 0 | 0 | 0 | **0.689** | **0.310** | 0 | 0 |
 
-Those two fields appear in exactly one row that 2D does not have: **`R₇ = ∇·ω =
-0`**, which at `k_z` = 0 reduces to `∂ₓω_x + ∂_yω_y` — the transverse
+Those two fields appear in exactly one row that 2D does not have: **$R_7 = \nabla\cdot\boldsymbol{\omega} = 0$**, which at `k_z` = 0 reduces to $\partial_x\omega_x + \partial_y\omega_y$ — the transverse
 vorticities alone. The 2D VVP system has four rows (continuity, one vorticity
 definition, two momentum) and **no vorticity-divergence row at all**.
 
-`R₇` is *redundant* — implied by `ω = ∇×u` — but at weight 1 it loads the Jacobi
-diagonal of `ω_x, ω_y` with **derivative-squared** terms while contributing
+$R_7$ is *redundant* — implied by $\boldsymbol{\omega} = \nabla\times\mathbf{u}$ — but at weight 1 it loads the Jacobi
+diagonal of $\omega_x, \omega_y$ with **derivative-squared** terms while contributing
 **nothing** to `A` for a divergence-free vorticity field. Large denominator, zero
 numerator, near-null cluster.
 
@@ -1512,7 +1620,7 @@ One structural defect; three remedies aimed at the symptom.
 slowly (21× over p=4→10 against 431×). It also holds at `k_z` ≠ 0 (552×, 618×,
 648×), so it is not a `k_z` = 0 artefact.
 
-On a channel with genuine transverse vorticity (`max|ω_x|` = 8.3):
+On a channel with genuine transverse vorticity ($\max|\omega_x| = 8.3$):
 
 | w7 | its | wall | Δ solution | rms `div ω` |
 |---|---|---|---|---|
@@ -1521,7 +1629,7 @@ On a channel with genuine transverse vorticity (`max|ω_x|` = 8.3):
 
 **10.5× faster, same answer** to 1.9e−07 (below the 1e−6 solve tolerance), and
 `div ω` still **nine orders below** `|ω|`. The constraint is carried by
-`ω = ∇×u` regardless — which is what "redundant" means.
+$\boldsymbol{\omega} = \nabla\times\mathbf{u}$ regardless — which is what "redundant" means.
 
 ### Validation, including the cost
 
@@ -1564,7 +1672,7 @@ which is everything M7 cares about — see the 10×.
 * **Blast radius of stale numbers**, all now upper bounds by up to ~10×:
   the SPAN 6× conditioning cost (§8.1 — likely mostly this cluster), the
   `kz_iterations` absolute counts, the AC-on/off cost comparisons, the
-  fastdiag rejection baseline (§7F), and the **M7 step-cost model** — whose
+  fastdiag rejection baseline (§7L), and the **M7 step-cost model** — whose
   ~10× improvement materially weakens the case for the fractional-step pivot
   and should trigger a re-pricing before that decision is made.
 * One residual nit: `row7_weight.py`'s check 4 solves a **random-RHS**
@@ -1575,7 +1683,7 @@ which is everything M7 cares about — see the 10×.
 
 ### Retraction
 
-`3D_FORMULATION.md` §2 said `∇·ω = 0` is *"retained as an independent row because
+`3D_FORMULATION.md` §2 said $\nabla\cdot\boldsymbol{\omega} = 0$ is *"retained as an independent row because
 the least-squares functional benefits from it."* **Refuted.** At weight 1 it
 costs 10× in solve time and buys a `div ω` improvement of 5× at a level nine
 orders below the signal.
@@ -1617,7 +1725,7 @@ of 4.13e−10.** Both stable, 60/60 steps.
 
 A fix that accelerated *everything* would be suspicious. This one delivers 5.5×
 in exactly the case whose mechanism it targets and provably **nothing** in the
-three cases where `ω_x = ω_y ≡ 0` and row 7 is inert. That selectivity is
+three cases where $\omega_x = \omega_y \equiv 0$ and row 7 is inert. That selectivity is
 stronger evidence than the speed-up alone.
 
 **Production figure is 5.5×**, not the 10.5× measured on a single stage solve —
@@ -1653,9 +1761,9 @@ every solve guarded against the CG cap:
 Three findings. (i) N = 8 and N = 10 agree **to four digits at every dt** —
 both fully temporal, so the N = 8 spatial floor is already below 6.5e−07 on
 this mode, and only N = 6 shows the floor beginning to bite. (ii) The **SPAN
-family** (no x-dependence; only v, w, ω_x live, every i·k_z term exercised)
+family** (no x-dependence; only $v, w, \omega_x$ live, every $ik_z$ term exercised)
 matches the kz0 family to all displayed digits at every dt — the symmetry
-σ(α=1,k_z=0) = σ(α=0,k_z=1) is delivered exactly, which no k_z = 0 test could
+$\sigma(\alpha{=}1, k_z{=}0) = \sigma(\alpha{=}0, k_z{=}1)$ is delivered exactly, which no k_z = 0 test could
 show. (iii) SPAN costs ~6× the CG of kz0 at the same settings (1.47M vs 230k
 iterations at the finest dt) — the spanwise mode is markedly worse conditioned,
 worth knowing before M7 budgets its solves.
@@ -1721,10 +1829,11 @@ worth a line even when the answer turns out to be "no".
 
 ### 8.5 Then the original queue
 
-M6 (numba, aimed at *fusing* passes — the matvec is bandwidth-bound, §3.3), the
-M7 step-cost model, the Stage 6 forcing decision (constant mass flux vs constant
-pressure gradient — undecided, and it changes the per-step constraint), and
-closing M2 by restarting from the saved field.
+~~M6 (numba, aimed at *fusing* passes — the matvec is bandwidth-bound, §3.3)~~
+**done, §7M.** Remaining: the M7 step-cost model, the Stage 6 forcing decision
+(constant mass flux vs constant pressure gradient — undecided, and it changes the
+per-step constraint), closing M2 by restarting from the saved field, and the
+minimal channel (Jiménez–Moin box) as M7's intermediate target.
 
 ### Noted, not owned — CLOSED by the OBC session (commit 7ddcda5)
 
@@ -1755,7 +1864,7 @@ weights on, operator-AC off, every solve guarded.
 
 §7D verified convection in the SEM plane; this rotates the same exact
 non-interacting solution into the (x, z) plane, so the convection runs through
-**w·∂/∂z, the i·k_z terms, and the 3/2-rule dealiased mode convolution inside
+**$w\,\partial/\partial z$, the $ik_z$ terms, and the 3/2-rule dealiased mode convolution inside
 the stage loop** — the one splitting path §7D could not reach.  N = 12, 3×3,
 Nz = 8, ν = 0.1, t = 0.4:
 
@@ -1775,12 +1884,12 @@ Classical interacting TGV, (2π)³ triply periodic, ν = 0.01, ≈24³ resolutio
   mechanism 2D cannot have, in Brachet et al. (1983)'s range for Re = 100 —
   then decays.  Energy decays monotonically; max|u| behaves; **zero capped
   solves** in 1800 stage solves (~6000 CG/step).
-* **The parameter-free energy balance −dE/dt = 2νΩ holds to 0.7% worst-case**
+* **The parameter-free energy balance $-dE/dt = 2\nu\Omega$ holds to 0.7% worst-case**
   (ratio ∈ [0.993, 1.000], worst near/after peak enstrophy, recovering to
   0.997 by t = 12).  This is the internal referee that needs no reference
   data.
 * **The residual gap is NOT vorticity slack and NOT divergence** — measured
-  from saved frames: Ω(state ω) = Ω(∇×u) to **four decimals** at every sampled
+  from saved frames: $\Omega(\text{state } \omega) = \Omega(\nabla\times u)$ to **four decimals** at every sampled
   time (the weak vorticity definition is effectively exact here), and
   rms div u ≤ 1.4e−4 throughout.  Remaining suspects: SEM-plane aliasing (no
   (x,y) dealiasing — the known caveat) and the O(dt²) energy error of the
@@ -1820,7 +1929,7 @@ Configurations, at N = 8, KMM-adequate resolution, dt ≈ 1.5e−3 (CFL),
 |---|---|---|---|---|
 | **minimal channel** (Jiménez–Moin box) | 4×12 elems, Nz = 24 | 0.7× | ~20 | **~4.5 days** |
 | **full M7** (4πδ × 2δ × 4πδ/3) | 20×12 elems, Nz = 128 | 17× | ~480–950 | **~110–220 days** |
-| full M7 + M6 numba (×4, *assumed*) | — | — | ~120–240 | **~28–55 days** |
+| full M7 + M6 numba (×3.5–6.2, **now measured**, §7M) | — | — | ~80–270 | **~18–63 days** |
 | full M7, fractional-step (direct solves) | — | — | ~10–20 | **~2–5 days** |
 
 **What this decides:**
@@ -1838,7 +1947,190 @@ Configurations, at N = 8, KMM-adequate resolution, dt ≈ 1.5e−3 (CFL),
    M7-class runs will be *repeated* — a one-shot validation can ride M6.
 
 Priority consequence: **M6 (numba, fusing) moves to the front of the
-queue**, with the minimal channel as its first customer.
+queue**, with the minimal channel as its first customer. **Done — §7M**, and the
+measured 3.5–6.2× brackets the ×4 assumed above, so the ~1-month estimate for
+full M7 stands. The minimal channel is now the next thing to run.
+
+## 7M. A Numba backend: one fused pass instead of thirty (2026-08-21)
+
+`prof3d.py` put `normal_op` at **99.4 %** of a step and `prof3d_procs.py` showed
+threads tying processes, so the matvec is **memory-bandwidth bound**, not compute
+bound. That diagnosis dictates the shape of the optimisation: compiling the
+existing NumPy expression tree in place buys nothing — it already dispatches to
+BLAS. The win has to come from **making fewer passes over the data**.
+
+The NumPy path makes roughly thirty passes per application of `L` and `Lᵀ`:
+`to_complex`, fourteen `einsum`s (7 fields × 2 directions), eight row
+assemblies, the `wq` multiply, the row-weight multiply, `to_real` — each one
+allocating and touching a full state-sized temporary.
+
+`lssem3d/kernels_numba.py` makes **one**. For each `(element, node, mode)` it
+accumulates all fourteen derivative sums and assembles all sixteen split-real
+rows in registers, folding `wq` and `rw` into the same pass.
+
+### Two design decisions that are load-bearing
+
+**Real arithmetic on the split-real layout, not complex.** The kernels work
+directly on `(elem, i, j, var, mode)` with fields `0..6` real and `7..13`
+imaginary. This avoids materialising the complex temporary entirely and makes
+the coupling explicit: `i·k·(a + i·b)` → real part `−k·b`, imaginary part `+k·a`.
+
+**`nogil=True`.** `parallel.pcg` spreads the z-modes over a `ThreadPoolExecutor`
+and gets 6.7× from it — which works *only* because NumPy's `einsum` and BLAS
+release the GIL. An njit kernel holds the GIL unless told otherwise, so without
+this flag the fused kernels would **serialise the mode loop and hand back most of
+what they had just won**: correct answers, and a mysterious loss of the parallel
+speedup. Measured below, and the reason `bench_numba_threads.py` exists.
+
+The element loop is deliberately left **serial** (no `prange`). Parallelism
+belongs at the mode level, where the data is disjoint; a nested thread layer
+inside a thread-parallel mode loop would oversubscribe a bandwidth-bound kernel
+for no gain.
+
+### Measured — the operator
+
+`scratch/bench_numba.py`, per `normal_op` application:
+
+| case | DOF | numpy | numba | speedup | agreement |
+|---|---|---|---|---|---|
+| N=6, 2×2 e, nk=1 | 0.004 M | 0.3 ms | 0.05 ms | **5.95×** | 0.0e+00 |
+| N=8, 4×4 e, nk=8 | 0.15 M | 11.3 ms | 1.8 ms | **6.19×** | 0.0e+00 |
+| N=10, 4×4 e, nk=16 | 0.43 M | 37.0 ms | 8.0 ms | **4.64×** | 0.0e+00 |
+| N=12, 6×6 e, nk=16 | 1.36 M | 138.8 ms | 31.7 ms | **4.38×** | 1.7e-16 |
+| N=8, 8×8 e, nk=32 | 2.32 M | 177.6 ms | 50.2 ms | **3.54×** | 0.0e+00 |
+
+The gain **falls** with problem size — 6.2× at 0.15 M DOF, 3.5× at 2.3 M — which
+is what a bandwidth-bound kernel should do: once the working set leaves cache,
+removing temporaries stops being free.
+
+### Measured — the whole solve
+
+`scratch/bench_numba_solve.py`, full preconditioned CG to `tol=1e-6`:
+
+| case | numpy | numba | speedup |
+|---|---|---|---|
+| N=8, 4×4 e, nk=8 | 11.72 s / 1089 it | 2.49 s / 1088 it | **4.72×** |
+| N=10, 4×4 e, nk=16 | 45.18 s / 1200 it | 12.03 s / 1201 it | **3.75×** |
+
+Iteration counts differ by ±1 out of ~1100. That is expected and not a defect:
+the fused kernel accumulates in a different order than `einsum` + BLAS, so the
+two CG trajectories cannot be bit-identical over a thousand iterations. Both
+reach the same residual target, which is what makes the timing like-for-like.
+
+*Do not read that script's "iterates differ" number as an error bar.* Its `b` is
+built from a **random** `x`, which loads the near-null space the system still has
+after the row-7 fix, so `x` is not uniquely recoverable — the same trap that
+invalidated the early Jacobi and `div ω` measurements (L4). Backend accuracy is
+established by operator parity and by the physics gate, not by that number.
+
+### Measured — thread scaling, which is the `nogil` check
+
+`scratch/bench_numba_threads.py`, N=8, 4×4 elements, nk=16:
+
+| backend | 1 w | 2 w | 4 w | 6 w |
+|---|---|---|---|---|
+| numpy | 4.42 s (1.00×) | 2.26 s (1.96×) | 1.46 s (3.02×) | 1.80 s (2.45×) |
+| numba | 1.14 s (1.00×) | 0.60 s (1.91×) | 0.45 s (2.51×) | **0.43 s (2.66×)** |
+
+numba still scales, so the GIL is genuinely released. Best-to-best,
+**4.42 s → 0.43 s = 10.3×** over serial NumPy. A flat numba row here would have
+been the missing-`nogil` signature.
+
+### Validation
+
+**Operator parity** — `lssem3d/tests/test_backend_parity.py`, 33 cases, agreement
+≤ 1e-12 relative (measured 0 to 1.7e-16). Each parameter in the sweep closes a
+specific way to be silently wrong:
+
+| exercised | why |
+|---|---|
+| `kap ≠ 0` | lssem2d needed `_check_ac_backend` because a backend that drops AC still converges — to the wrong continuity equation |
+| `rw ≠ 1` (incl. `w7 = 1e-4`) | a backend dropping row weights looks **5× slower**, not wrong — easy to misread as "numba did not help" |
+| `wq = None` | the unweighted operator the symmetry tests use |
+| `k_z = 0` **and** `k_z ≠ 0` | half the `i·k` terms vanish at `k_z = 0`, so a sign error in the imaginary coupling is invisible in the M2 cavity case |
+| `facx ≠ facy` | a swapped x/y metric cannot pass on a non-square mesh |
+| a rebind assertion | a no-op `set_backend` would make every case above vacuous |
+
+**Physics** — `scratch/validate_numba_physics.py` runs the Chan (1996) Stokes
+decay, which has an **analytic** answer, end to end on each backend:
+
+```
+Stokes decay, N=8, dt=0.0025, analytic sigma = 9.3137399
+
+  kz0   numpy   sigma=9.3138373  rel err=1.045e-05  CG=42510  35.4s
+  kz0   numba   sigma=9.3138373  rel err=1.045e-05  CG=42488   7.9s
+        ->      backends agree to 0.00e+00, speedup 4.49x
+
+  span  numpy   sigma=9.3138373  rel err=1.045e-05  CG=52407  42.8s
+  span  numba   sigma=9.3138373  rel err=1.045e-05  CG=52366   9.6s
+        ->      backends agree to 7.63e-16, speedup 4.48x
+```
+
+Both mode families are run, and the pairing is the point: `kz0` (α=1, k_z=0) has
+every `i·k_z` term dormant, `span` (α=0, k_z=1) has only `v, w, ω_x` alive and
+fires every one of them. A sign error in the fused imaginary coupling is
+invisible in the first and fatal in the second.
+
+**Accumulated drift** — `scratch/numba_drift.py`. The 2D module carries a
+measured warning worth taking seriously ([NUMBA_BACKEND.md](./NUMBA_BACKEND.md)):
+*per-operator parity to 1e-16 does not imply agreement on accumulated states.*
+On 2D Poiseuille the two backends settled on **different fixed points** — 4.65e-06
+vs 8.47e-06 profile error, a 1.8× discrepancy — and the doc concludes that numba
+must not be used to measure accuracy floors. That had to be tested here rather
+than inherited or waved away. Integrating the span mode step by step on both
+backends from the same state:
+
+| step | ‖numpy‖ | relative drift |
+|---|---|---|
+| 1 | 9.77e-04 | 3.42e-13 |
+| 10 | 7.92e-04 | 4.42e-13 |
+| 50 | 3.12e-04 | 2.64e-13 |
+| 100 | 9.74e-05 | 3.75e-13 |
+| 200 | 9.50e-06 | 2.59e-13 |
+
+**Flat at ~3e-13 over 200 steps**, while the amplitude itself decays 100× — so
+the *absolute* difference is shrinking and nothing is accumulating.
+
+**But note what that does and does not cover.** This is a linear, decaying
+transient. The 2D failure was a **Newton iteration converging to a steady fixed
+point**, where an O(1e-16) difference can select a different converged state;
+that regime is not exercised here. The 2D caveat should therefore be treated as
+open for any *steady* 3D calculation, and re-measured before a 3D accuracy floor
+below ~1e-10 is quoted from a numba run.
+
+**Full suite** — 200 tests passing (167 + 33 parity), with the numba cache
+deleted first so compilation is exercised, not just replayed.
+
+### Using it
+
+```bash
+LSSEM3D_BACKEND=numba uv run python your_script.py     # process-wide
+```
+```python
+import lssem3d
+lssem3d.set_backend('numba')                           # at runtime, any time
+```
+
+An explicit request that cannot be honoured **raises** rather than falling back
+to NumPy — a silent fallback turns a missing dependency into a mysterious 4×
+slowdown, which is exactly the kind of thing that corrupts a benchmark. Probe
+with `lssem3d.available('numba')`.
+
+**Cache trap, inherited from lssem2d.** numba's on-disk cache does **not** key on
+njit flags such as `fastmath`; a cache written with `fastmath=True` is silently
+reused when `False` is asked for. `kernels_numba.py` therefore stamps the cache
+directory with the flavour (`LSSEM3D_FASTMATH=0` to disable).
+
+### Where this lands
+
+The three multipliers are independent and compose:
+
+| | gain | on |
+|---|---|---|
+| row-7 down-weighting (§7J) | 5.4× | iterations |
+| mode-parallelism (§3.4) | up to 6.7× | wall clock |
+| **numba fusion (§7M)** | **3.5–6.2×** | **per matvec** |
+
 
 ## 9. Inventory
 
@@ -1854,8 +2146,11 @@ queue**, with the minimal channel as its first customer.
 | `bc.py` | mask and prescribed values, incl. `real_mode_columns` (§5) |
 | `solver3d.py` | gather-scatter, multiplicity weight, `normal_op`, batched `pcg`, `rkw3_step` |
 | **`parallel.py`** | **mode-parallel `apply_op` and `pcg` (§3.4)** |
+| **`backend.py`** | **backend selection: `numpy` / `numba`, `LSSEM3D_BACKEND` (§7M)** |
+| **`kernels_numba.py`** | **fused single-pass `@njit` `L` and `Lᵀ` (§7M)** |
+| `precond.py` | Chebyshev4 smoother, p-multigrid (measured and not adopted, §7K) |
 
-### Tests — 164, all passing
+### Tests — 200, all passing
 
 ```
 uv run --quiet python -m pytest lssem3d/tests -q
@@ -1864,7 +2159,8 @@ uv run --quiet python -m pytest lssem3d/tests -q
 `test_fourier` · `test_operator` · `test_convect` · `test_solver3d` · `test_bc` ·
 `test_deriv` · `test_stage1_vs_2d` (vs. 2D) · `test_stage2_mms` (analytic) ·
 **`test_stage4_mms`** (spectral rates) · **`test_stage4_temporal`** (order) ·
-**`test_parallel`** · **`test_integration_multimode`** (the driver, many modes)
+**`test_parallel`** · **`test_integration_multimode`** (the driver, many modes) ·
+**`test_backend_parity`** (numba == numpy, §7M)
 
 ### Benchmarks (`scratch/`)
 
@@ -1878,6 +2174,11 @@ uv run --quiet python -m pytest lssem3d/tests -q
 | `channel3d.py` / `channel3d_stage5.py` | Stage 5 rig and the `a_mass`/CFL sweep (§7) |
 | **`stokes3d.py`** | **3D Stokes decay against the analytic rate — the accuracy gate (§7A)** |
 | `ac_subiter.py`, `ac_unsteady_divergence.py`, `ac_temporal2.py` | the AC investigation (§7A.1) |
+| **`bench_numba.py`** | **per-matvec numpy vs numba (§7M)** |
+| **`bench_numba_solve.py`** | **whole-solve numpy vs numba, iteration counts (§7M)** |
+| **`bench_numba_threads.py`** | **does numba still scale over threads — the `nogil` check (§7M)** |
+| **`validate_numba_physics.py`** | **numba reproduces the analytic Stokes rate (§7M)** |
+| **`numba_drift.py`** | **do the backends drift apart over 200 steps? (§7M)** |
 
 ### Using the parallel solver
 
@@ -1893,4 +2194,4 @@ dU, iters, resid = PAR.pcg(b, D, mesh.facx, mesh.facy, kz, NU, c,
 
 `workers=1` is a bitwise passthrough to the serial version, so it can be left on
 in a reference run. Call `PAR.shutdown()` to release the thread pool. **It does
-nothing for a single-mode (`k_z` = 0) run** — see §8.2.
+nothing for a single-mode (`k_z` = 0) run** — see §3.4.

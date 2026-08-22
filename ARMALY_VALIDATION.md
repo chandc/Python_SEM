@@ -20,7 +20,7 @@ Reproduce: `scratch/mesh_armaly_er194.py` (grids), `scratch/armaly_run.py`
 ## Executive summary
 
 1. **Reattachment matches experiment to 1.2%.** `x_r/S = 8.145` against Armaly's
-   measured **8.05 ± 0.7**, at Re = 389 — just inside his Re < 400 limit for
+   measured **8.05 ± 0.7**, at $Re = 389$ — just inside his $Re < 400$ limit for
    two-dimensional flow. Nothing was tuned; every parameter is derived.
 
 2. **Two traps, both of which caught earlier attempts** (and my first one):
@@ -35,7 +35,7 @@ Reproduce: `scratch/mesh_armaly_er194.py` (grids), `scratch/armaly_run.py`
 4. **Cross-code agreement at this geometry, including vorticity** (§5). Four
    solutions on the same grid — Fortran free, Fortran `p = 0`, Python P+Z, Python
    free — all reattach within **1.2% of experiment** and within **0.7% of each
-   other**, with u and ω profiles agreeing to ~2e-02 and ~5e-02. The Fortran runs
+   other**, with $u$ and $\omega$ profiles agreeing to ~2e-02 and ~5e-02. The Fortran runs
    were created for this purpose; no cross-code comparison existed at ER 1.94.
 
 5. **Free outflow survives only on a crutch, and there are two of them** (§6).
@@ -51,11 +51,11 @@ Reproduce: `scratch/mesh_armaly_er194.py` (grids), `scratch/armaly_run.py`
    unconstrained outflow it decides blow-up versus convergence (§6).
 
 7. **The truncated domain is unusable**, and the outflow condition changes how
-   badly: short/P+Z gives −35.7%, short/free −54.6%. Its outlet at x/S = 5.3 sits
+   badly: short/P+Z gives −35.7%, short/free −54.6%. Its outlet at $x/S = 5.3$ sits
    *inside* the true bubble.
 
 8. **No experimental velocity profiles exist at this Re.** Armaly's figures 5 and
-   6 are at Re = 1095 and 1290, both above his own two-dimensionality limit. Only
+   6 are at $Re = 1095$ and $1290$, both above his own two-dimensionality limit. Only
    reattachment can be compared.
 
 ---
@@ -232,9 +232,9 @@ With h = 1.0 and V = 1:
     nu = V*D/Re = 2.0/389 = 5.141388e-03
 ```
 
-**Using `ν = 1/389` here would be Re = 778, twice Armaly's.** On the `cnos` grids
+**Using `ν = 1/389` here would be $Re = 778$, twice Armaly's.** On the `cnos` grids
 h = 0.5, so D = 1.0 = the code's length unit and `ν = 1/389` *is* right — "the two
-factors of two cancel". The correct ν depends on the grid.
+factors of two cancel". The correct $\nu$ depends on the grid.
 
 ### Boundary and initial conditions
 
@@ -326,7 +326,7 @@ Hence the new meshes.
 
 Because `Re = V·2h/ν`, doubling the inlet height doubles the ν needed for the same
 Re. The archived `run_armaly_*` cases set `re = 389` on a grid with `hinlet = 1.0`
-while the code takes `ν = 1/re`, giving Re = 778. Both traps lengthen the bubble,
+while the code takes `ν = 1/re`, giving $Re = 778$. Both traps lengthen the bubble,
 which is why the earlier attempt "fitted" `re = 160` to recover `x_r/S = 8` — a
 fitted parameter masquerading as a validation, as that study says.
 
@@ -354,12 +354,12 @@ median ink row per column — reproducible, not read by eye.
 > good enough.
 
 **Validity window.** "The present experimental study yielded two-dimensional flows
-only at Reynolds numbers Re < 400 and Re > 6000" (p. 474). Re = 389 sits
+only at Reynolds numbers Re < 400 and Re > 6000" (p. 474). $Re = 389$ sits
 deliberately just inside. Above 400 a 2-D calculation should *not* match.
 
 **What is not available.** The published velocity profiles (figs 5, 6) are at
-Re = 1095 and 1290, above the 2-D limit. There is no experimental velocity
-profile at Re ≈ 389, so u/v/p comparisons here are code-to-code only.
+$Re = 1095$ and $1290$, above the 2-D limit. There is no experimental velocity
+profile at $Re \approx 389$, so u/v/p comparisons here are code-to-code only.
 
 ---
 
@@ -389,15 +389,15 @@ Cross-check against every other route to this number:
 
 The long/P+Z bubble closes on Armaly's measured reattachment (gold dashed, band =
 digitisation uncertainty) and recovers over the remaining 9 step heights. The
-short domain, outlet at x/S = 5.3 — *inside* the true bubble — is wrong in both
+short domain, outlet at $x/S = 5.3$ — *inside* the true bubble — is wrong in both
 variants; free additionally produces a **spurious secondary vortex** near the exit
 and accelerates to `max|u| = 2.32`, 55% above the inlet peak.
 
 ![u, v, p profiles](figs/armaly_profiles.png)
 
-Code-to-code only. The three agree at x/S = 1–2 and separate as the short outlet
+Code-to-code only. The three agree at $x/S = 1$–$2$ and separate as the short outlet
 is approached. As on Poiseuille and the `cnos` BFS, **v and p are far more
-sensitive than u**: at x/S = 2 the axial profiles are nearly coincident while the
+sensitive than u**: at $x/S = 2$ the axial profiles are nearly coincident while the
 transverse ones are already visibly apart.
 
 ---
@@ -436,19 +436,19 @@ Maximum profile differences against `FORT / free` — same grid, so code + BC on
 Three readings:
 
 1. **u and ω agree across both codes and all three outflow treatments** — ~2e-02
-   in u, ~5e-02 in ω·S, with the curves visually indistinguishable. This is the
+   in $u$, ~5e-02 in $\omega \cdot S$, with the curves visually indistinguishable. This is the
    first cross-code check of the **vorticity** field, and it says imposing
-   `∂ω/∂x = 0` does not distort ω relative to a code that imposes nothing.
+   `∂ω/∂x = 0` does not distort $\omega$ relative to a code that imposes nothing.
 2. **The two Fortran solutions are nearly identical** — free vs `p = 0` differ by
-   1.7e-05 in u at x/S = 2. On a domain this long the outflow condition is almost
+   1.7e-05 in u at $x/S = 2$. On a domain this long the outflow condition is almost
    irrelevant, consistent with §7c of the outflow study.
 3. **Pressure is the field that separates**, by ~1.2e-02, and **v diverges only
-   near the exit** (x/S = 12). Both are boundary-datum and near-outflow effects,
+   near the exit** ($x/S = 12$). Both are boundary-datum and near-outflow effects,
    not bulk disagreement.
 
 > **A correction.** An earlier version of these figures compared the ER 1.94
 > Python run against the `cnos` (ER 2.0) Fortran solution and reported the
-> difference — 2.6e-01 in u, 6.4e-01 in ω·S — as though it measured code or BC
+> difference — 2.6e-01 in $u$, 6.4e-01 in $\omega \cdot S$ — as though it measured code or BC
 > error. **It does not: those are two different rigs.** That comparison measured
 > the geometry, and the framing was wrong. The figures above replace it. The
 > geometry sensitivity is real and worth knowing (an order of magnitude larger
@@ -517,6 +517,6 @@ physics is robust; only the path to it is fragile.
 - **`dt = 1` and loose tolerances** were chosen to match the Fortran reference,
   not from a convergence study on these grids.
 - **Domain length.** Armaly's own computation used `L = 4·X_R` (p. 486) — with
-  `x_R = 7.66` that is L ≈ 30. Our long domain is 17, i.e. `L/X_R = 2.2`, and the
+  `x_R = 7.66` that is $L \approx 30$. Our long domain is 17, i.e. `L/X_R = 2.2`, and the
   short one 0.65. Even the long domain is shorter than the rule he considered
   necessary for the exit condition not to influence reattachment.

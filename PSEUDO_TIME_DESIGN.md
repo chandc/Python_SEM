@@ -1,4 +1,4 @@
-# The missing pseudo-time term (δτ): design note
+# The missing pseudo-time term ($\delta\tau$): design note
 
 Status: **design only — not implemented.** Written 2026-08-09 after comparing
 the original 1996 Fortran 77 source (`tj.channel.f`) against
@@ -7,8 +7,8 @@ the original 1996 Fortran 77 source (`tj.channel.f`) against
 
 Short version: the 1996 code carries a **pseudo-time derivative** on the
 momentum rows that both the modernised F90 and this Python port omit. It is a
-stabilisation term with a tunable step δτ, described in Chan (1996) §"Description
-of Numerical Method". Our code is its δτ → ∞ limit. This note records what the
+stabilisation term with a tunable step $\delta\tau$, described in Chan (1996) §"Description
+of Numerical Method". Our code is its $\delta\tau \to \infty$ limit. This note records what the
 term is, what it does and does not change, and how to add it.
 
 ---
@@ -20,9 +20,9 @@ term agrees except one.**
 
 Matching, in `L`: the Newton-linearised convection
 (`fu*u_x + fv*u_y + u*dfu_dx + v*dfu_dy`), the pressure gradient and the
-`±ν·curl ω` coupling, the continuity row `u_x + v_y`, and the vorticity
-definition `ω + u_y − v_x`. Matching in `Lᵀ`: all four columns, including the
-`dt` factors on the pressure column (`dt·Dxᵀsu₁ + dt·Dyᵀsu₂`), the `±ν·dt`
+$\pm\nu\,\nabla\times\omega$ coupling, the continuity row `u_x + v_y`, and the vorticity
+definition $\omega + u_y - v_x$. Matching in `Lᵀ`: all four columns, including the
+`dt` factors on the pressure column (`dt·Dxᵀsu₁ + dt·Dyᵀsu₂`), the $\pm\nu\,dt$
 factors on the vorticity column, and every convective contribution. The
 constraint rows carry weight 1 in all three — confirming the row-weighting
 documented in `lssem.py` matches the original.
@@ -50,16 +50,16 @@ the Orr–Sommerfeld case does not run without it.
 
 ## 2. What the term is
 
-Chan (1996) page 2 gives the operator with `1/δτ` on both momentum diagonals and
-`u⁰/δτ` on the right-hand side, and states: *"δt is the physical time step
-whereas δτ is the pseudo-time step."* The paper adds that δτ can be adjusted
+Chan (1996) page 2 gives the operator with $1/\delta\tau$ on both momentum diagonals and
+$u^0/\delta\tau$ on the right-hand side, and states: *"δt is the physical time step
+whereas $\delta\tau$ is the pseudo-time step."* The paper adds that $\delta\tau$ can be adjusted
 "to introduce certain level of diffusion in the streamwise direction to stabilize
 sharp gradient that might occur in an under-resolving grid… not exercised here."
 
 The code confirms the pairing. `rhs` supplies `dt*fu` where `lhs` has `dt*u`
 ([tj.channel.f:841](file:///Users/danielchan/Downloads/tj.channel%20(1).f)), so the
 contribution to the residual is `dt*(fu − u)`. Since the row has been multiplied
-through by δt, matching `(δt/δτ)·u` against the code's `dt*u` gives **δτ = 1**,
+through by $\delta t$, matching $(\delta t/\delta\tau)\,u$ against the code's `dt*u` gives **$\delta\tau = 1$**,
 hard-coded.
 
 ### It contributes nothing to the residual
@@ -80,35 +80,31 @@ modification of the Jacobian, not of the equations being solved.
 
 ## 3. What it changes, and what it does not
 
-Write the augmented operator as `L_κ = L + κ·E`, where `E` projects onto the two
+Write the augmented operator as $L_\kappa = L + \kappa E$, where $E$ projects onto the two
 momentum rows and
 
 ```
 κ = a_flux / dtau          (κ = dt with dtau = 1, matching the 1996 code)
 ```
 
-Each sub-iteration minimises `‖L_κ u − (f + κ u⁰)‖²` about the previous
-sub-iterate `u⁰`. Its stationarity condition is
+Each sub-iteration minimises $\|L_\kappa u - (f + \kappa u^0)\|^2$ about the previous
+sub-iterate $u^0$. Its stationarity condition is
 
-```
-(L + κE)ᵀ ( L_κ u − f − κ u⁰ ) = 0
-```
+$$(L + \kappa E)^\top \left( L_\kappa u - f - \kappa u^0 \right) = 0$$
 
-and at the fixed point `u = u⁰` the bracket collapses to the ordinary residual
-`R = Lu − f`, leaving
+and at the fixed point $u = u^0$ the bracket collapses to the ordinary residual
+$R = Lu - f$, leaving
 
-```
-Lᵀ R + κ Eᵀ R = 0        versus the unaugmented        Lᵀ R = 0.
-```
+$$L^\top R + \kappa E^\top R = 0 \qquad \text{versus the unaugmented} \qquad L^\top R = 0.$$
 
-**So the converged answer is perturbed by O(κ·R), not left exactly invariant.**
+**So the converged answer is perturbed by $O(\kappa R)$, not left exactly invariant.**
 This corrects a stronger claim made in conversation ("stabilisation for free,
 without changing the converged solution"). The accurate statement:
 
 - Where the least-squares residual is driven to ~0, the two conditions coincide
   and the answer is genuinely unchanged. Poiseuille reaches `J = 5.94e-27`
   (`CG_TOLERANCE_FLOOR.md` §2), so there the term is free.
-- Where `R ≠ 0` — the BFS converges to `J ≈ 3.7e-05` — the perturbation is
+- Where $R \neq 0$ — the BFS converges to `J ≈ 3.7e-05` — the perturbation is
   proportional to the discretisation residual and therefore **vanishes under
   refinement**. It is a *consistent* stabilisation, in the same sense as SUPG:
   it changes the discrete answer at the order of the existing discretisation
@@ -122,27 +118,27 @@ That distinction must be measured, not assumed. See the test plan in §6.
 
 This is the important part, and the reason the term is worth adding.
 
-Both `w_mass` and δτ add a multiple of the identity to the momentum rows. They
+Both `w_mass` and $\delta\tau$ add a multiple of the identity to the momentum rows. They
 differ in **what the added term is paired with on the right-hand side**:
 
 | | added to `L` | paired with | effect on the converged steady state |
 |---|---|---|---|
 | `w_mass` | `a_mass·u`, `a_mass = fac1·w_mass/dt` | `u^n`, the previous **time level** | **changes it** — this is the dt-dependence in [POISEUILLE_DT_STUDY.md](./POISEUILLE_DT_STUDY.md), a 212,061× spread |
-| **δτ** | `κ·u`, `κ = a_flux/dtau` | `u⁰`, the previous **sub-iterate** | perturbs by O(κ·R) only (§3) |
+| **$\delta\tau$** | $\kappa u$, `κ = a_flux/dtau` | $u^0$, the previous **sub-iterate** | perturbs by $O(\kappa R)$ only (§3) |
 
 The entire arc of this project has been the discovery that stability and
 accuracy are coupled through the momentum weighting: every attempt to damp the
 iteration through `a_mass` moved the answer
 ([WEIGHT_VS_TIMESTEP_STUDY.md](./WEIGHT_VS_TIMESTEP_STUDY.md),
-[STEADY_FORM_STUDY.md](./STEADY_FORM_STUDY.md) §4). **δτ is the knob that damps
+[STEADY_FORM_STUDY.md](./STEADY_FORM_STUDY.md) §4). **$\delta\tau$ is the knob that damps
 without paying**, or at worst pays at the order of the discretisation error.
 We have been substituting a non-monotone line search for a mechanism the
 original algorithm had built in.
 
-Note also that δτ survives `w_mass = 0`. The pure steady form has `a_mass = 0`
+Note also that $\delta\tau$ survives `w_mass = 0`. The pure steady form has `a_mass = 0`
 and no damping whatsoever, which is exactly the configuration that diverges
 (`STEADY_FORM_STUDY.md` §2: `max|u|` 1.51 → 40.05 in one step; §8: 1.51 → 115
-from an interpolated IC). δτ restores a damping term there without reintroducing
+from an interpolated IC). $\delta\tau$ restores a damping term there without reintroducing
 a physical time derivative.
 
 ---
@@ -219,9 +215,9 @@ anything.
 4. **Does it change the answer?** This is §3's open question. Poiseuille has an
    exactly representable solution and drives `R → 0`, so sweep
    `dtau ∈ {∞, 10, 1, 0.1}` and confirm the profile error is flat. Then repeat
-   on the BFS, where `R ≠ 0`, and **measure** the perturbation rather than
+   on the BFS, where $R \neq 0$, and **measure** the perturbation rather than
    assuming it is small. Compare against the 1.1% `J` gap that separates the two
-   converged states in `STEADY_FORM_STUDY.md` §8 — if δτ moves the answer by
+   converged states in `STEADY_FORM_STUDY.md` §8 — if $\delta\tau$ moves the answer by
    more than that, it is not a benign stabilisation.
 5. **Does it fix what the line search fixes?** The three cases that need
    globalisation today:
@@ -233,7 +229,7 @@ anything.
    For each: does `dtau = 1` converge *without* `line_search=True`, and at what
    cost in iterations?
 6. **Reproduce the 1996 result.** `tj.channel.f` is a plane channel with the
-   `2ν` body force and δτ = 1. Running that case is the only end-to-end check
+   `2ν` body force and $\delta\tau$ = 1. Running that case is the only end-to-end check
    that our reading of the term is right.
 
 ---
@@ -241,14 +237,14 @@ anything.
 ## 7. Risks
 
 - **The perturbation may not be benign.** §3 shows the fixed point moves by
-  O(κ·R). On the BFS, `R` is not small. Step 4 of the test plan must run before
-  δτ is used for anything other than experiments.
+  $O(\kappa R)$. On the BFS, $R$ is not small. Step 4 of the test plan must run before
+  $\delta\tau$ is used for anything other than experiments.
 - **Five call sites must stay consistent.** A mismatch between `apply_L` and
   `compute_jacobi` silently degrades the preconditioner rather than failing.
 - **It interacts with `w_mom`/`w_mass`.** `κ = a_flux/dtau` is proportional to
   `a_flux = w_mom`, so the damping scales with the momentum weight. At
   `w_mom = 0.1` the damping is 10× weaker than at `w_mom = 1.0` for the same
-  δτ. Sweeps that vary `w_mom` at fixed `dtau` are therefore varying two things
+  $\delta\tau$. Sweeps that vary `w_mom` at fixed `dtau` are therefore varying two things
   at once — the same trap documented in `WEIGHT_VS_TIMESTEP_STUDY.md` §1.
 - **`dtau` and the line search may be redundant, or may conflict.** Both damp
   the step. Test them separately before combining.
@@ -257,7 +253,7 @@ anything.
 
 ## 8. Open question
 
-If δτ is the intended stabilisation, why was it dropped from
+If $\delta\tau$ is the intended stabilisation, why was it dropped from
 `lssem_baseline.f90`? Possibilities: deliberate simplification once the target
 cases converged without it; an artifact of whichever variant of the 1996 source
 was modernised; or an oversight. The F90 is internally consistent — its

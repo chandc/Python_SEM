@@ -11,7 +11,7 @@ source is stale (see §5 below).
 > accumulated states.** The gates in §6 verify a *single* application of
 > `apply_L` / `apply_LT` / `compute_jacobi` to 1e-16, and that holds. But over a
 > few hundred time steps with a tight CG the two backends settle on different
-> fixed points. Measured on Poiseuille Re=100, order 8, 10x2, dt=1,
+> fixed points. Measured on Poiseuille $Re=100$, order 8, 10x2, dt=1,
 > `w_mom = w_mass = 1`, `cgsfac=1e-8`, `cg_tol=1e-10`, run to a bit-exact steady
 > state in 300 steps:
 >
@@ -88,7 +88,7 @@ curves do not collapse onto one another, so **a speed-up quoted "at N DOF" is
 meaningless without stating the polynomial order.**
 
 The mechanism is the one the fused kernel was built around. Its advantage comes
-from avoiding BLAS call overhead on tiny (n x n) blocks and eliminating
+from avoiding BLAS call overhead on tiny $(n \times n)$ blocks and eliminating
 temporaries. p-refinement grows the blocks, so Accelerate's matmul becomes
 efficient and the gap closes toward parity. h-refinement adds more blocks of the
 *same* size, so the per-block advantage persists — the h-curve flattens out
@@ -144,7 +144,7 @@ kernels.** At p>=14 the situation reverses: the kernels themselves are only
 > axis and so attributed to *size* an effect that is really driven by *order*.
 > The paired sweeps above supersede it.
 
-End-to-end, cavity Re=1000, 4x4 order 8, dt=1.0, run to `max|dU| < 1e-8`:
+End-to-end, cavity $Re=1000$, 4x4 order 8, dt=1.0, run to `max|dU| < 1e-8`:
 
 | backend | steps | wall | speedup |
 |---|---|---|---|

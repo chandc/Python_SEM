@@ -49,9 +49,9 @@ Reproduce: `scratch/pois_temporal.py` (the whole matrix, ~30 min on numpy).
 mass and history terms cancel *identically* at steady state (measured there as
 exactly `0.000e+00`). What remains being minimised is
 
-```
-J = ∫[ w_mom²(N_1² + N_2²) + (div u)² + (om + u_y - v_x)² ]
-```
+$$
+J = \int \left[\, w_{mom}^2 \left(N_1^2 + N_2^2\right) + (\nabla \cdot u)^2 + (\omega + u_y - v_x)^2 \,\right]
+$$
 
 With `w_mom` pinned at 1 that expression **contains no dt**. Every converged
 answer in such a sweep must therefore be the same to within round-off and
@@ -89,11 +89,13 @@ mean gradient, so the forcing must enter this way; the weighting requirement
 
 Started from rest the exact solution is
 
-```
-u(y,t) = (1 - y²) - Σ_n  (4(-1)^n / λ_n³) cos(λ_n y) exp(-ν λ_n² t)
-om(y,t) = 2y      - Σ_n  (4(-1)^n / λ_n²) sin(λ_n y) exp(-ν λ_n² t)
-λ_n = (2n+1)π/2,   v = 0,   p = 0
-```
+$$
+\begin{aligned}
+u(y,t) &= (1 - y^2) - \sum_n \frac{4(-1)^n}{\lambda_n^3} \cos(\lambda_n y)\, e^{-\nu \lambda_n^2 t} \\
+\omega(y,t) &= 2y - \sum_n \frac{4(-1)^n}{\lambda_n^2} \sin(\lambda_n y)\, e^{-\nu \lambda_n^2 t} \\
+\lambda_n &= \frac{(2n+1)\pi}{2}, \qquad v = 0, \qquad p = 0
+\end{aligned}
+$$
 
 `u` depends on `y` and `t` only, so `u·∇u = 0` identically and this is an exact
 solution of the **full** Navier–Stokes equations, not merely of Stokes flow.
@@ -112,10 +114,10 @@ produces a clean-looking slope against the wrong target:
 
 ## 3. Three setup choices that decide whether the fit means anything
 
-**Integrate from t₀ = 0.02, not from rest.** The impulsive start is non-smooth
+**Integrate from $t_0 = 0.02$, not from rest.** The impulsive start is non-smooth
 in time — the transient contains every mode at once — and fitting an order
 through it measures the start-up singularity rather than the scheme. The initial
-state is the exact solution at t₀, integrated to t = 0.12.
+state is the exact solution at $t_0$, integrated to $t = 0.12$.
 
 **Seed BOTH history levels.** `step_bdf` uses BDF1 when the history holds one
 level and BDF2 thereafter, so a run seeded with a single state takes one BDF1
@@ -124,13 +126,13 @@ that contamination.
 
 **Iterate the sub-iterations out.** `max_newton = 10` to `newton_tol = 1e-13`,
 `cg_tol = 1e-14`. Otherwise the incompletely-converged nonlinear solve leaves a
-per-step error that does not scale as dt² and flattens the slope.
+per-step error that does not scale as $dt^2$ and flattens the slope.
 
 ---
 
 ## 4. Results
 
-rms error in `u` at t = 0.12, over the whole field:
+rms error in `u` at $t = 0.12$, over the whole field:
 
 ### `w_mom = w_mass = 1` (a_flux = 1, dt_eff = dt)
 
@@ -199,9 +201,9 @@ error in the steady case. It flatters the error norm and degrades the answer.
   vanishes pointwise. `CHANNEL_VALIDATION.md` §6 exercises nonlinearity
   (Orr–Sommerfeld on a Poiseuille base flow) but measures a growth rate, not an
   order.
-- **One Reynolds number and one geometry.** ν = 1 here; ν only sets the decay
-  scale, since the solution is exact for any ν, but no claim is made about
-  order at Re = 100 in an inflow/outflow domain.
-- **`dtau` was not used** (`dtau = None`). `PSEUDO_TIME_RESULTS.md` §7 shows δτ
-  damps decay and growth rates, so a temporal order with δτ active would have to
+- **One Reynolds number and one geometry.** $\nu = 1$ here; $\nu$ only sets the decay
+  scale, since the solution is exact for any $\nu$, but no claim is made about
+  order at $Re = 100$ in an inflow/outflow domain.
+- **`dtau` was not used** (`dtau = None`). `PSEUDO_TIME_RESULTS.md` §7 shows $\delta\tau$
+  damps decay and growth rates, so a temporal order with $\delta\tau$ active would have to
   be measured separately.

@@ -140,7 +140,7 @@ A prediction that the Poiseuille boundary would transfer was made and refuted.
 At `dt_eff = 2.0`: 31.8% of the outflow plane has inflow and the exit pressure
 spread jumps 0.25 → 0.69. Previously this was seen only on the L/h = 5 domain,
 where it is geometric (the plane cuts the bubble). Here the domain is long enough
-— the pathology is induced purely by the effective time step. The peak `du/dy` of
+— the pathology is induced purely by the effective time step. The peak $du/dy$ of
 0.4524 in that row is this contamination reaching the upper wall, not a bubble
 effect.
 
@@ -168,7 +168,7 @@ Ghia 1982:
 **~300x less sensitive.** The explanation is what drives the flow:
 
 - **Poiseuille and the BFS are pressure-driven.** The solution is a response to
-  `dp/dx`. Pressure appears only in the momentum rows, so under-weighting them
+  $dp/dx$. Pressure appears only in the momentum rows, so under-weighting them
   corrupts the *driving force* — hence 98% velocity error at dt=0.05.
 - **The cavity is lid-driven.** The forcing is a velocity boundary condition;
   pressure is passive, enforcing incompressibility rather than driving anything.

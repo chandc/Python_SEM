@@ -2,7 +2,7 @@
 
 Study date: 2026-08-17. A dt sweep of the **Fortran** LSSEM solver
 (`F90_SEM/pmg_clean`, legacy weighting) on plane Poiseuille with a known analytic
-solution, comparing a free outflow against `p = 0` on the outlet plane.
+solution, comparing a free outflow against $p = 0$ on the outlet plane.
 
 The point of using Poiseuille is that the exact solution is *representable* in the
 discrete space, so any departure from it is attributable — there is no
@@ -10,7 +10,7 @@ discretisation error to hide behind.
 
 Reproduce: `scratch/mesh_poiseuille_f90.py` (grid),
 `scratch/pois_f90_analyse.py` (post-processing),
-`F90_SEM/pmg_clean/src/SEM_08_bfs_pout.f90` (the `p = 0` driver, added by this
+`F90_SEM/pmg_clean/src/SEM_08_bfs_pout.f90` (the $p = 0$ driver, added by this
 study), and the namelists in `F90_SEM/pmg_clean/poiseuille_dt/`.
 
 Companions: `OUTFLOW_BC_STUDY.md` (the Python outflow study this corroborates),
@@ -22,26 +22,26 @@ mechanism from anything here).
 
 ## Executive summary
 
-1. **The Fortran implementation is exact on this problem.** With `p = 0` on the
+1. **The Fortran implementation is exact on this problem.** With $p = 0$ on the
    outlet plane it returns the analytic solution to round-off at every dt over a
    500× range: `max|u|` = 1.5000, `max|v|` ≈ 3e-11 against an exact 0, rms
    divergence ≈ 7e-11, and pressure drop **0.48000 against the analytic
-   12L/Re = 0.48000** — five digits, whole domain included.
+   $12L/\mathrm{Re} = 0.48000$** — five digits, whole domain included.
 
 2. **Free outflow fails, and *which* dt fail is decided by the solver
    tolerance.** At `tol = 1e-12` two of seven dt survive; at `tol = 1e-6` four
    survive — and they are **different ones**. Four of seven outcomes invert on a
    change of linear-solver tolerance alone.
 
-3. **One condition fixes the stability.** `p = 0` (one of the two scalar
+3. **One condition fixes the stability.** $p = 0$ (one of the two scalar
    conditions ADN requires per 2D boundary point; free supplies zero) takes the
    sweep from 2/7 converged with a +502% pressure error to 7/7 converged with
    none.
 
-4. **`p = 0` still leaves a band of dt with a second attractor.** For
-   1.5 ≲ dt ≲ 2.5 the solver converges — reproducibly and *independently of
+4. **$p = 0$ still leaves a band of dt with a second attractor.** For
+   $1.5 \lesssim dt \lesssim 2.5$ the solver converges — reproducibly and *independently of
    tolerance across six orders* — to a different, wrong steady state
-   (`max|u|` ≈ 2.4, Δp ≈ +350%). dt ≤ 1 and dt ≥ 3 give the exact solution.
+   (`max|u|` ≈ 2.4, $\Delta p \approx +350\%$). $dt \le 1$ and $dt \ge 3$ give the exact solution.
    One condition is not two.
 
 5. **dt has no effect on accuracy here, and that is the expected result.** The
@@ -59,9 +59,9 @@ Plane channel, no step — `scratch/mesh_poiseuille_f90.py`:
 | quantity | value |
 |---|---|
 | domain | `[0, 4] × [0, 1]`, 4×2 elements, N = 10 |
-| inflow | `x = 0`, full height, `u = 6y(1-y)` (u_max 1.5, mean 1) |
-| walls | `y = 0` and `y = 1`, no-slip |
-| outlet | `x = 4`: free, or `p = 0` |
+| inflow | $x = 0$, full height, $u = 6y(1-y)$ (u_max 1.5, mean 1) |
+| walls | $y = 0$ and $y = 1$, no-slip |
+| outlet | $x = 4$: free, or $p = 0$ |
 | Re | 100 (ν = 0.01) |
 | solver | `nsub = 1`, `cgsfac = 1e-3`, `nitcgs = 40000`, no p-MG |
 | run length | `ntime·dt = 200` for every dt (viscous time h²/ν = 100) |
@@ -69,21 +69,22 @@ Plane channel, no step — `scratch/mesh_poiseuille_f90.py`:
 The Fortran inlet is `u = 6·eta·(1-eta)`, `eta = (y - ystep)/hinlet`, so
 `ystep = 0, hinlet = 1` gives full-height plane Poiseuille. Exact solution:
 
-    u = 6y(1-y)     v = 0     om = dv/dx - du/dy = 12y - 6
-    dp/dx = nu·u'' = -12/Re    =>    dp = 12L/Re = 0.48 over the domain
+$$u = 6y(1-y), \qquad v = 0, \qquad \omega = \frac{\partial v}{\partial x} - \frac{\partial u}{\partial y} = 12y - 6$$
+
+$$\frac{dp}{dx} = \nu\, u'' = -\frac{12}{\mathrm{Re}} \quad\Longrightarrow\quad \Delta p = \frac{12L}{\mathrm{Re}} = 0.48 \ \text{ over the domain}$$
 
 All four are exactly representable for any order ≥ 2.
 
 > **A trap worth recording.** `SEM_2D_BFS` cannot run this case: `ystep` and
-> `hinlet` are not in its namelist, so its inlet is hardcoded to y ∈ [0.5, 1] and
+> `hinlet` are not in its namelist, so its inlet is hardcoded to $y \in [0.5, 1]$ and
 > would silently impose a half-height step inflow instead of Poiseuille. Only the
 > `_freeout` variant carries those parameters. This study therefore adds
 > `src/SEM_08_bfs_pout.f90` — the freeout source with the outlet changed to
-> `p = 0` (both the mask and the imposed value) and nothing else touched.
+> $p = 0$ (both the mask and the imposed value) and nothing else touched.
 
 ---
 
-## 2. `p = 0` on the outlet plane: the full table
+## 2. $p = 0$ on the outlet plane: the full table
 
 `SEM_2D_BFS_POUT`. Errors are **whole domain, outflow plane included**. The two
 `t<` columns are the convergence measure: the physical time at which the per-step
@@ -109,12 +110,12 @@ residual settles below that level. Generated by `scratch/pois_f90_summary.py`.
 for dt = 3 and 5 is not a failure: their residual floors at 3.0e-09 and 1.3e-10
 so it never crosses that threshold, and both land on the exact solution.
 
-**Eight of twelve are exact, and the error columns are byte-for-byte identical
-across all of them** — L2(u) = 1.89e-06, L2(ω) = 5.64e-06, Δp error 0.00%. That
+**Seven of twelve are exact, and the error columns are byte-for-byte identical
+across all of them** — $L_2(u)$ = 1.89e-06, $L_2(\omega)$ = 5.64e-06, $\Delta p$ error 0.00%. That
 is the discretisation and solver floor, with *no dt dependence whatever* over a
 500× range in dt.
 
-**This is the implementation check, and it passes.** `v` = 3e-11 against an exact
+**This is the implementation check, and it passes.** $v$ = 3e-11 against an exact
 zero, divergence 7e-11, and the pressure drop right to five digits.
 
 ### 2a. Convergence slows as dt grows
@@ -135,10 +136,10 @@ is what distinguishes the runs.)
 ### 2b. The dt band where a second attractor wins
 
 The dt = 2 outlier is neither isolated nor a solver artifact. Reading the
-`BAD STATE` rows above: a **band** roughly 1.5 ≲ dt ≲ 2.5, bracketed by exact
+`BAD STATE` rows above: a **band** roughly $1.5 \lesssim dt \lesssim 2.5$, bracketed by exact
 solutions at dt = 1 and dt = 3, and the three tolerance variants at dt = 2
 (1e-12, 1e-10, 1e-6) give the *same* wrong answer to five digits —
-`max|u|` = 2.4442 / 2.4442 / 2.4438, Δp +352.5 / +352.5 / +352.3%. Six orders of
+`max|u|` = 2.4442 / 2.4442 / 2.4438, $\Delta p$ +352.5 / +352.5 / +352.3%. Six orders of
 tolerance, one identical wrong state.
 
 So it is a genuine second steady state of the discrete system and dt selects the
@@ -146,7 +147,7 @@ basin — the "two attractors, not stability" pattern of `OUTFLOW_BC_STUDY.md` �
 here with one condition imposed instead of none.
 
 The bad states also look like **one continuous family** rather than four
-unrelated failures: `max|v|` ≈ 2.0 and L2(u) ≈ 0.26 at all four, with Δp drifting
+unrelated failures: `max|v|` ≈ 2.0 and $L_2(u)$ ≈ 0.26 at all four, with $\Delta p$ drifting
 smoothly 382% → 352% → 332% as dt rises. Worth noting, not explained.
 
 Band edges are bracketed only to a factor of ~1.5 (between 1 and 1.5 below,
@@ -208,7 +209,7 @@ interior-only (x < 3) side by side:
 | *exact* | | | 1.5000 | 0 | 0 | 0.00% | 0 | 0.00% |
 
 **No free-outflow run is ever right.** The best whole-domain pressure drop is
-+30.6%; the interior is 0.4–3% against `p = 0`'s 1.9e-06. And residual is not
++30.6%; the interior is 0.4–3% against $p = 0$'s 1.9e-06. And residual is not
 accuracy: the most tightly converged free run (res 9.3e-13, dt = 0.05) has the
 **worst** error of the set at +502%.
 
@@ -226,7 +227,7 @@ rows of weight 1, i.e. `a_mass = fac1 = 1.5` fixed and **`a_flux = dt`** — dt
 produces a strongly dt-dependent answer: the upper-wall bubble runs 2.848 → 1.683
 across dt = 0.05 → 5, and mass loss goes 0.05% → 2.4%.
 
-Here it produces nothing at all: with `p = 0` the answer is identical to five
+Here it produces nothing at all: with $p = 0$ the answer is identical to five
 digits over a 500× dt range. The reason is that the least-squares weights only
 matter when the residual **cannot** be zero. Poiseuille zeroes all four rows
 simultaneously, so every weighting has the same minimiser and dt drops out. The
@@ -244,15 +245,15 @@ the implementation, which is what it is used for here.
 1. **Do not use free outflow with a tight solve.** It is not a matter of accuracy
    — 5 of 7 timesteps diverge at `tol = 1e-12`, and the ones that survive change
    when the tolerance does.
-2. **`p = 0` on the outlet plane is cheap and transformative** on this flow:
+2. **$p = 0$ on the outlet plane is cheap and transformative** on this flow:
    2/7 → 7/7 converged, +502% → 0.00% on the pressure drop.
-3. **One condition is not two.** `p = 0` still admits a wrong steady state over
-   1.5 ≲ dt ≲ 2.5. The tested well-posed pair is P+Z (`p = 0` with
-   `∂ω/∂x = 0`), per `OUTFLOW_BC_STUDY.md` §7b; extending the Fortran driver to
+3. **One condition is not two.** $p = 0$ still admits a wrong steady state over
+   $1.5 \lesssim dt \lesssim 2.5$. The tested well-posed pair is P+Z ($p = 0$ with
+   $\partial\omega/\partial x = 0$), per `OUTFLOW_BC_STUDY.md` §7b; extending the Fortran driver to
    impose it is untested and is the obvious next step.
 4. **The Fortran implementation is not in question.** On a problem with an
-   analytic answer it is exact to round-off in u, v, ω, divergence and pressure
-   drop, independent of dt.
+   analytic answer it is exact to round-off in $u$, $v$, $\omega$, divergence and
+   pressure drop, independent of dt.
 
 ---
 
@@ -289,7 +290,7 @@ solution is written once at the end.
 ## 7. Caveats
 
 - **One geometry, one Re, one mesh.** 4×2 elements at N = 10, Re = 100. The dt
-  band in §2a and the tolerance inversions in §3 are not claimed to be
+  band in §2b and the tolerance inversions in §3 are not claimed to be
   quantitatively transferable.
 - **`nsub = 1` throughout.** Sub-iteration was not varied; the Gartling work
   found `nsub` had no effect on the `a_mass` split, but that is a different
@@ -298,5 +299,5 @@ solution is written once at the end.
   `tol = 1e-6` runs at that dt were killed after going NaN or while still
   running, and `nsave = ntime` means nothing was written. Re-running with a
   smaller `nsave` would capture the pre-divergence state.
-- **`p = 0` here is one condition, not P+Z.** No `∂ω/∂x = 0` was imposed in the
+- **$p = 0$ here is one condition, not P+Z.** No $\partial\omega/\partial x = 0$ was imposed in the
   Fortran; the comparison to the Python P+Z results is therefore indirect.

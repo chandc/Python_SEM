@@ -25,33 +25,33 @@ data movement sane, and how to know each step works.**
 ## 0. Read this before starting: two things that do not carry over
 
 **0.1 The stability results in this repo do not apply to the new formulation.**
-`GARTLING_VALIDATION.md` measures `a_mass = w_mass·fac1/dt` as the stability
+`GARTLING_VALIDATION.md` measures $a_\mathrm{mass} = w_\mathrm{mass}\,\mathrm{fac}_1/\Delta t$ as the stability
 control variable, with a hard threshold (stable ≤ 6.05, divergent ≥ 12.1 on a
 flow with an outflow boundary), and `ARTIFICIAL_COMPRESSIBILITY.md` §4 shows AC
 moves it to ~60 and fails by 120. **All of that was measured with convection
 *inside* the least-squares functional**, multiplied by `a_flux`. Moving `u·∇u` to
 the right-hand side removes it from `L` entirely: the momentum row becomes
 
-    a_mass·u + a_flux·(∇p + ν∇×ω)  =  RHS(history, convection)
+$$ a_\mathrm{mass}\,\mathbf{u} + a_\mathrm{flux}\,(\nabla p + \nu\nabla\times\boldsymbol{\omega}) \;=\; \mathrm{RHS}(\text{history, convection}) $$
 
 which is a *linear Stokes-like operator*, not the linearised Navier–Stokes
-operator whose conditioning we characterised. The `a_mass` threshold, the `κ_p ≈
-a_mass/2` rule, and the 27× AC speed-up all have to be **re-measured**, not
-assumed. Treat §5 of this plan as mandatory, not optional.
+operator whose conditioning we characterised. The `a_mass` threshold, the
+$\kappa_p \approx a_\mathrm{mass}/2$ rule, and the 27× AC speed-up all have to be **re-measured**, not
+assumed. Treat Stage 5 of this plan as mandatory, not optional.
 
 **0.2 Explicit convection collides with the `a_mass` floor — this is the main
 technical risk.** Explicit convection imposes a CFL limit. For `Re_τ` = 180
 channel DNS a typical step is `dt` ≈ 1e−3 … 1e−2 in wall units-normalised time.
-With RKW3/CN the momentum row carries `c_k = 1/(β_k·dt)` and the worst stage has
-`β` = 1/6, so `c = 6/dt` gives **6000 … 60000** — three to four orders above
+With RKW3/CN the momentum row carries $c_k = 1/(\beta_k\,\Delta t)$ and the worst stage has
+$\beta = 1/6$, so $c = 6/\Delta t$ gives **600 … 6000** — two to three orders above
 anything that has ever been stable in this code, and far above the `a_mass` = 300
 to which AC was measured to hold in §0.3.
 
-> **Do not use `1.5/dt` here.** That is the BDF2 coefficient. RKW3/CN's worst
+> **Do not use $1.5/\Delta t$ here.** That is the BDF2 coefficient. RKW3/CN's worst
 > stage is **4× larger at the same `dt`** (§0.4). An implementation that budgets
-> against `1.5/dt` will under-estimate its own `a_mass` by a factor of four.
+> against $1.5/\Delta t$ will under-estimate its own `a_mass` by a factor of four.
 
-**On paper the windows do NOT currently overlap.** `a_mass_worst = 6/dt` needs
+**On paper the windows do NOT currently overlap.** $a_\mathrm{mass,worst} = 6/\Delta t$ needs
 `dt` ≥ 0.02 to stay under the `a_mass` = 300 that AC was measured to reach
 (§0.3), while CFL implies `dt` ≈ 1e−3 … 1e−2 — a shortfall of **2× to 20×**.
 That ceiling was measured for the *linearised Navier–Stokes* operator though,
@@ -143,8 +143,8 @@ help. It does not, because the implicit stage coefficient works the other way.
 | BDF2 + AB2 | `fac1/dt` = **1.50**/dt | `1.50/dt_AB2` |
 | RKW3/CN, worst stage (`β` = 1/6) | `1/(β·dt)` = **6.00**/dt | `6.00/(3.46·dt_AB2)` = **1.73**/dt_AB2 |
 
-`1/β` = (4.324, 4.800, **6.000**), so at the *same* `dt` RKW3/CN is 4× worse. The
-CFL gain (√3 ≈ 1.73 against AB2's ≈ 0.5, i.e. a 3.46× larger step) recovers most
+$1/\beta$ = (4.324, 4.800, **6.000**), so at the *same* `dt` RKW3/CN is 4× worse. The
+CFL gain ($\sqrt{3} \approx 1.73$ against AB2's ≈ 0.5, i.e. a 3.46× larger step) recovers most
 but not all of that: the net is **≈ 15% worse than BDF2**, not better.
 
 So the case for RKW3/CN rests elsewhere, and it is still a good case:
@@ -160,8 +160,8 @@ So the case for RKW3/CN rests elsewhere, and it is still a good case:
   the step is 3.46× larger.
 
 **Consequence for Stage 5:** the quantity to test against the measured stability
-window is `max_k 1/(β_k·dt)`, and the window must be found for *that*, not for
-`1.5/dt`. `lssem3d/timestep.py` exposes `a_mass_worst(dt)` for exactly this, and
+window is $\max_k 1/(\beta_k\,\Delta t)$, and the window must be found for *that*, not for
+$1.5/\Delta t$. `lssem3d/timestep.py` exposes `a_mass_worst(dt)` for exactly this, and
 `lssem3d/tests/test_fourier.py` pins the 4× and the 15% so the correction cannot
 be quietly lost.
 
@@ -282,8 +282,8 @@ the velocity.
 it could not reproduce the Chan validation.
 
 Under the `w_mom` = 1 scaling an implementation carries momentum rows scaled by
-`c = 1/(β_k·dt)` against O(1) constraint rows. The functional squares them, so at
-`dt` = 5e−3 momentum outweighs continuity by `c²` ≈ 1.4×10⁶: the minimiser
+$c = 1/(\beta_k\,\Delta t)$ against O(1) constraint rows. The functional squares them, so at
+`dt` = 5e−3 momentum outweighs continuity by $c^2 \approx 1.4\times10^6$: the minimiser
 ignores `div u` and the normal operator is unusable. Measured on Stokes decay
 with AC off — 600000 CG iterations (cap saturated, wrong answer) without row
 weights, **22047 and 11× more accurate** with them.
@@ -296,12 +296,12 @@ to the explicit half alone; Crank–Nicolson caps the mixed scheme at 2), and it
 the first PDE-level confirmation — Stage 4's gate ran on a scalar model with no
 pressure and no constraint rows. Operator-AC at `κ_p` ∝ 1/`dt` sits at 6.1e−03
 with **zeroth** order for comparison, and now costs *more* CG iterations than
-AC-off (24471 vs 17203 at `dt` = 1e−2). **RECIPE, measured 2026-08-20 across viscosity** (`3D_STATUS.md` §7E): legacy
+AC-off (24471 vs 17203 at `dt` = 1e−2). **RECIPE, measured 2026-08-20 across viscosity** (`3D_STATUS.md` §7B): legacy
 row weights, no operator-AC. On Taylor-Green -- exact solution, active
-convection, free nu -- it wins on accuracy AND cost at every nu from 1 down to
+convection, free $\nu$ -- it wins on accuracy AND cost at every $\nu$ from 1 down to
 M7's 5.6e-3, where it gives L2 error 1.2e-10 at 20940 CG against AC-on's
 5.4e-3. AC in the operator costs 5-7 orders of accuracy for 2.5-80x in CG.
-Caveat: Taylor-Green becomes near-steady as nu -> 0, so the low-nu accuracy
+Caveat: Taylor-Green becomes near-steady as $\nu \to 0$, so the low-$\nu$ accuracy
 figure is weak evidence about genuine unsteady dynamics; and it does not explain
 the cavity, whose need for AC is probably its lid/corner singularities rather
 than viscosity. **Earlier text below is superseded:** on the Re = 1000
@@ -311,7 +311,7 @@ against 12320 without it. Which weighting to use, and whether AC is wanted, are
 
 **Consequence for this plan's AC story.** §0.3's "AC is the enabling technology"
 holds for the 2D *outflow* case, but in 3D AC was largely compensating for this
-missing weighting — adding `κ_p·p` lifts the continuity row toward the momentum
+missing weighting — adding $\kappa_p\,p$ lifts the continuity row toward the momentum
 rows. The 63× conditioning benefit, the unsolvability of the AC-free 3D system,
 and AC's measured accuracy cost are all downstream of it. **Re-derive the AC
 decision with row weights on** before treating any of those numbers as
@@ -361,7 +361,7 @@ Each mode's 2D problem is complex. Two options:
 | `complex128` arrays | compact; natural | `LᵀL` becomes **Hermitian**, so the CG inner products, the adjoint test, and `compute_jacobi` all need conjugation. Every one of those is a place the existing real-valued code is silently wrong. |
 | **split real/imag into 2 real fields** | reuses the existing real CG, Jacobi, adjoint test, and the 82-test suite **unchanged** | 14 fields instead of 7; slightly more memory traffic |
 
-**Recommend the split-real form.** The `i·k_z` terms couple real and imaginary
+**Recommend the split-real form.** The $ik_z$ terms couple real and imaginary
 parts into one real system of twice the size, and everything downstream — the
 symmetry check in `ARTIFICIAL_COMPRESSIBILITY.md` §2, the Jacobi diagonal, the
 line search merit — keeps working without modification. Given how much of this
@@ -421,6 +421,7 @@ from getting this wrong, all silent:
 Each produces a correctly-shaped array, so nothing raises. `cfl` now asserts its
 input layout explicitly. **Any new routine taking the 5-D state should do the
 same.**
+
       lssem3d.py     apply_L / apply_LT for the 7-field (14 real) per-mode system
       convect.py     physical-space u·grad u, 3/2-rule dealiasing, CFL estimate
       solver3d.py    BDF + per-mode batched PCG, reusing lssem2d.solver where it
@@ -528,7 +529,7 @@ only to Ghia cannot distinguish "3D bug" from "discretisation error both have",
 which is the whole reason the plot carries two references.
 
 The operator comparison earned its billing immediately: it is what exposed the
-missing quadrature weights (§1.2 note), a bug that every symmetry and
+missing quadrature weights (§1.3), a bug that every symmetry and
 adjointness test in the suite passed straight through, because those hold for
 the *unweighted* operator too. The row correspondence is
 
@@ -559,8 +560,8 @@ against a benchmark. If the 3D code at `k_z` = 0 does not reproduce it, stop.
 
 ### Stage 2 — single non-zero mode, analytic
 
-Manufactured solution with one `k_z`, e.g. `u = û(x,y)·cos(k_z z)`, chosen so
-`∇·u = 0` exactly.
+Manufactured solution with one `k_z`, e.g. $u = \hat{u}(x,y)\cos(k_z z)$, chosen so
+$\nabla\cdot\mathbf{u} = 0$ exactly.
 
 | test | criterion |
 |---|---|
@@ -610,7 +611,7 @@ coefficient table that was right all along.
 
 **Restated gate:** explicit-only order **3.0 ± 0.15** (this is the real test of
 the coefficient table, and it is what the consistency relation
-`α_k + β_k = γ_k + ζ_k` buys), with the mixed scheme expected at **≈ 2**. The
+$\alpha_k + \beta_k = \gamma_k + \zeta_k$ buys), with the mixed scheme expected at **≈ 2**. The
 scheme's argument was never 3rd-order accuracy overall — it is the imaginary-axis
 stability interval that AB2 lacks entirely (§0.4). Nothing about the design
 choice changes; only the acceptance criterion was wrong.
@@ -646,7 +647,7 @@ Re = 180, N = 6, 3×3, Nz = 16, 200 steps, AC on with `κ_p` = `a_mass`: stable 
 decaying at **every** `a_mass` from 120 to **6000**, laminar control and perturbed
 alike. With `dt_CFL` = 0.0665 the CFL side needs only `a_mass` > 90, so the
 feasible window spans a factor ~66 in `dt`. The escalation to semi-implicit
-convection is **not** required. Required `a_mass` = 6/`dt_CFL` grows with
+convection is **not** required. Required $a_\mathrm{mass} = 6/\Delta t_\mathrm{CFL}$ grows with
 resolution (90 / 204 / 466 at N=6,8,10 grids), leaving ~13× headroom at the
 finest grid tested — re-check at the M7 resolution rather than extrapolating.
 
@@ -709,19 +710,19 @@ expensive. Once Stage 4 passes:
    Note `_check_ac_backend` already guards the numpy-only AC path — the 3D code
    needs the same guard, or AC will silently vanish in numba runs.
 3. ~~**Batched-mode efficiency**: measure iterations-per-solve as a function of
-   `k_z`. High-`k_z` modes are better conditioned (the `k_z²` term is
+   `k_z`. High-`k_z` modes are better conditioned (the $k_z^2$ term is
    diagonally dominant), so a *uniform* iteration count across modes is evidence
    the preconditioner is not using `k_z`.~~
 
    **Measured 2026-08-19 and the inference does not hold** — `3D_STATUS.md` §6,
    `scratch/kz_iterations.py`. The `k_z²` term enters scaled by viscosity: at
-   `Re` = 180 and `Nz` = 32, `ν·k_z²` = **1.42** against `a_mass` = **1200**, so
+   `Re` = 180 and `Nz` = 32, $\nu k_z^2$ = **1.42** against `a_mass` = **1200**, so
    it cannot shift the conditioning at all. Measured profile at production
    `a_mass` is flat (0.905× from `k_z` = 0 to `k_z`max) — and an `a_mass` sweep
    confirms the cause: the `k_z` trend appears only as `a_mass` shrinks
    (0.905 → 0.997 → 0.763 → **0.249** at `a_mass` = 1200, 100, 10, 1).
 
-   Competing at production settings would need `k_z ~ √(a_mass/ν)` ≈ **465**; at
+   Competing at production settings would need $k_z \sim \sqrt{a_\mathrm{mass}/\nu}$ ≈ **465**; at
    `Nz` = 128 the largest `k_z` is 64. **A flat profile is therefore expected and
    correct, not evidence of a bad preconditioner**, and tuning the
    preconditioner's `k_z` handling buys nothing. `a_mass`, not `k_z`, is what

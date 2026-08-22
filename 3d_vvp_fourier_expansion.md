@@ -30,7 +30,7 @@ The first-order PDE system required for the Least-Squares functional incorporate
 
 We assume the domain is periodic in the $z$-direction. We expand all 7 variables into 1D Fourier series. For example, $u(x,y,z) = \sum \hat{u}(x,y,k_z) e^{i k_z z}$, where $k_z$ is the discrete wavenumber.
 
-The spatial derivative $\frac{\partial}{\partial z}$ becomes a scalar multiplication by $i k_z$. Substituting this into our physical equations yields a complex-valued, coupled 7-equation system **for each individual wavenumber $k_z$**:
+The spatial derivative $\frac{\partial}{\partial z}$ becomes a scalar multiplication by $i k_z$. Substituting this into our physical equations yields a complex-valued, coupled 8-equation system **for each individual wavenumber $k_z$**:
 
 **1. Continuity:**
 $$ \hat{R}_c = \partial_x \hat{u} + \partial_y \hat{v} + i k_z \hat{w} $$
@@ -40,7 +40,7 @@ $$ \hat{R}_{\omega x} = \partial_y \hat{w} - i k_z \hat{v} - \hat{\omega}_x $$
 $$ \hat{R}_{\omega y} = i k_z \hat{u} - \partial_x \hat{w} - \hat{\omega}_y $$
 $$ \hat{R}_{\omega z} = \partial_x \hat{v} - \partial_y \hat{u} - \hat{\omega}_z $$
 
-**3. Momentum (3 components, with $c = \frac{\alpha_0}{\Delta t}$):**
+**3. Momentum (3 components, with $c = \frac{1}{\beta_k \Delta t}$):**
 $$ \hat{R}_{mx} = c \hat{u} + \partial_x \hat{p} + \nu (\partial_y \hat{\omega}_z - i k_z \hat{\omega}_y) - \hat{f}_x $$
 $$ \hat{R}_{my} = c \hat{v} + \partial_y \hat{p} + \nu (i k_z \hat{\omega}_x - \partial_x \hat{\omega}_z) - \hat{f}_y $$
 $$ \hat{R}_{mz} = c \hat{w} + i k_z \hat{p} + \nu (\partial_x \hat{\omega}_y - \partial_y \hat{\omega}_x) - \hat{f}_z $$

@@ -30,18 +30,18 @@ Chan's stated criterion, `Re = 7500`, perturbation amplitude 1e-4, mesh
 
 That is the F77 solver configuration from `reference/tj_channel_1996.f`.
 **The pseudo-time term was not exercised**, so nothing here validates or
-refutes δτ. The `cg_tol = 1e-14` setting is only reachable because of the
+refutes $\delta\tau$. The `cg_tol = 1e-14` setting is only reachable because of the
 `cg_tol` argument added in `e10b9b0`.
 
 ---
 
 ## 2. Identifying the case — done before any CFD
 
-Chan reports σ = 9.313316 but states neither `ν` nor the channel height for the
+Chan reports $\sigma = 9.313316$ but states neither $\nu$ nor the channel height for the
 Stokes case. That makes the target unfalsifiable unless the geometry is pinned
 down independently, so the eigenproblem was solved first.
 
-The obvious reading — full height 1, `ν = 1`, `α = 1` — gives **σ = 38.61**, a
+The obvious reading — full height 1, $\nu = 1$, $\alpha = 1$ — gives **$\sigma = 38.61$**, a
 factor of 4.15 out. Scanning the natural alternatives:
 
 | α | H | β₁ | σ at ν=1 | ν needed for 9.313316 |
@@ -51,65 +51,59 @@ factor of 4.15 out. Scanning the natural alternatives:
 | **1** | **2** | **2.883356** | **9.313740** | **0.999954** |
 | 2 | 2 | 2.480943 | 10.155079 | 0.917109 |
 
-**The paper's "dimension of one" is the HALF-height.** With `y ∈ [−1, 1]`,
-`α = 1` and `ν = 1` the eigenproblem gives σ = 9.3137399 against Chan's
-9.313316 — and the `ν` required to hit his number is 0.999954, i.e. 1 to within
+**The paper's "dimension of one" is the HALF-height.** With $y \in [-1, 1]$,
+$\alpha = 1$ and $\nu = 1$ the eigenproblem gives $\sigma = 9.3137399$ against Chan's
+9.313316 — and the $\nu$ required to hit his number is 0.999954, i.e. 1 to within
 5e-05. No other combination is close.
 
 Had this not been checked first, the natural "fix" would have been to set
-`ν = 0.2412` and declare a match — a fitted parameter masquerading as a
+$\nu = 0.2412$ and declare a match — a fitted parameter masquerading as a
 validation.
 
 ---
 
 ## 3. The Stokes eigensolver (`scratch/stokes_ic.py`)
 
-**Formulation.** Stokes flow gives `∂(∇²ψ)/∂t = ν∇⁴ψ`. With
-`ψ = f(y)·exp(iαx + st)`:
+**Formulation.** Stokes flow gives $\partial(\nabla^2\psi)/\partial t = \nu\nabla^4\psi$. With
+$\psi = f(y)\,e^{i\alpha x + st}$:
 
-```
-s (D² − α²) f = ν (D² − α²)² f
-```
+$$s\,(D^2 - \alpha^2)\,f = \nu\,(D^2 - \alpha^2)^2 f$$
 
-Setting `g = (D² − α²)f` (the vorticity amplitude) gives `g'' = (α² + s/ν)g`,
-so with `s = −ν(α² + β²)` we get `g'' + β²g = 0` and
+Setting $g = (D^2 - \alpha^2)f$ (the vorticity amplitude) gives $g'' = (\alpha^2 + s/\nu)\,g$,
+so with $s = -\nu(\alpha^2 + \beta^2)$ we get $g'' + \beta^2 g = 0$ and
 
-```
-f(y) = A cosh(αy) + B sinh(αy) + P cos(βy) + Q sin(βy)
-```
+$$f(y) = A\cosh(\alpha y) + B\sinh(\alpha y) + P\cos(\beta y) + Q\sin(\beta y)$$
 
-the cosh/sinh pair being the homogeneous solution of `(D² − α²)f = 0`.
+the cosh/sinh pair being the homogeneous solution of $(D^2 - \alpha^2)f = 0$.
 
-**Boundary conditions.** No-slip means both `u = ψ_y = f'` and `v = −iαψ = −iαf`
-vanish, so `f = f' = 0` at `y = ±1` — four conditions on four constants, giving
-a 4×4 matrix `M(β)` whose determinant must vanish.
+**Boundary conditions.** No-slip means both $u = \psi_y = f'$ and $v = -i\alpha\psi = -i\alpha f$
+vanish, so $f = f' = 0$ at $y = \pm 1$ — four conditions on four constants, giving
+a 4×4 matrix $M(\beta)$ whose determinant must vanish.
 
 **SciPy usage — two distinct roles:**
 
-1. **Root finding: `scipy.optimize.brentq`.** `det M(β)` is evaluated on a
-   40 001-point grid over `β ∈ (0, 20]`, sign changes are bracketed, and each is
+1. **Root finding: `scipy.optimize.brentq`.** $\det M(\beta)$ is evaluated on a
+   40 001-point grid over $\beta \in (0, 20]$, sign changes are bracketed, and each is
    refined with `brentq(..., xtol=1e-15, rtol=1e-15)`. Brent's method is used
    rather than Newton because no analytic derivative of the determinant is
    needed and bracketing guarantees convergence — important because the
    determinant has many closely spaced roots (the higher Stokes modes) and a
    derivative-based method would jump between them.
 
-2. **Null vector: `numpy.linalg.svd`.** At the root, `M(β₁)` is singular by
-   construction, so the coefficient vector `(A,B,P,Q)` is its null vector —
+2. **Null vector: `numpy.linalg.svd`.** At the root, $M(\beta_1)$ is singular by
+   construction, so the coefficient vector $(A,B,P,Q)$ is its null vector —
    taken as the last right-singular vector `Vt[-1]`. SVD is preferred to
    `solve`/`lstsq` here precisely *because* the matrix is singular: the smallest
    singular value doubles as a quality measure. Measured: **1.03e-16**.
 
-**Verification.** `f` and `f'` at both walls come out at `≤ 8.1e-16`, and the
-recovered mode is even in `y` (`B, Q ~ 1e-16`), as expected for the slowest mode.
+**Verification.** $f$ and $f'$ at both walls come out at ≤ 8.1e-16, and the
+recovered mode is even in $y$ ($B, Q \sim$ 1e-16), as expected for the slowest mode.
 
-**Constructing the IC.** Taking `ψ = f(y)cos(αx)` real:
+**Constructing the IC.** Taking $\psi = f(y)\cos(\alpha x)$ real:
 
-```
-u = f'(y) cos(αx)        v = α f(y) sin(αx)        ω = (α²f − f'') cos(αx)
-```
+$$u = f'(y)\cos(\alpha x), \qquad v = \alpha f(y)\sin(\alpha x), \qquad \omega = (\alpha^2 f - f'')\cos(\alpha x)$$
 
-which is divergence-free analytically: `u_x + v_y = −αf' sin + αf' sin = 0`.
+which is divergence-free analytically: $u_x + v_y = -\alpha f'\sin + \alpha f'\sin = 0$.
 
 ---
 
@@ -119,23 +113,21 @@ For Fig. 2, Chan quotes Streett's values: growth rate 0.00223497, phase speed
 0.24989154, at `Re = 7500`. Same principle — verify the reference before running
 any CFD against it.
 
-```
-(U − c)(D² − α²)φ − U''φ = (D² − α²)²φ / (iαRe),    U = 1 − y²,  φ = φ' = 0 at ±1
-```
+$$(U - c)(D^2 - \alpha^2)\varphi - U''\varphi = \frac{(D^2 - \alpha^2)^2 \varphi}{i\alpha \mathrm{Re}}, \qquad U = 1 - y^2, \qquad \varphi = \varphi' = 0 \ \text{at} \ y = \pm 1$$
 
 **Discretisation.** Chebyshev collocation on Gauss–Lobatto points
-`y_j = cos(πj/N)`, with the differentiation matrix built by the standard
-Trefethen construction (off-diagonal `c_i/c_j/(y_i−y_j)`, diagonal by negative
-row sum). `D²` and `D⁴` follow by matrix powers.
+$y_j = \cos(\pi j/N)$, with the differentiation matrix built by the standard
+Trefethen construction (off-diagonal $c_i/c_j/(y_i - y_j)$, diagonal by negative
+row sum). $D^2$ and $D^4$ follow by matrix powers.
 
 **SciPy usage: `scipy.linalg.eig(L, M)`** — the *generalised* eigenproblem, not
-the standard one. This matters: writing the problem as `Lφ = c·Mφ` with
-`M = D² − α²I` keeps `c` (the complex phase speed) as the eigenvalue directly,
+the standard one. This matters: writing the problem as $L\varphi = c\,M\varphi$ with
+$M = D^2 - \alpha^2 I$ keeps $c$ (the complex phase speed) as the eigenvalue directly,
 and lets the boundary conditions be imposed by **row replacement** — rows 0, 1,
-N−1, N of `L` are set to the identity/derivative rows and the corresponding rows
-of `M` to zero. Those rows produce infinite eigenvalues, which are filtered by
-`isfinite` plus a `|c| < 10` physicality cut. Using a standard eigensolver would
-require inverting `M`, which is singular after the BC rows are imposed.
+N−1, N of $L$ are set to the identity/derivative rows and the corresponding rows
+of $M$ to zero. Those rows produce infinite eigenvalues, which are filtered by
+`isfinite` plus a $|c| < 10$ physicality cut. Using a standard eigensolver would
+require inverting $M$, which is singular after the BC rows are imposed.
 
 **Verification against Chan's published values:**
 
@@ -148,13 +140,13 @@ require inverting `M`, which is singular after the BC rows are imposed.
 | **Chan / Streett** | **0.24989154** | **0.00223497** |
 | relative | **8.9e-10** | **1.0e-05** |
 
-Converged by N = 80; `|φ(±1)| = 0` to machine zero.
+Converged by N = 80; $|\varphi(\pm 1)| = 0$ to machine zero.
 
 ---
 
 ## 5. Figure 1 result — Stokes decay
 
-Mesh: 2 elements streamwise over `[0, 2π]` (periodic), 4 wall-to-wall, order 6,
+Mesh: 2 elements streamwise over $[0, 2\pi]$ (periodic), 4 wall-to-wall, order 6,
 no-slip walls, pressure pinned at one interior node, IC amplitude 1e-3.
 
 | `dt` | amp | steps | σ | err vs Chan | E(T)/E₀ | rms div |
@@ -166,7 +158,7 @@ no-slip walls, pressure pinned at one interior node, IC amplitude 1e-3.
 | **0.000625** | 1e-3 | 160 | **9.313955** | **0.007%** | 0.1552 | 2.00e-09 |
 | **0.000625** | 5e-4 | 160 | **9.313786** | **0.005%** | 0.1552 | 1.00e-09 |
 
-**At Chan's finest time step: σ = 9.31379 against his 9.313316 — 0.005%, versus
+**At Chan's finest time step: $\sigma = 9.31379$ against his 9.313316 — 0.005%, versus
 his reported 0.0045%.**
 
 ![Chan Figure 1 reproduced, with p-refinement](figs/chan_fig1_pref.png)
@@ -177,8 +169,8 @@ p-refinement section below.*
 
 Three supporting checks:
 
-- **The Stokes limit is real.** Halving the IC amplitude moves σ in the fifth
-  decimal, so `u·∇u` is genuinely negligible — we are measuring Stokes decay,
+- **The Stokes limit is real.** Halving the IC amplitude moves $\sigma$ in the fifth
+  decimal, so $u\cdot\nabla u$ is genuinely negligible — we are measuring Stokes decay,
   not a weakly nonlinear rate.
 - **Periodicity works.** `rms div` of 1e-09 to 7e-09 is machine-level
   incompressibility across the seam. A failed wrap would leave the domain open
@@ -190,11 +182,11 @@ Three supporting checks:
 
 Chan's right-hand panel spans a far wider `dt` range than the three values used
 for the left panel. Reproduced with `dt` from 0.1 down to 6.25e-4, at four
-polynomial orders. The window adapts per `dt`: sigma = 9.31 means
-`E ~ exp(-18.6 t)`, so a large `dt` needs a short integration to avoid underflow
+polynomial orders. The window adapts per `dt`: $\sigma = 9.31$ means
+$E \sim e^{-18.6\,t}$, so a large `dt` needs a short integration to avoid underflow
 while still leaving enough samples for a slope fit.
 
-Relative error in sigma against the analytic 9.3137399:
+Relative error in $\sigma$ against the analytic 9.3137399:
 
 | `dt` | N=6 | N=8 | N=10 | N=14 |
 |---|---|---|---|---|
@@ -240,22 +232,20 @@ linear-solve tolerance or the slope-fit window — not noise.
 
 ## 6. Figure 2 — Orr-Sommerfeld growth rate
 
-Mesh: 1 element streamwise over `[0, 2pi]` (periodic), 3 wall-to-wall, `Re = 7500`,
+Mesh: 1 element streamwise over $[0, 2\pi]$ (periodic), 3 wall-to-wall, `Re = 7500`,
 `dt = 0.1`, perturbation amplitude 1e-4, integrated to `t = 100`.
 
 ### Driving the mean flow with a body force
 
 **Any streamwise-periodic channel needs one.** A periodic pressure field cannot
-carry a mean gradient: `p(0) = p(L)` forces the net `dp/dx` around the domain to
-zero, so the gradient that sustains `U = 1 - y^2` has nowhere to live. It must
+carry a mean gradient: $p(0) = p(L)$ forces the net $dp/dx$ around the domain to
+zero, so the gradient that sustains $U = 1 - y^2$ has nowhere to live. It must
 be supplied as a body force instead.
 
-For plane Poiseuille the steady balance is `0 = -dp/dx + nu*U''` with
-`U'' = -2`, so the required force is
+For plane Poiseuille the steady balance is $0 = -dp/dx + \nu U''$ with
+$U'' = -2$, so the required force is
 
-```
-f_x = -dp/dx = 2*nu            (2*pr in the F77's notation)
-```
+$$f_x = -\frac{dp}{dx} = 2\nu \qquad (\texttt{2*pr} \ \text{in the F77's notation})$$
 
 This is exactly the `2.0*pr*dt` term in `reference/tj_channel_1996.f`'s `rhs`,
 which `PSEUDO_TIME_DESIGN.md` §1 originally called "irrelevant here… belongs to
@@ -297,7 +287,7 @@ even N=10 reaches 0.136%.
 
 It also fixes a discrepancy in *character*, which is what makes the
 interpretation convincing rather than merely better-fitting. With the coarser
-wall elements, N=8 **over**-predicted the growth (`ln(E/E0) = 2.64` against the
+wall elements, N=8 **over**-predicted the growth ($\ln(E/E_0) = 2.64$ against the
 expected 0.447) whereas Chan's figure shows 8th order falling **below** linear
 theory. Binning the local slope showed why:
 
@@ -310,8 +300,8 @@ N=8, coarse wall elements, local sigma per 10-unit bin:
 ```
 
 The under-resolved critical layer admitted a spurious unstable mode that
-overtook the physical one at `t ~ 20`. Halving the wall-element thickness
-removes it entirely, and N=8 then under-predicts at `ln(E/E0) = 0.360`, as
+overtook the physical one at $t \sim 20$. Halving the wall-element thickness
+removes it entirely, and N=8 then under-predicts at $\ln(E/E_0) = 0.360$, as
 Chan's figure does.
 
 ![Chan Figure 2](figs/chan_fig2.png)
@@ -348,8 +338,6 @@ meaningless without stating the window.** The headline table above uses
 
 ---
 
----
-
 ## 7. Status and caveats
 
 - **Figure 1 (Stokes) is reproduced** to the digit Chan quotes, and the method
@@ -365,13 +353,13 @@ meaningless without stating the window.** The headline table above uses
   Stokes "dimension of one" is the half-height, and Figure 2's "30 percent of
   the channel width" is 30% of the half-width. Assume the half-channel reading
   for anything else taken from this paper.
-- **The figures above are all `dtau=None`.** δτ has since been swept across both
-  cases (κ = 0 … 2.5 on Stokes, 0 … 1 on Orr–Sommerfeld); see
-  [PSEUDO_TIME_RESULTS.md §7](./PSEUDO_TIME_RESULTS.md). Headline: δτ always
+- **The figures above are all `dtau=None`.** $\delta\tau$ has since been swept across both
+  cases ($\kappa = 0 \ldots 2.5$ on Stokes, $0 \ldots 1$ on Orr–Sommerfeld); see
+  [PSEUDO_TIME_RESULTS.md §7](./PSEUDO_TIME_RESULTS.md). Headline: $\delta\tau$ always
   slows the dynamics, and a growth rate is ~100× more sensitive to it than a
-  decay rate — Orr–Sommerfeld is 22× degraded at κ = 0.01, where Stokes is still
+  decay rate — Orr–Sommerfeld is 22× degraded at $\kappa = 0.01$, where Stokes is still
   untouched. **Leave `dtau=None` when measuring a rate.**
-- **σ is compared against two references.** Our eigenproblem gives 9.3137399;
+- **$\sigma$ is compared against two references.** Our eigenproblem gives 9.3137399;
   Chan reports 9.313316, itself 4.6e-05 away. The `dt=6.25e-4` run differs from
   the *analytic* value by 5e-06, i.e. the solver is closer to the true mode than
   the published figure is.

@@ -40,7 +40,7 @@ matvec. Reproduction scripts are named inline.
 | `PMG2` | `2*deg + coarse_deg + 2` | two-level V-cycle, p-coarsening |
 
 `Chebyshev4` needs only an upper spectral bound, obtained by 20 power iterations
-on `D^-1 A` with a 1.3 safety factor. Measured `lambda_max(D^-1 A) = 3.2816` on
+on $D^{-1}A$ with a 1.3 safety factor. Measured $\lambda_{\max}(D^{-1}A) = 3.2816$ on
 the Chan mesh. The weight table is transcribed from `solver_pmg2.f90`'s `beta4`.
 
 `pcg_solve` gained an optional `precond=` callable; the default path is
@@ -231,11 +231,9 @@ su(ij,4) = ( om(ij,ne) + dudy(ij) - dvdx(ij) )*facem ! vorticity: no dt
 At steady state the BDF mass terms cancel exactly (BDF2: 1.5 - 2 + 0.5 = 0), so
 the least-squares functional becomes
 
-```
-J = |dt*N(u)|^2  +  |div u|^2  +  |om + curl u|^2
-```
+$$J = \|\Delta t\,N(u)\|^2 \;+\; \|\nabla\cdot u\|^2 \;+\; \|\omega + \nabla\times u\|^2$$
 
-The momentum equations are weighted by **dt^2** against the constraints. The
+The momentum equations are weighted by **$\Delta t^2$** against the constraints. The
 converged state is a dt-dependent compromise, not a fixed point that dt merely
 approaches. Small dt under-weights momentum and lets the constraints dominate.
 
@@ -258,7 +256,7 @@ Monotone in dt. Chan's published bubble corresponds to **dt ~ 2-5**.
 An earlier version of this document concluded "for steady-state work, prefer
 LARGE dt". **That was one-sided and is corrected here.** Large dt weights
 momentum more heavily, which is why the separation bubble improves — but by the
-same `dt^2` mechanism it weights continuity and the vorticity definition *less*,
+same $\Delta t^2$ mechanism it weights continuity and the vorticity definition *less*,
 and mass conservation degrades badly:
 
 | dt | rms div | max\|div\| | Qout/Qin | mass lost |

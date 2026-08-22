@@ -12,24 +12,28 @@ investigation and the relative-guard CG).
 
 ## 1. The case, exactly as the paper states it
 
-    u = 1 - e^{lam x} cos(2 pi y)
-    v = lam e^{lam x} sin(2 pi y) / (2 pi)
-    p = (1 - e^{2 lam x}) / 2
-    lam = Re/2 - sqrt(Re^2/4 + 4 pi^2),   Re = 40   ->   lam = -0.9637405442
+$$
+\begin{aligned}
+u &= 1 - e^{\lambda x} \cos(2\pi y) \\
+v &= \frac{\lambda}{2\pi}\, e^{\lambda x} \sin(2\pi y) \\
+p &= \tfrac{1}{2}\big(1 - e^{2\lambda x}\big) \\
+\lambda &= \frac{\mathrm{Re}}{2} - \sqrt{\frac{\mathrm{Re}^2}{4} + 4\pi^2}, \qquad \mathrm{Re} = 40 \;\Rightarrow\; \lambda = -0.9637405442
+\end{aligned}
+$$
 
-- Domain **[-0.5, 1.0] x [-0.5, 0.5]** (length 1.5, not the 2.0 in the repo's
+- Domain **$[-0.5, 1.0] \times [-0.5, 0.5]$** (length 1.5, not the 2.0 in the repo's
   older `test_kovasznay`).
 - **`dt` and `dtau` both 1e30** — pure steady Newton, no time term and no
   pseudo-time. Maps onto `w_mass = 0, w_mom = 1`, which gives `a_mass = 0`.
 - **CG with a Jacobi preconditioner** — so no p-MG here, matching the paper.
 - Velocity Dirichlet from the exact solution on all four sides; pressure pinned.
-- `eps` is the **r.m.s.** error, absolute (u is O(1) and Chan's eps_u = 6.44e-2
+- `eps` is the **r.m.s.** error, absolute ($u$ is $O(1)$ and Chan's eps_u = 6.44e-2
   at N=4). Ours is taken over **unique global nodes** — element-local arrays
   duplicate shared interfaces and counting them twice double-weights the seams.
 
 `omega` is derived from the analytic field rather than assumed:
 
-    om = v_x - u_y = e^{lam x} sin(2 pi y) (lam^2/(2 pi) - 2 pi)
+$$\omega = v_x - u_y = e^{\lambda x} \sin(2\pi y) \left( \frac{\lambda^2}{2\pi} - 2\pi \right)$$
 
 ---
 
@@ -68,9 +72,9 @@ the work is one `apply_A` = `apply_L` then `apply_LT`, plus CG vector ops:
 | pointwise | `apply_L` 33/node (su0 14, su1 14, su2 2, su3 3) + `apply_LT` 29/node = **62** | |
 | CG vector ops | 16/dof x 4 components = **64**/node | `solver.py` |
 
-    flops per CG iteration = nelem * (40 n^3 + 126 n^2),   n = N+1
+$$\text{flops per CG iteration} = n_{\mathrm{elem}} \left( 40 n^3 + 126 n^2 \right), \qquad n = N+1$$
 
-The n^2 terms are not negligible: at N=14 the derivative term is 83% of the
+The $n^2$ terms are not negligible: at N=14 the derivative term is 83% of the
 work, but at **N=2 it is only 49%** — dropping the pointwise and vector terms
 would have understated the whole h-refinement table by half.
 
@@ -165,7 +169,7 @@ N = 2 and N = 4 over four meshes each.
 
 ### (a) h-refinement is algebraic, and our rate matches theory where his does not
 
-Element size is `h = sqrt(A/N_elem)` — `L_x/N_x` is wrong here because the
+Element size is $h = \sqrt{A/N_{\mathrm{elem}}}$ — $L_x/N_x$ is wrong here because the
 meshes do not scale `N_y` with `N_x` (4×2 → 8×5 → 15×10).
 
 | curve | fitted slope | theory (N+1) |
@@ -194,7 +198,7 @@ guard curve is straight over ten orders of magnitude:
 | absolute (shipped) | 1.439e-01 | 3.724e-03 | 4.694e-05 | 2.866e-07 | 1.231e-09 | **1.369e-10** | **1.663e-10** |
 
 Error falls by 38×, 79×, 164×, 232×, 312× per step in N — an *accelerating*
-ratio, which is exponential, not algebraic. The fit is `eps_u ~ e^{-2.64 N}`.
+ratio, which is exponential, not algebraic. The fit is $\varepsilon_u \sim e^{-2.64 N}$.
 
 The shipped guard tracks the true curve to N = 10 and then **peels off at
 N = 12** and flattens. That is the §5 defect, and this is the cleanest picture
@@ -259,7 +263,7 @@ if abs(alpha_denom) < 1e-20:   return x, i + 1      # ABSOLUTE
 if abs(rho_prev)    < 1e-20:   return x, i + 1      # ABSOLUTE
 ```
 
-`A = L^T L` **squares the scale**, so `p.Ap ~ ||r||^2`. Once `||b|| ~ 1e-10`
+$A = L^\mathsf{T} L$ **squares the scale**, so $p^\mathsf{T}\! A p \sim \|r\|^2$. Once $\|b\| \sim 10^{-10}$
 the guard trips on a perfectly healthy iteration. Re-running with guards made
 relative to their operands (`|alpha_denom| <= 1e-15 |p| |Ap|`):
 
@@ -321,7 +325,7 @@ not be reported as though the discrepancy is understood.
 
 - **Both tables replicated** on the paper's own geometry, meshes and settings.
 - **Spectral convergence demonstrated** over ten orders of magnitude,
-  `eps_u ~ e^{-2.64 N}`, down to 1.26e-14 at N = 14 (§4b).
+  $\varepsilon_u \sim e^{-2.64 N}$, down to 1.26e-14 at N = 14 (§4b).
 - **h-refinement matches theory** (slope 3.28 vs 3 at N=2) where Chan's does
   not (2.57) — independent support for the §6 hypothesis (§4a).
 - **p-refinement beats h-refinement by 5-7 orders of magnitude at equal cost**

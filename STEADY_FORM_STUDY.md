@@ -47,7 +47,7 @@ Reproduce: `scratch/bfs_steady.py` (preconditioner/tolerance matrix),
    understated** — 1875× loose becomes **212,061×** tight (§6).
 
 7. **The pressure pin never sets a pressure level.** It is a mask on the
-   *increment* (`δp = 0` at one node), so the level is inherited from the
+   *increment* ($\delta p = 0$ at one node), so the level is inherited from the
    initial condition. Removing the pin entirely costs **one** extra CG
    iteration and changes nothing — CG on a consistent singular system is
    well-behaved (§7).
@@ -393,7 +393,7 @@ used the default absolute CG tolerance `tol = 1e-6`, and left the headline
 figures marked as unchecked. They have now been re-run with both floors lowered
 (`cgsfac=1e-8, tol=1e-10`):
 
-| dt | loose: prof err | tight: prof err | Δp tight |
+| dt | loose: prof err | tight: prof err | $\Delta p$ tight |
 |---|---|---|---|
 | 0.05 | 9.852e-01 | 9.855e-01 | 2.5049 (analytic 1.2) |
 | 0.1 | 9.370e-01 | 9.359e-01 | 2.1803 |
@@ -408,7 +408,7 @@ figures marked as unchecked. They have now been re-run with both floors lowered
 
 **The dt effect is real and 113× larger than published.** Tightening the solve
 improved dt=1 by 113× (5.26e-04 → 4.65e-06) and left dt=0.05 untouched at 98.5%
-error, because there the pressure block of `LᵀL` is near-singular and no amount
+error, because there the pressure block of $L^\top L$ is near-singular and no amount
 of linear-solve accuracy helps. The caveat banners on
 `POISEUILLE_DT_STUDY.md` and `WEIGHT_VS_TIMESTEP_STUDY.md` should be read as
 "the effect is larger than reported", not "the effect may be an artifact".
@@ -470,8 +470,8 @@ The constant-pressure mode is exactly null — adding 5 to `p` everywhere change
 on leaves the shift in place** (`p` at the pin node stays 5.0).
 
 [lssem.py:180](./lssem2d/lssem.py) is `mask_local[e_p, i_p, j_p, 2] = 0.0` — the
-pin is a mask on the **increment**. It forces `δp = 0` at that node, which
-removes the null direction and makes `LᵀL` nonsingular; it never assigns a
+pin is a mask on the **increment**. It forces $\delta p = 0$ at that node, which
+removes the null direction and makes $L^\top L$ nonsingular; it never assigns a
 value. **The pressure level is inherited from the initial condition and the pin
 only stops it moving.** Every "pinned" result in this project has whatever level
 its IC had; `p = 0` at the pin node is a property of the initial field.
@@ -555,7 +555,7 @@ The small cross-stream pressure variation was challenged and checked:
 So `p` is **not** constant across that plane — `p_y` reaches 0.081 — but the
 integrated variation is small because the flow is quasi-parallel there
 (`max|v| = 0.102` against `max|u| = 1.270`). Cross-stream pressure scales with
-the transverse dynamic head `v² ≈ 0.010`, not the streamwise one. For contrast,
+the transverse dynamic head $v^2 \approx 0.010$, not the streamwise one. For contrast,
 the long domain's own outflow plane at x = 8.5 has a spread of 0.267 — 10× the
 interior value — so outflow planes *do* distort pressure; the effect is local.
 
@@ -654,8 +654,8 @@ artifact. **That 0.227 is the honest measure of what truncation costs.**
 > `step_bdf` now picks the default from `max_newton`, so both regimes are right
 > without the caller choosing. An explicit `ls_memory` still overrides it.
 >
-> This also corrects a claim in `PSEUDO_TIME_RESULTS.md` §5: the `nsub = 5`
-> divergences recorded there were **undamped Newton**, not a property of δτ or of
+> This also corrects a claim in `PSEUDO_TIME_RESULTS.md` §6b: the `nsub = 5`
+> divergences recorded there were **undamped Newton**, not a property of $\delta\tau$ or of
 > sub-iteration. More sub-iterations do improve convergence once the step length
 > is controlled.
 - **Budget 50–100 Newton iterations on the short domain, not 60.** Convergence

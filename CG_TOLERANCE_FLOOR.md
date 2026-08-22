@@ -50,7 +50,7 @@ J(exact)     = 5.94e-27      <- machine zero
 ```
 
 **18 orders of magnitude.** The minimum *is* the exact solution (Poiseuille has
-identically zero residual: `p_x = -0.12` and `nu*om_y = +0.12` cancel exactly),
+identically zero residual: $p_x = -0.12$ and $\nu\,\omega_y = +0.12$ cancel exactly),
 so this was a solver failure, not a formulation one. The error was also entirely
 localised on the free outflow plane — every field's maximum deviation at x=10.00
 — the soft-mode signature measured elsewhere at ~8300x softer than generic.
@@ -89,7 +89,7 @@ extra V-cycle arithmetic is not buying anything on a well-conditioned problem.)
 dt=0.5 still gives 7.6e-02 against dt=1's 1.7e-04 — a **440x gap**. That is
 genuine least-squares weighting error. The dt=0.05 catastrophe (98% velocity
 error) is likewise barely tolerance-sensitive, because there the pressure block
-of `L^T L` is near-singular — an unconverged solve is not the problem.
+of $L^\top L$ is near-singular — an unconverged solve is not the problem.
 
 **The claim that the steady form is ~20x less accurate was WRONG.** It was
 entirely tolerance-limited. At matched tolerance the steady form gives 2.90e-04

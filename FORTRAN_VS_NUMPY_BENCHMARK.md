@@ -125,7 +125,7 @@ OpenBLAS stays serial regardless.
 **The actual cause — confirmed.** `nm sem_2d_f90 | grep -ci dgemm` returned **0** on the
 as-built binary. Fortran looped element-by-element into gfortran's *internal* `matmul`
 on small `(p+1)×(p+1)` blocks, while `apply_K` in NumPy batches all `E²` elements into a
-single call that lands in OpenBLAS. This is why the gap tracked `p`: it is the O(p³)
+single call that lands in OpenBLAS. This is why the gap tracked `p`: it is the $O(p^3)$
 tensor contraction. Enabling `-fexternal-blas` (count becomes 1) reverses the result.
 
 ---
@@ -232,7 +232,7 @@ large enough to amortize dispatch.** Remove that condition and it fails.
 
 ### Counterexample from this same project
 
-The VVP cavity solve (`lssem2d`, Re=100, matched graded mesh, analytic `dge`) measured:
+The VVP cavity solve (`lssem2d`, $Re=100$, matched graded mesh, analytic `dge`) measured:
 
 | | per time step |
 | :--- | ---: |
@@ -261,7 +261,7 @@ with the VVP case and should not be quoted from this document.
   accounts for roughly a third of the gain (at `p=15`, E=10×10: 56.79 → 37.52 ms from
   `-mcpu=native` alone, then → 17.15 ms with BLAS).
 - **Both codes waste ~half of `apply_K`.** `M_1dx` and `M_1dy` are diagonal but stored
-  and multiplied as full matrices, making those two contractions O(p³) where O(p²) would
+  and multiplied as full matrices, making those two contractions $O(p^3)$ where $O(p^2)$ would
   do. This penalizes both languages equally, so the comparison stands — but roughly half
   the flops are avoidable on either side, and this is the single largest remaining
   optimization for both.

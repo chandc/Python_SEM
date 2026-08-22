@@ -19,7 +19,7 @@ outlet, not the free outflow that the Fortran study is about, so it currently ca
 reproduce any of the reference results.
 
 Test suite: **30 pass, 2 fail** (both failures are stale/environmental, not real bugs —
-see §5.7).
+see §5, issue 9).
 
 ---
 
@@ -145,7 +145,7 @@ substitute.
 and can exit without a linear solve; Python tests `max|dU| < tol` *after* updating, so it
 always performs at least one solve per step. The Python criterion is arguably better — a
 residual-only test is what produced the false-convergence trap documented in
-`OUTFLOW_BC_STUDY.md` §10.5 — but it is not the same code.
+`F90_SEM/pmg_clean/OUTFLOW_BC_STUDY.md` §10.5 — but it is not the same code.
 
 ### 2.3 Practical consequence
 

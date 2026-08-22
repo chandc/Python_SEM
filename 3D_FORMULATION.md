@@ -109,7 +109,7 @@ $\boldsymbol{\omega} - \nabla\times\mathbf{u}$.
 **$\kappa_p$ (artificial compressibility)** is a numerical term on the continuity
 row, not physics. It is **off ($\kappa_p = 0$) in the production recipe** — with
 it on, the row solves $\nabla\cdot\mathbf{u} = -\kappa_p\,(p - p^{\text{prev}})$,
-which costs 5–7 orders of magnitude of accuracy (3D_STATUS §7E).
+which costs 5–7 orders of magnitude of accuracy (3D_STATUS §7B).
 
 ### Split-real representation
 
@@ -127,7 +127,7 @@ $$
 
 whose transpose corresponds to the complex **conjugate** — so in
 $\mathcal{L}_0^{T}$, $\mathrm{i}k \to -\mathrm{i}k$ while real $c,\nu$ are
-unchanged. (Both column norms of that block equal $|\alpha|^2$, which is why the
+unchanged. (Both squared column norms of that block equal $|\alpha|^2$, which is why the
 real and imaginary halves of a field share one diagonal entry.)
 
 ## 5. Least-squares discretisation

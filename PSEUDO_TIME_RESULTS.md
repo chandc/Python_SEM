@@ -1,4 +1,4 @@
-# The pseudo-time term (δτ): implementation and first results
+# The pseudo-time term ($\delta\tau$): implementation and first results
 
 Implemented 2026-08-09, following [PSEUDO_TIME_DESIGN.md](./PSEUDO_TIME_DESIGN.md).
 The term comes from the 1996 F77 source (`reference/tj_channel_1996.f`), which
@@ -15,22 +15,22 @@ verified; its usefulness is not yet established.
 ## 1. What was implemented
 
 Smaller than the design note anticipated. The term is algebraically just
-`a_mass → a_mass + κ` with `κ = a_flux/dtau`, in `L`, `Lᵀ` **and** the Jacobi
+$a_\mathrm{mass} \to a_\mathrm{mass} + \kappa$ with $\kappa = a_\mathrm{flux}/\Delta\tau$, in `L`, `Lᵀ` **and** the Jacobi
 diagonal — so the fused numba kernels needed no edit, only the coefficient
 handed to them.
 
-- `lssem.ls_pseudo(state)` — returns κ, or 0.0 when `dtau is None` (the default,
+- `lssem.ls_pseudo(state)` — returns $\kappa$, or 0.0 when `dtau is None` (the default,
   so nothing changes silently).
 - `SolverState(..., dtau=None)`.
 - `_apply_L_numpy`, `_apply_LT_numpy`, `kernels_numba.apply_L/apply_LT`,
-  `solver.compute_jacobi` — each adds κ to the mass coefficient.
-- `solver._drop_pseudo(state, r, U)` — removes κ·U from a **residual**.
+  `solver.compute_jacobi` — each adds $\kappa$ to the mass coefficient.
+- `solver._drop_pseudo(state, r, U)` — removes $\kappa U$ from a **residual**.
 
-That last one is the whole contract. `apply_L` carries κ·u unconditionally
+That last one is the whole contract. `apply_L` carries $\kappa u$ unconditionally
 because it is also the operator applied to the increment inside `apply_A`, where
-the κ·dU term is the point. But at the two places a residual is formed
+the $\kappa\,dU$ term is the point. But at the two places a residual is formed
 (`newton_step`, `_ls_merit`) it must come back out, mirroring the Fortran's
-`dt*(fu − u) ≡ 0`. Without it, δτ would change the equations being solved
+`dt*(fu − u) ≡ 0`. Without it, $\delta\tau$ would change the equations being solved
 instead of only the Jacobian.
 
 ---
@@ -39,17 +39,17 @@ instead of only the Jacobian.
 
 | check | result |
 |---|---|
-| `dtau=None` gives κ=0 for legacy, `w_mom`/`w_mass`, and steady form | 0.0 |
-| residual invariant: `max|r(dtau) − r(None)|` | **5.55e-17** (roundoff) |
+| `dtau=None` gives $\kappa$=0 for legacy, `w_mom`/`w_mass`, and steady form | 0.0 |
+| residual invariant: `max\|r(dtau) − r(None)\|` | **5.55e-17** (roundoff) |
 | …with the cancellation disabled (control) | **3.16e-02** — 5.7e14× larger, so the check bites |
-| operator gains exactly κ: `max|dL − κ·u·wq|` | 1.7e-16 |
-| transpose: `max|dLᵀ − κ·su|` | 2.5e-14 |
+| operator gains exactly $\kappa$: `max\|dL − κ·u·wq\|` | 1.7e-16 |
+| transpose: `max\|dLᵀ − κ·su\|` | 2.5e-14 |
 | Jacobi diagonal vs true diagonal of `A` | 2.8e-16 relative |
 
 Tests **48 → 66**, passing on both backends. New `test_pseudo_time.py` pins the
 operator/residual contract and includes `test_residual_check_is_live`, which
 asserts the *uncancelled* residual does move — otherwise the invariance test
-would pass vacuously. `test_backend_parity.py` gained δτ cases so the fused
+would pass vacuously. `test_backend_parity.py` gained $\delta\tau$ cases so the fused
 kernels cannot silently drift to the unaugmented operator.
 
 The residual agreement is **roundoff, not bit-exact**: `apply_L` computes
@@ -64,14 +64,14 @@ The residual agreement is **roundoff, not bit-exact**: `apply_L` computes
 
 ---
 
-## 3. Poiseuille: the O(κ·R) prediction, confirmed
+## 3. Poiseuille: the $O(\kappa R)$ prediction, confirmed
 
-Design note §3 predicts the converged state moves by `O(κ·R)` — free where the
+Design note §3 predicts the converged state moves by $O(\kappa R)$ — free where the
 least-squares residual vanishes, not free otherwise. Poiseuille Re=100 tests
 this because its exact solution is exactly representable. Steady form
-(`w_mass=0, w_mom=1`), swept at matched κ:
+(`w_mass=0, w_mom=1`), swept at matched $\kappa$:
 
-| κ | `dtau` | iters | J | profile error | Δp | Δp error |
+| $\kappa$ | `dtau` | iters | J | profile error | $\Delta p$ | $\Delta p$ error |
 |---|---|---|---|---|---|---|
 | 0 | ∞ | 9 | 8.175e-18 | 2.560e-06 | 1.200000 | 4.95e-09 |
 | 0.01 | 100 | 10 | 4.471e-18 | 1.347e-06 | 1.200000 | 1.90e-07 |
@@ -80,41 +80,41 @@ this because its exact solution is exactly representable. Steady form
 | 10.0 | 0.1 | 600 | — | **cap** | — | — |
 
 With the residual at `J ~ 1e-16–1e-18` the profile error is **flat across three
-decades of κ** (1.3e-06 … 2.8e-06) and not even monotone — scatter, not a κ
-effect. Δp holds six significant figures.
+decades of $\kappa$** (1.3e-06 … 2.8e-06) and not even monotone — scatter, not a $\kappa$
+effect. $\Delta p$ holds six significant figures.
 
 The same sweep at the **default** `tol = 1e-6` tells the other half:
 
-| | J (residual) | profile error, κ=0 → κ=1 |
+| | J (residual) | profile error, $\kappa$=0 → $\kappa$=1 |
 |---|---|---|
 | loose | 3.4e-09 | 8.46e-03 → 5.10e-02, **6× worse** |
 | tight | ~1e-17 | 2.56e-06 → 2.13e-06, **flat** |
 
-Shrink `R` by seven decades and the perturbation vanishes with it. That is a
+Shrink $R$ by seven decades and the perturbation vanishes with it. That is a
 clean two-regime confirmation of §3 — **and a warning**: at the default
-tolerance floor, `R` is *not* small, so δτ does move the answer there.
+tolerance floor, $R$ is *not* small, so $\delta\tau$ does move the answer there.
 
 > The loose run was my first attempt at this test and I initially read it as
-> falsifying the theory. It was contaminated: `prof err = 8.46e-03` at κ=0 is
+> falsifying the theory. It was contaminated: `prof err = 8.46e-03` at $\kappa$=0 is
 > exactly the tolerance-limited value in `CG_TOLERANCE_FLOOR.md` §3.
 
-Cost rises with κ: 9 → 10 → 14 → 40 iterations, and κ=10 does not converge.
+Cost rises with $\kappa$: 9 → 10 → 14 → 40 iterations, and $\kappa$=10 does not converge.
 
 ---
 
-## 4. BFS case A — where δτ works
+## 4. BFS case A — where $\delta\tau$ works
 
 Short domain, `w_mom = 0.1`, seeded from the long-domain solution interpolated
-onto the short grid (`STEADY_FORM_STUDY.md` §8). Undamped and without δτ this
+onto the short grid (`STEADY_FORM_STUDY.md` §8). Undamped and without $\delta\tau$ this
 **diverges at Newton step 2**, `max|u|` 1.51 → 115.
 
-| `dtau` | κ | status | iters | CG | wall | J | max\|u\| | exit p spread | exit rev |
+| `dtau` | $\kappa$ | status | iters | CG | wall | J | max\|u\| | exit p spread | exit rev |
 |---|---|---|---|---|---|---|---|---|---|
 | — | 0 | **DIVERGED** | 2 | 6,589 | 45 s | — | 115.07 | — | — |
 | 10 | 0.01 | **DIVERGED** | 2 | 6,206 | 42 s | — | 118.13 | — | — |
 | **1** | **0.1** | **conv** | **10** | **1,288** | **9 s** | 3.8460e-05 | **1.511** | **0.027** | **24.4%** |
 | 0.1 | 1.0 | cap | 80 | 5,066 | 37 s | 4.6853e-05 | 1.502 | 0.029 | 25.0% |
-| *line search, no δτ* | — | *conv* | *143* | *1,113,973* | *7,435 s* | *3.7326e-05* | *1.513* | *0.227* | *34.1%* |
+| *line search, no $\delta\tau$* | — | *conv* | *143* | *1,113,973* | *7,435 s* | *3.7326e-05* | *1.513* | *0.227* | *34.1%* |
 | *the target (IC)* | — | — | — | — | — | *4.4769e-05* | *1.513* | *0.024* | *24.4%* |
 
 ![case A](figs/dtau_caseA.png)
@@ -124,7 +124,7 @@ holds the solution closer: exit pressure spread **0.027** against the target's
 0.024, where the line search drifted to 0.227. Exit reversal is **24.4%**,
 identical to the target's 24.4%, against the line search's 34.1%.
 
-**And δτ has the highest `J` of the three states** — 3.8460e-05 vs 3.7326e-05
+**And $\delta\tau$ has the highest `J` of the three states** — 3.8460e-05 vs 3.7326e-05
 (line search) vs 3.6916e-05 (the artifact). The state closest to the physically
 correct field is the *worst* minimiser of the functional. Third independent
 instance of that pattern in this project; on this problem `J` ranks solutions in
@@ -137,7 +137,7 @@ the opposite order to physical quality.
 Short domain, `w_mom = 1.0`, from the converged no-pin field. Undamped this caps
 at 80 iterations; the line search converges it in 53.
 
-| `dtau` | κ | status | iters | CG | J | max\|u\| | exit p spread |
+| `dtau` | $\kappa$ | status | iters | CG | J | max\|u\| | exit p spread |
 |---|---|---|---|---|---|---|---|
 | — | 0 | cap | 80 | 55,544 | 1.1229e-03 | 2.323 | 3.120 |
 | 100 | 0.01 | cap | 80 | 55,752 | 1.1229e-03 | 2.323 | 3.105 |
@@ -146,21 +146,21 @@ at 80 iterations; the line search converges it in 53.
 | 1 | 1.0 | cap | 80 | 42,758 | 1.1683e-03 | 2.255 | 2.535 |
 | 0.1 | 10.0 | cap | 80 | 11,901 | **3.7253e+00** | 2.524 | 3.174 |
 
-**δτ does not rescue case B at any κ tested**, including κ = 0.1, the value that
-worked in case A. And κ = 10 degrades `J` by **3,300×** — the `O(κ·R)`
+**$\delta\tau$ does not rescue case B at any $\kappa$ tested**, including $\kappa$ = 0.1, the value that
+worked in case A. And $\kappa$ = 10 degrades `J` by **3,300×** — the $O(\kappa R)$
 perturbation becoming catastrophic rather than small.
 
 > The first version of this sweep varied `dtau` at fixed `w_mom` and so compared
-> κ = 0.1 against κ = 10 while calling it a `dtau` comparison. Since
+> $\kappa$ = 0.1 against $\kappa$ = 10 while calling it a `dtau` comparison. Since
 > `κ = a_flux/dtau = w_mom/dtau`, the same `dtau` means ten times more damping at
 > `w_mom = 1.0` than at 0.1. The design note's own risk list warns about exactly
-> this. Sweep κ, not `dtau`.
+> this. Sweep $\kappa$, not `dtau`.
 
 ### The usable window
 
 Across Poiseuille and both BFS cases:
 
-| κ | behaviour |
+| $\kappa$ | behaviour |
 |---|---|
 | ≤ 0.01 | too weak — case A still diverges |
 | ≈ 0.1 | converges case A in 10 iterations; no effect on case B |
@@ -179,7 +179,7 @@ truncated case has multiple converged states and that physically irrelevant
 choices — pin location, `nsub`, `nitcgs`, the momentum formulation, the initial
 condition — each select a different member, with spreads of tens of percent. Its
 explicit guidance is *never use the truncated case to test a solver, operator or
-BC change; use the long domain as the discriminator.* The δτ headline was run on
+BC change; use the long domain as the discriminator.* The $\delta\tau$ headline was run on
 precisely the configuration that guidance rules out.
 
 **Case A was seeded from the answer.** It starts from the long-domain solution
@@ -198,16 +198,16 @@ session never computed Fig. 2's actual metric — `u(y)` and `ω(y)` at 4–5h a
 the long domain. Everything reported here is `x_r/h`, `max|u|`, exit pressure and
 `J`, none of which is what Chan plotted.
 
-**At the default tolerance floor δτ moves the answer.** §3 shows the perturbation
-is only negligible once `R` is small, and `tol = 1e-6` does not make it small.
+**At the default tolerance floor $\delta\tau$ moves the answer.** §3 shows the perturbation
+is only negligible once $R$ is small, and `tol = 1e-6` does not make it small.
 
 ---
 
 ## 6b. Correction (2026-08-10): the `nsub = 5` failures were undamped Newton
 
-A sweep of δτ with `nsub = 5` sub-iterations per time step (short BFS, dt=0.1,
+A sweep of $\delta\tau$ with `nsub = 5` sub-iterations per time step (short BFS, dt=0.1,
 `w_mom = w_mass = 1`, cold developed IC) had **six of eight runs diverge,
-including the κ = 0 control** — which the `nsub = 1` control survived. I read
+including the $\kappa$ = 0 control** — which the `nsub = 1` control survived. I read
 that as sub-iteration destabilising the scheme. **It does not.** The cause was an
 uncontrolled Newton step length, and it is fixed.
 
@@ -230,7 +230,7 @@ you never take a third sub-iteration, so the shortfall was acting as accidental
 damping.
 
 The fix is the line search with **`ls_memory = 1`** — see the correction in
-`STEADY_FORM_STUDY.md` §8. GLL is wrong here because sub-iteration 0 always
+`STEADY_FORM_STUDY.md` §9. GLL is wrong here because sub-iteration 0 always
 drops `J` by ~3 decades from the previous time level, so `max(J)` anchors on the
 pre-Newton residual and licenses steps that grow `J` by 184×. Armijo holds
 `max|u| = 1.500` for every time step with no sub-iteration ever increasing `J`.
@@ -244,19 +244,19 @@ results, so the floor stops binding by 1e-10 and is not the mechanism).
 
 ---
 
-## 7. The 1996 channel cases — δτ against published rates (2026-08-11)
+## 7. The 1996 channel cases — $\delta\tau$ against published rates (2026-08-11)
 
-§6 closed with the complaint that every δτ number here was measured on the short
+§6 closed with the complaint that every $\delta\tau$ number here was measured on the short
 BFS domain, which has no reference answer. The two Chan (1996) channel cases do:
 `CHANNEL_VALIDATION.md` reproduces the Stokes decay rate and the Orr–Sommerfeld
 growth rate, both to well inside Chan's own published error. Re-running them
-across κ is the first δτ measurement in this project against a **known answer**.
+across $\kappa$ is the first $\delta\tau$ measurement in this project against a **known answer**.
 
-Scripts: `stokes_dtau.py`, `os_dtau.py`. κ = `dt`/`dtau` in both (`w_mom = 1`).
+Scripts: `scratch/stokes_dtau.py`, `scratch/os_dtau.py`. $\kappa$ = `dt`/`dtau` in both (`w_mom = 1`).
 
-**Stokes decay** — N=10, dt=0.0025, exact σ = 9.3137399:
+**Stokes decay** — N=10, dt=0.0025, exact $\sigma$ = 9.3137399:
 
-| `dtau` | κ | σ | rel err | shift vs κ=0 |
+| `dtau` | $\kappa$ | $\sigma$ | rel err | shift vs $\kappa$=0 |
 |---|---|---|---|---|
 | — | 0 | 9.3154840 | +1.87e-04 | — |
 | 1.0 | 0.0025 | 9.3154520 | +1.84e-04 | -3.4e-06 |
@@ -264,9 +264,9 @@ Scripts: `stokes_dtau.py`, `os_dtau.py`. κ = `dt`/`dtau` in both (`w_mom = 1`).
 | 0.01 | 0.25 | 9.0331680 | -3.01e-02 | -3.0e-02 |
 | 0.001 | 2.5 | 4.7430260 | **-4.91e-01** | -4.9e-01 |
 
-**Orr–Sommerfeld growth** — N=14, dt=0.1, exact σ = 0.00223497:
+**Orr–Sommerfeld growth** — N=14, dt=0.1, exact $\sigma$ = 0.00223497:
 
-| `dtau` | κ | σ | rel err | vs undamped |
+| `dtau` | $\kappa$ | $\sigma$ | rel err | vs undamped |
 |---|---|---|---|---|
 | — | 0 | 0.00223466 | -0.014% | — |
 | 100 | 0.001 | 0.00223014 | -0.216% | 15× worse |
@@ -276,28 +276,28 @@ Scripts: `stokes_dtau.py`, `os_dtau.py`. κ = `dt`/`dtau` in both (`w_mom = 1`).
 
 Three findings.
 
-**δτ always slows the dynamics.** Every shift is negative in both cases — decay
+**$\delta\tau$ always slows the dynamics.** Every shift is negative in both cases — decay
 rates shrink, growth rates shrink. It is a damping term and behaves like one.
 
 **A growth rate is ~100× more fragile than a decay rate.** Stokes is untouched at
-κ = 0.0025 and still fine at 0.025; Orr–Sommerfeld is already 22× degraded at
-κ = 0.01. A growth rate is a small imbalance (0.00223 against O(1) advection), so
+$\kappa$ = 0.0025 and still fine at 0.025; Orr–Sommerfeld is already 22× degraded at
+$\kappa$ = 0.01. A growth rate is a small imbalance (0.00223 against O(1) advection), so
 a perturbation to the momentum operator lands directly on the measured quantity,
-whereas the Stokes decay rate is leading-order and only notices κ once it is
+whereas the Stokes decay rate is leading-order and only notices $\kappa$ once it is
 comparable to `a_mass`.
 
 **The F77's own setting is not free on its own test case.** At `dt = 0.01,
-dtau = 1` the 1996 code runs κ = 0.01 — the third row — costing 22× in
+dtau = 1` the 1996 code runs $\kappa$ = 0.01 — the third row — costing 22× in
 growth-rate accuracy. Chan's reported 0.76% at N=14 sits in the same band.
 
 ### The bias is against the DISCRETISATION residual, not the Newton residual
 
-§3 established the shift is `O(κ·R)`, vanishing as `R → 0`. It is tempting to
-read `R` as the Newton residual and conclude that converging the sub-iterations
-harder makes δτ free. **It does not.** `os_dtau_conv.py`, same case, δτ fixed at
-κ = 0.01, sub-iterations tripled:
+§3 established the shift is $O(\kappa R)$, vanishing as $R \to 0$. It is tempting to
+read $R$ as the Newton residual and conclude that converging the sub-iterations
+harder makes $\delta\tau$ free. **It does not.** `scratch/os_dtau_conv.py`, same case, $\delta\tau$ fixed at
+$\kappa$ = 0.01, sub-iterations tripled:
 
-| `dtau` | κ | `nsub` | σ | rel err |
+| `dtau` | $\kappa$ | `nsub` | $\sigma$ | rel err |
 |---|---|---|---|---|
 | — | 0 | 2 | 0.00223466 | -0.014% |
 | 10 | 0.01 | 2 | 0.00222823 | -0.302% |
@@ -307,25 +307,25 @@ harder makes δτ free. **It does not.** `os_dtau_conv.py`, same case, δτ fixe
 2 → 6 sub-iterations moves the biased case from -0.302% to -0.295%: nothing. The
 control confirms the extra Newton is not otherwise disturbing the answer.
 
-`R` in `O(κ·R)` is the **least-squares residual at the minimum**, and `J_min > 0`
+$R$ in $O(\kappa R)$ is the **least-squares residual at the minimum**, and $J_{\min} > 0$
 always — the discrete solution does not satisfy the PDE exactly. Newton
 converges accurately to the *augmented* system's fixed point, which is displaced
 from the true minimiser by an amount set by mesh and `dt`, not by iteration
 count. This is why §3's Poiseuille test showed the shift vanishing: that case has
-an **exactly representable** solution, so `R → 0` genuinely. It does not
+an **exactly representable** solution, so $R \to 0$ genuinely. It does not
 generalise to cases that do not.
 
-The practical consequence, which contradicts a plausible reading of §3: **δτ is
-not automatically free at a steady state either**, since `R₀ ≠ 0` there too. It
-would be free if implemented in vanishing-increment form, `κ(U^{k+1} − U^k)`,
-which cancels identically at a fixed point. Folding κ into `a_mass` on both `ℒ`
-and `ℒᵀ` — what we do, and what §1 describes — is Levenberg–Marquardt on the
+The practical consequence, which contradicts a plausible reading of §3: **$\delta\tau$ is
+not automatically free at a steady state either**, since $R_0 \neq 0$ there too. It
+would be free if implemented in vanishing-increment form, $\kappa(U^{k+1} - U^k)$,
+which cancels identically at a fixed point. Folding $\kappa$ into `a_mass` on both $\mathcal{L}$
+and $\mathcal{L}^\top$ — what we do, and what §1 describes — is Levenberg–Marquardt on the
 normal equations, and that biases the fixed point instead. Two schemes, one
 name; ours is the second.
 
-> Caveat: `os_dtau_conv.py` does not record the Newton residual history, so it
+> Caveat: `scratch/os_dtau_conv.py` does not record the Newton residual history, so it
 > cannot fully exclude that 6 fixed sub-iterations are still unconverged. The
-> `J_min > 0` argument is what carries the conclusion; the run is consistent
+> $J_{\min} > 0$ argument is what carries the conclusion; the run is consistent
 > with it, not independent proof.
 
 > A first version of this run imported `os_base` (wall fraction fixed at 0.30 →
@@ -333,21 +333,21 @@ name; ours is the second.
 > came back at -2.668% instead of -0.014% — the superseded mesh's known ~2.7%
 > error at N=14. Caught by the control, which is why the control is there.
 
-**Guidance.** Choose κ by what you are measuring, not by `dt` — the
-`dtau ≈ 100·dt` heuristic is not supported. For a leading-order quantity κ ≲ 0.01
-is cheap; for stability or transition work κ ≲ 0.001, and even that costs an
-order of magnitude. If you are measuring a rate, turn δτ off.
+**Guidance.** Choose $\kappa$ by what you are measuring, not by `dt` — the
+`dtau ≈ 100·dt` heuristic is not supported. For a leading-order quantity $\kappa$ ≲ 0.01
+is cheap; for stability or transition work $\kappa$ ≲ 0.001, and even that costs an
+order of magnitude. If you are measuring a rate, turn $\delta\tau$ off.
 
 ---
 
 ## 8. Next
 
-1. Short domain from **its own** IC with δτ, then `u(y)` and `ω(y)` at 4h and 5h
+1. Short domain from **its own** IC with $\delta\tau$, then `u(y)` and `ω(y)` at 4h and 5h
    against the long domain — Fig. 2's real metric, the correct experiment.
-2. Re-run the δτ validation on the **long** domain, so its conclusions rest on
+2. Re-run the $\delta\tau$ validation on the **long** domain, so its conclusions rest on
    the discriminating case.
 3. ~~Run the 1996 channel cases~~ — **done, §7.** Both rates reproduced and swept
-   across κ.
-4. Try the vanishing-increment form `κ(U^{k+1} − U^k)` and check whether it
+   across $\kappa$.
+4. Try the vanishing-increment form $\kappa(U^{k+1} - U^k)$ and check whether it
    leaves the converged state alone where the present form does not. If the F77
    implements that form, §1's reading of it needs revisiting.

@@ -13,11 +13,11 @@ decouple the least-squares weight from the time step.
 > order, ν, weights and exact solution, made streamwise-periodic instead of
 > inflow/outflow, dt = 0.5 at those exact coefficients converges to a bit-exact
 > fixed point in 425 steps — as do dt = 1 and dt = 0.05. Imposing velocity at
-> the outlet also cures it completely (`|dU| = 0`, Δp = 1.20000); imposing
+> the outlet also cures it completely (`|dU| = 0`, $\Delta p$ = 1.20000); imposing
 > pressure across the whole outlet plane does nothing.
 >
 > Stronger still: **at dt = 0.5 with the free outflow, seeded with the exact
-> solution, the scheme sits at Δp = 1.20000 (error 1.85e-16) for 600 steps and
+> solution, the scheme sits at $\Delta p$ = 1.20000 (error 1.85e-16) for 600 steps and
 > never moves.** The correct answer is a bit-exact fixed point at that dt; the
 > orbit is a *second attractor* that only a cold start reaches. So dt does not
 > control stability here, it controls which basin the transient finds — meaning
@@ -56,13 +56,13 @@ Reproduce: `scratch/poiseuille_dt.py` (dt sweep), `scratch/plot_poiseuille.py`
    step. The momentum rows are `fac1*u + dt*N(u)`; the constraints are unweighted.
 
 2. **Pressure appears ONLY in the momentum rows.** So the pressure block of
-   `LᵀL` scales as `dt²`. At small dt the pressure is effectively unconstrained,
-   `LᵀL` develops a near-null space in `p`, and the exact solution stops being
+   $L^\top L$ scales as $\Delta t^2$. At small dt the pressure is effectively unconstrained,
+   $L^\top L$ develops a near-null space in `p`, and the exact solution stops being
    the *unique* minimiser. Measured: dt=0.05 gives **98% velocity error on a
    problem whose exact solution is exactly representable**.
 
 3. **The optimum is dt = 1**, where the pressure and velocity blocks are equally
-   weighted. There, Δp = 1.19999 against the analytic 1.2 — five significant
+   weighted. There, $\Delta p$ = 1.19999 against the analytic 1.2 — five significant
    figures — and the profile error is 5.3e-04. Across the sweep the profile
    error varies **1875×**.
 
@@ -77,7 +77,7 @@ Reproduce: `scratch/poiseuille_dt.py` (dt sweep), `scratch/plot_poiseuille.py`
 
 6. **The decoupling does not rescue small dt, and the sweep says why.** At fixed
    `dt_eff` a higher momentum weight is more accurate but destabilises the
-   iteration: `dt_eff=0.5` with weight 1 fails to converge (Δp = 15.2) where
+   iteration: `dt_eff=0.5` with weight 1 fails to converge ($\Delta p$ = 15.2) where
    legacy at the same `dt_eff` and weight 0.5 converges in 60 steps. Legacy's
    coupling `weight = dt` is a *stable* pairing, not an arbitrary one. And
    `w_mass = dt, w_mom = 1` turns out to be legacy-at-dt=1 in disguise — the
@@ -95,12 +95,12 @@ Reproduce: `scratch/poiseuille_dt.py` (dt sweep), `scratch/plot_poiseuille.py`
 | | |
 |---|---|
 | geometry | L × H = 10 × 1 |
-| Re | `U_mean·H/ν` = 100, so ν = 0.01 |
-| inlet | parabolic, `u = 6y(1-y)`, U_mean = 1, U_max = 1.5 |
+| Re | $U_\mathrm{mean} H/\nu$ = 100, so $\nu$ = 0.01 |
+| inlet | parabolic, $u = 6y(1-y)$, $U_\mathrm{mean}$ = 1, $U_\mathrm{max}$ = 1.5 |
 | outlet | FREE — nothing imposed on u, v, p, ω |
 | pressure pin | inlet plane, lower-left corner |
 | walls | no-slip |
-| exact | `dp/dx = -12νU_mean/H² = -0.12`, **Δp over L = 1.20** |
+| exact | $dp/dx = -12\nu U_\mathrm{mean}/H^2 = -0.12$, **$\Delta p$ over L = 1.20** |
 
 The pressure drop is a *prediction*: pressure is pinned only at the inlet and the
 outflow is free, so nothing imposes the drop.
@@ -113,7 +113,7 @@ outflow is free, so nothing imposes the drop.
 | `develop` | 10×2, order 8 | **uniform** | entrance region is non-polynomial |
 | `coarse` | 5×1, order 4 | uniform | deliberately under-resolved |
 
-> A coarse or low-order mesh does **not** perturb the control. `u = 6y(1-y)` is
+> A coarse or low-order mesh does **not** perturb the control. $u = 6y(1-y)$ is
 > degree 2, exact for any N ≥ 2; the rectangle's geometry mapping is affine; the
 > residual is zero pointwise so quadrature order is irrelevant. To make dt matter
 > the *solution* has to leave the polynomial space, which is what the uniform
@@ -128,7 +128,7 @@ outflow is free, so nothing imposes the drop.
 
 ### control — parabolic inlet, order 8
 
-| dt | profile err | Δp | Δp err | p-block/u-block |
+| dt | profile err | $\Delta p$ | $\Delta p$ err | p-block/u-block |
 |---|---|---|---|---|
 | 0 (pure steady) | 8.46e-03 | 1.19224 | 6.5e-03 | — |
 | 0.05 | 9.85e-01 | 2.50359 | 1.09 | 0.0025 |
@@ -155,7 +155,7 @@ and degrades monotonically to 2.8e-01 at dt=5 — when the mesh cannot represent
 the momentum equation, deliberately down-weighting it is the right thing to do.
 So "dt=1" presumes adequate resolution.
 
-> Caveat on `develop`: its Δp settles near 1.6, not 1.2, and that is **physically
+> Caveat on `develop`: its $\Delta p$ settles near 1.6, not 1.2, and that is **physically
 > correct** — uniform-inlet flow has a genuine entrance loss. The `dp_err` column
 > is meaningless for that variant; only `control` should be judged against 1.2.
 
@@ -172,9 +172,9 @@ continuity :            u_x + v_y                            -> u,v        weigh
 vorticity  :            om + u_y - v_x                       -> u,v,om     weight 1
 ```
 
-**Pressure appears only in the momentum rows.** Its block in `LᵀL` therefore
-carries `dt²`, while the constraint rows carry 1. At dt=0.05 the pressure is
-~400× under-weighted; `LᵀL` is near-singular in `p`, the minimiser is not unique,
+**Pressure appears only in the momentum rows.** Its block in $L^\top L$ therefore
+carries $\Delta t^2$, while the constraint rows carry 1. At dt=0.05 the pressure is
+~400× under-weighted; $L^\top L$ is near-singular in `p`, the minimiser is not unique,
 and the solver converges — genuinely, to `diff = 0` — to a wrong member of the
 near-null space.
 
@@ -184,13 +184,11 @@ minimiser.
 
 ### Why dt = 1, universally
 
-```
-pressure diagonal ~ dt² · Σ(P_x² + P_y²)
-velocity diagonal ~      Σ(fac1²P² + P_x² + P_y²)
-```
+$$\text{pressure diagonal} \sim \Delta t^2 \cdot \textstyle\sum(P_x^2 + P_y^2), \qquad
+\text{velocity diagonal} \sim \textstyle\sum(\mathrm{fac}_1^2 P^2 + P_x^2 + P_y^2)$$
 
 Once the gradient terms dominate the mass term — i.e. once resolved — the ratio
-collapses to exactly `dt²` and the balance point is dt=1 regardless of anything
+collapses to exactly $\Delta t^2$ and the balance point is dt=1 regardless of anything
 else. Measured:
 
 | case | order | ν | equal-weight dt |
@@ -203,7 +201,7 @@ else. Measured:
 | BFS Chan long | 10 | 1/389 | 1.007 |
 | Poiseuille coarse (5×1) | 4 | 0.01 | 1.329 |
 
-The coarse case deviates precisely because it is the one where `fac1²P²` still
+The coarse case deviates precisely because it is the one where $\mathrm{fac}_1^2 P^2$ still
 matters. This is an **a priori** criterion: computable from `compute_jacobi`
 without running anything.
 
@@ -215,16 +213,16 @@ steady residuals).
 
 ## 3a. Outlet pressure — the sharpest single diagnostic
 
-The exact solution is `p = p₀ − Gx`, **independent of y**, so the pressure across
+The exact solution is $p = p_0 - Gx$, **independent of y**, so the pressure across
 the outlet plane must be a vertical line. Nothing imposes this: the outflow is
-free and pressure is pinned only at the inlet corner, so `p(y)` at the outlet is
+free and pressure is pinned only at the inlet corner, so $p(y)$ at the outlet is
 entirely a prediction. It turns out to be the most direct probe of the
 under-weighting, because it isolates pressure with no velocity scaling in the
 way.
 
 ![outlet pressure](figs/poiseuille_pout.png)
 
-| dt | outlet p spread (max−min) | as % of Δp | mean p_out (exact −1.2) |
+| dt | outlet p spread (max−min) | as % of $\Delta p$ | mean p_out (exact −1.2) |
 |---|---|---|---|
 | 0.05 | 5.157 | **430%** | −2.527 |
 | 0.1 | 3.048 | 254% | −2.130 |
@@ -285,15 +283,13 @@ natural `1/dt`.
 | legacy | `fac1` | `dt` | 1 |
 | `w_mom` set | `fac1/dt` | `w_mom` | `1/dt` |
 
-Because BDF gives `fac1 = sum alpha_m`, the mass and history terms cancel
+Because BDF gives `fac1` $= \sum_m \alpha_m$, the mass and history terms cancel
 identically at steady state (measured: exactly `0.000e+00`). So the functional
 being minimised at steady state is
 
-```
-J = integral[ w^2 (N_1^2 + N_2^2) + (div u)^2 + (omega + u_y - v_x)^2 ]
-```
+$$J = \int \left[\, w^2 \left(N_1^2 + N_2^2\right) + (\nabla\cdot u)^2 + (\omega + u_y - v_x)^2 \,\right]$$
 
-against legacy's identical expression with **`dt^2`** in place of `w^2`. That
+against legacy's identical expression with **$\Delta t^2$** in place of $w^2$. That
 single substitution is the whole change: the momentum weight becomes `w`, with
 no dt in it.
 
@@ -365,7 +361,7 @@ w_mom = 1` bit-identical to legacy-at-dt=1 at every nominal dt; numba parity
 
 ### What the two-parameter space actually shows
 
-| config | a_mass | a_flux | **dt_eff** | steps | converged | prof err | Δp |
+| config | a_mass | a_flux | **dt_eff** | steps | converged | prof err | $\Delta p$ |
 |---|---|---|---|---|---|---|---|
 | legacy dt=1.0 | 1.5 | 1.0 | 1.0 | 279 | yes | 5.255e-04 | 1.19999 |
 | dt=0.5, `w_mass`=0.5, `w_mom`=1 | 1.5 | 1.0 | 1.0 | 279 | yes | 5.255e-04 | 1.19999 |
@@ -389,7 +385,7 @@ improves accuracy but destabilises the iteration — and legacy's coupling
 > free-outflow artifact, not a property of the weighting. Remove the outflow
 > (periodic + body force, everything else identical) and `(a_mass, a_flux) =
 > (3.0, 1.0)` converges to a bit-exact fixed point in 425 steps. Constrain the
-> velocity at the outlet and it converges with Δp = 1.20000. The iteration is
+> velocity at the outlet and it converges with $\Delta p$ = 1.20000. The iteration is
 > converging to a period-2 orbit seeded in ω at the outlet/wall corners, whose
 > amplitude is 20,000x larger in the last element than four elements upstream.
 > Whether high weight destabilises some *other* case is untested; this row does

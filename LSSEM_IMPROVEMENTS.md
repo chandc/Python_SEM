@@ -10,7 +10,7 @@ The original Python port implemented the solver logic via manual `for` loops ite
 *   **Exact Analytical Preconditioner**: Replaced the slow, iterative unit-vector approach to building the Jacobi preconditioner with an exact analytical diagonal extraction (`compute_jacobi`). Preconditioner assembly time dropped to near zero.
 *   **Memory Optimization (`SolverState`)**: We introduced the `SolverState` class to centrally manage and preallocate all intermediate work arrays (such as `su`, `c`, `tmp_x`, `u_x`, etc.). This completely eliminates expensive and repetitive memory allocations inside the inner implicit solver loops.
 
-**Result**: The lid-driven cavity simulation (Re=1000), which previously required significant time to converge, now reaches steady-state convergence (600+ time steps) in approximately 60 seconds.
+**Result**: The lid-driven cavity simulation ($Re=1000$), which previously required significant time to converge, now reaches steady-state convergence (600+ time steps) in approximately 60 seconds.
 
 ## 2. Physics & Boundary Condition Fixes
 
@@ -43,8 +43,8 @@ independent ways against exact solutions (Stokes decay for the implicit path,
 Taylor–Green for the **convective** path). Production recipe, each element
 decided by measurement: **legacy row weights, no operator-AC, CG tolerance
 1e−06**. Twelve silent bugs found, **none of which raised an exception**.
-M1–M5 done; M6 and M7 remain, with the open risk being whether the recipe
-survives walls.
+M1–M6 done (M6 = the numba backend, §7); M7 remains, and the recipe was
+measured to survive walls.
 
 ## 4. `lssem3d`: 3D via a Fourier basis in z
 
@@ -80,10 +80,10 @@ the 2D code produces routinely.
 **27× fewer iterations, 11× more accurate — on this benchmark.**
 
 **The weighting is a problem-dependent choice, not a universal fix.** On the
-Re = 1000 cavity the legacy scaling is *27× worse* (688 CG/step against 25), and
+$Re = 1000$ cavity the legacy scaling is *27× worse* (688 CG/step against 25), and
 AC there is worth 25 against 12320 without it. The plausible discriminant is
 viscosity: legacy scales the momentum row to `u + β·dt·(p_x + ν∇×ω)`, and at
-ν = 1e−3 that vorticity coupling is ~3e−7, effectively absent. So AC's value is
+$\nu$ = 1e−3 that vorticity coupling is ~3e−7, effectively absent. So AC's value is
 Reynolds-number dependent and AC is **not** dispensable — an earlier claim to the
 contrary, drawn from the Stokes case alone, is withdrawn. Choosing the weighting
 per problem is an open design question, exactly as in 2D.
@@ -117,6 +117,28 @@ operator-AC. That does **not** transfer to the cavity or to high Reynolds number
   ceiling is memory bandwidth, not the GIL. More cores will not help — which
   re-aims the numba work at *fusing* passes over the data rather than compiling
   the existing ones.
+* **Numba backend, and it followed that diagnosis** (`lssem3d/kernels_numba.py`,
+  `backend.py`; 3D_STATUS.md §7M). Compiling the NumPy expression tree would buy
+  nothing — it already calls BLAS. Instead the kernels collapse **~30 passes over
+  the state into one**: `to_complex`, 14 einsums, 8 row assemblies, `wq`, `rw`,
+  `to_real` all become a single loop that accumulates in registers, working in
+  real arithmetic directly on the split-real layout. **3.5–6.2× per matvec**
+  (the gain *falls* with size, as a bandwidth-bound kernel should), **3.8–4.7×**
+  on a whole solve, **10.3×** best-to-best against serial NumPy.
+  * `nogil=True` is load-bearing: `parallel.pcg` uses a `ThreadPoolExecutor`, and
+    an njit kernel holding the GIL would have serialised it — correct answers,
+    most of the 6.7× silently gone. `bench_numba_threads.py` gates it.
+  * Verified by 33 parity cases (agreement 0 to 1.7e-16, sweeping `kap`, `rw`,
+    `wq`, `k_z`=0 and ≠0, `facx`≠`facy`) and by reproducing the analytic Stokes
+    decay rate to **8 significant figures** on both mode families.
+  * Opt in: `LSSEM3D_BACKEND=numba` or `lssem3d.set_backend('numba')`. An
+    unavailable backend **raises** rather than falling back — a silent fallback
+    turns a missing dependency into a mysterious 4× slowdown.
+  * The 2D module's caveat — per-operator parity does not imply agreement on
+    *accumulated* states, measured as a 1.8× discrepancy on 2D Poiseuille — was
+    re-tested rather than inherited. In 3D the drift is **flat at ~3e-13 over
+    200 steps**. That covers transients, not the steady Newton fixed point where
+    the 2D failure occurred; treat it as open for steady 3D runs.
 * **Jacobi diagonal assembled across elements** — the probe returned
   `diag/multiplicity`, so `1/diag` over-weighted every element-boundary node by
   2–4×. Worth **1.41–1.44×** fewer CG iterations.

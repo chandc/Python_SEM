@@ -12,7 +12,7 @@ Reproduce: `scratch/chan_amass_sweep.py` (inlet-profile sweep),
 
 ## The question
 
-`a_mass = w_mass·fac1/dt` is the coefficient on the time-derivative term in the
+$a_\mathrm{mass} = w_\mathrm{mass}\,\mathrm{fac}_1/\Delta t$ is the coefficient on the time-derivative term in the
 momentum rows of the least-squares functional. The continuity and vorticity rows
 carry weight exactly 1, so refining `dt` raises `a_mass` and progressively
 outweighs the constraints. `GARTLING_VALIDATION.md` measured a hard threshold on
@@ -28,13 +28,13 @@ Three explanations were live. Each is now settled by measurement.
 ## The evidence
 
 All runs below use the same solver, the same 12×2 N=10 channel grid or the 6×6
-N=10 cavity, `w_mom = w_mass = 1`, and BDF2 (`a_mass = 1.5/dt`).
+N=10 cavity, `w_mom = w_mass = 1`, and BDF2 ($a_\mathrm{mass} = 1.5/\Delta t$).
 
 ### A. With an outflow: the residual makes no difference
 
 `scratch/chan_amass_sweep.py`, plane channel, P+Z outlet. The **parabolic**
 inlet makes the exact solution representable (residual ≈ 0); the **uniform**
-inlet forces the flow to develop (rms `div u` ≈ 8e−02, the BFS regime).
+inlet forces the flow to develop (rms $\nabla\cdot u$ ≈ 8e−02, the BFS regime).
 
 | inlet | residual | `a_mass` | outcome | step | max\|u\| |
 |---|---|---|---|---|---|
@@ -111,7 +111,7 @@ least-squares weighting in general.
 
 ### Artificial compressibility remains the remedy where an outflow exists
 
-| `a_mass` | `κ_p` | outcome |
+| `a_mass` | $\kappa_p$ | outcome |
 |---|---|---|
 | 60 | 0 | BLEWUP @ 33 |
 | 60 | 30 | **ok** |
@@ -127,11 +127,11 @@ not an optimisation, it is the enabling technology.**
 
 ## Consequence for the 3D solver
 
-The `Re_τ` = 180 channel is periodic in `x` and `z` with walls in `y` — **it has
+The $Re_\tau$ = 180 channel is periodic in `x` and `z` with walls in `y` — **it has
 no outflow plane**. The RKW3/Crank–Nicolson requirement of `a_mass` = 600 … 6000
 (§0.4 of `3D_DEVELOPMENT_PLAN.md`) is directly covered by measured data at 600,
 1200 and 2400. The plan's headline risk accordingly moved high → medium → **low**,
-and neither artificial compressibility, nor `w_mass ∝ dt`, nor a switch to a
+and neither artificial compressibility, nor $w_\mathrm{mass} \propto \Delta t$, nor a switch to a
 fractional-step projection method is needed for the target case.
 
 ---
@@ -150,7 +150,7 @@ the next measurement.
    §0.2, original) — retracted in `fcfd701` once the Stokes probe showed the
    failure survives with no convection at all.
 3. **"RKW3 relieves `a_mass` by ~3.5×"** (a since-reverted edit to
-   `3d_fourier_sem_expansion.md`) — the arithmetic is the other way. `1/β` =
+   `3d_fourier_sem_expansion.md`) — the arithmetic is the other way. $1/\beta$ =
    (4.32, 4.80, **6.00**), so at matched `dt` RKW3/CN is 4× *worse*, and the
    3.46× larger step leaves it ~15% worse than BDF2 overall.
 4. **`GARTLING_VALIDATION.md` §8's residual argument** was not wrong on its own
