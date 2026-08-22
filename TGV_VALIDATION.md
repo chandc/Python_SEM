@@ -155,3 +155,86 @@ the digitisation of §4.
 Data: 31 frames + 6 checkpoints in `scratch/tgv_frames_re400/`, diagnostics in
 `scratch/tgv_diag_re400.npz`, movie `figs/tgv_re400_movie.mp4`, ParaView
 export `scratch/tgv_vtk_re400/tgv_re400.pvd`.
+
+---
+
+## 8. Placed on a published scale: Gourianov et al. (2022)
+
+`scratch/tgv_vs_gourianov.py`, `reference/2106.05782v3.pdf`. Reference:
+N. Gourianov, M. Lubasch, S. Dolgov, Q. Y. van den Berg, H. Babaee, P. Givi,
+M. Kiffner, D. Jaksch, *A Quantum Inspired Approach to Exploit Turbulence
+Structures*, arXiv:2106.05782v3 / Nature Comp. Sci. **2** (2022).
+
+**Why this reference and not Brachet.** §4 left the digit-level comparison
+open because Brachet's dissipation curve needs digitising from a paywalled
+figure. This paper does something better: its 3-D TGV study adopts the *same*
+diagnostic this project arrived at independently. For incompressible periodic
+flow the INSE imply
+
+$$\zeta(t) \equiv \nu\!\int_V |\nabla\times V|^2\,dr \;=\; \varepsilon(t) \equiv -\tfrac{1}{2}\frac{d}{dt}\!\int_V |V|^2\,dr ,$$
+
+and the paper states plainly that restricting the number of variables
+"results in numerical diffusion violating this equality" — our balance meter,
+independently motivated. Their Eq. (20) integrates the violation into one
+number,
+
+$$e = \frac{1}{E_0}\int_0^{2T_0} \bigl|\zeta(t) - \varepsilon(t)\bigr|\,dt ,
+\qquad T_0 = L_\mathrm{box}/u_0 ,$$
+
+and **Table 1 publishes $e$ for three schemes at $Re = 800$**: DNS on $256^3$
+(8th-order central finite differences, RK2, Chorin projection), their
+tensor-network MPS algorithm at three compressions, and under-resolved DNS
+(URDNS, the same solver on coarse grids). That is a published yardstick our
+runs can be placed on directly.
+
+![TGV vs Gourianov](figs/tgv_vs_gourianov.png)
+
+| scheme | grid | $Re$ | $e$ |
+|---|---|---|---|
+| **ours (LSSEM/VVP)** | $24^3$ | 100 | **0.0028** |
+| **ours (LSSEM/VVP)** | $48^3$ | 400 | **0.0172** |
+| their DNS | $256^3$ | 800 | 0.0020 |
+| their MPS 1:25 / 1:49 / 1:78 | — | 800 | 0.0385 / 0.0844 / 0.2618 |
+| their URDNS | $\approx88^3$ / $70^3$ / $60^3$ | 800 | 0.1599 / 0.2133 / 0.4563 |
+
+**Reading it honestly.** Our $Re$ is lower than theirs, and lower $Re$ is
+easier to resolve, so $e$ alone flatters us. The like-for-like axis is
+**resolution adequacy**, $k_\mathrm{max}\eta$ at peak dissipation (the standard
+DNS criterion; $\gtrsim 1$ is resolved):
+
+| run | $k_\mathrm{max}\eta$ | $e$ |
+|---|---|---|
+| ours, $Re$ = 100, $24^3$ | 1.13 (resolved) | 0.0028 |
+| ours, $Re$ = 400, $48^3$ | **0.82** (marginal) | **0.0172** |
+| their DNS, $Re$ = 800, $256^3$ | 2.57 (amply resolved) | 0.0020 |
+| their URDNS 1:25, $\approx88^3$ | **0.88** (marginal) | **0.1599** |
+
+*(their $\eta$ from $\nu = 1/800$ and $\varepsilon_\mathrm{max} \approx 0.012$,
+the literature value for TGV in this $Re$ range — an estimate, flagged as such)*
+
+**The one comparison that controls for Reynolds number**: at essentially the
+same resolution adequacy — $k_\mathrm{max}\eta$ = 0.82 for us, 0.88 for them —
+our least-squares spectral-element solver carries **$e$ = 0.017 against their
+URDNS's 0.160, about 9× less numerical diffusion**, and beats even their best
+*compressed* MPS result (0.0385) by 2.2×. Our well-resolved $Re$ = 100 run at
+$e$ = 0.0028 sits alongside their $256^3$ DNS reference value of 0.0020.
+
+**Caveats, stated because they bound the claim.**
+
+* **$E_0$ ambiguity.** The paper states "the corresponding energy at $t = 0$ is
+  $E_0 = u_0^2/2$", but the TGV initial condition carries mean kinetic energy
+  density $u_0^2/8$ — a factor of 4. We normalise by the **actual** initial
+  kinetic energy. If their $E_0$ is the stated $u_0^2/2$, every one of our
+  numbers above should be divided by 4, which *improves* our standing — so the
+  conservative choice is the one made.
+* **Window coverage**: the $Re$ = 100 run ends at $t = 12.0$ against the
+  window's $2T_0 = 12.57$ (95%); the $Re$ = 400 run covers it fully.
+* Different $Re$, different flow states: this compares *numerical fidelity at
+  comparable resolution adequacy*, not identical physics. The Brachet
+  digitisation (§4) remains the outstanding same-$Re$ check.
+
+**What it settles.** The §3/§7 balance gaps — 0.7% at $Re$ = 100, 5.1% at
+$Re$ = 400 — were reported as an unbenchmarked resolution price. On the
+published scale they are **DNS-class and better-than-compressed-MPS
+respectively**, which is the first external, quantitative corroboration that
+the LSSEM/VVP formulation dissipates energy physically rather than numerically.
