@@ -329,3 +329,57 @@ $e \sim 0.02$–$0.06$ at $88^3$ — i.e. comparable to or better than their bes
 MPS (0.0385) and several times better than their URDNS at the same grid
 (0.1599). A result far outside that band means something in the $Re$ = 800
 regime is not behaving as the $Re$ = 100/400 runs suggest.
+
+
+---
+
+## 9. The CORIA-CFD benchmark database: assessed, data secured, run deferred
+
+<https://benchmark.coria-cfd.fr> hosts a four-step TGV benchmark; **step 2 is
+the 3-D single-component TGV**, and it is the canonical high-order-workshop
+case: $(2\pi)^3$ box, $u_0 = L_0 = 1$, $\nu = 6.25\times10^{-4}$
+($Re = 1600$), integrated to $t = 20$. Its own reference is the pseudo-spectral
+RLPK solution at $512^3$ (van Rees et al. 2011), with YALES2 (finite volume),
+Nek5000 (spectral element) and DINO compared against it. Data mirrored in
+`reference/coria_tgv_re1600/` with provenance and checks in its README.
+
+**The data quality is better than anything else we have.** It is machine
+readable (2001 rows, $\Delta t$ = 0.01, columns $t$, KE, $\varepsilon$), needs
+no digitisation, and **both normalisation checks pass exactly**:
+$\mathrm{KE}(0)$ = 0.12499706 against the analytic 1/8, and
+$\varepsilon(0.02)$ = 4.6875e−04 against the analytic $2\nu\Omega_0/V$ to
+eight digits. So it shares our normalisation with no ambiguity of the kind
+§8.1 had to resolve for Gourianov. It also includes a **temporal** study —
+$512^3$ at CFL = 0.10 / 0.20 / 0.30 / 0.60 — which is directly relevant since
+our own $\Delta t$ is CFL-limited. Its peak: $\varepsilon$ = 0.01276 at
+$t$ = 8.95 ($t/T_0$ = 1.42).
+
+**Why a direct comparison is deferred, not declined.** The database is
+$Re = 1600$ *only*, and our runs are $Re$ = 100 / 400 / 800. At $Re$ = 1600
+the Kolmogorov scale is $\eta$ = 0.0118, so $k_\mathrm{max}\eta \gtrsim 1$
+needs $\gtrsim 192^3$. Scaling from the measured $88^3$ rate (82 s/step):
+
+| grid | $k_\mathrm{max}\eta$ | to $t$ = 10 (through the peak) | to $t$ = 20 |
+|---|---|---|---|
+| $96^3$ | 0.56 | ~2.4 days | ~4.8 days |
+| $128^3$ | 0.75 | ~7.5 days | ~15 days |
+| $192^3$ | 1.13 | ~38 days | ~76 days |
+
+A defensible $Re$ = 1600 result is a **post-M6 undertaking**, not a next step —
+and the honest place for it is after the numba backend is deployed on the full
+production path.
+
+**What the database buys us immediately** is a second independent anchor for
+the Reynolds-number family, at no compute cost:
+
+![TGV Reynolds family](figs/tgv_reynolds_family.png)
+
+Five curves, one normalisation, three sources. Both trends hold monotonically
+across a 16× range in $Re$: the peak **moves later** (0.77 → 0.96 → 1.42 in
+$t/T_0$) and the **$t = 0$ intercept falls as $2\nu\Omega_0/V$** (0.375 →
+0.094 → 0.047 → 0.023) — the latter analytic, and matched by every curve
+including both published ones, which is what makes the overlay trustworthy.
+Our two runs sit inside the published family rather than merely near it.
+
+**The same-$Re$ test remains the $Re$ = 800 run** against Gourianov (§8.2), in
+flight at $88^3$.
