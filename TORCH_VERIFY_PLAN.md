@@ -255,6 +255,69 @@ another 2–3× would come from.
 
 ---
 
+## PHASE 2 — device-resident solver: DONE, and it beat the V4 forecast
+
+`lssem3d/device.py` is the seam: an array-namespace dispatch plus a torch
+gather-scatter. `solver3d.py`'s `gs`, `_dot`, `multiplicity_weight`,
+`make_continuous` and `pcg` now run unchanged on NumPy arrays *or* torch tensors,
+so there is one `pcg` rather than two that could drift.
+
+**Whole preconditioned CG solve, identical iteration counts:**
+
+| case | dof | Spark numpy | Spark numba | **torch GPU** | vs Spark numba | vs **Mac numba** |
+|---|---|---|---|---|---|---|
+| 48³-ish | 1.02 M | 52.2 s | 12.5 s | **3.0 s** | 4.13× | — |
+| **minimal channel** | 2.08 M | 222.9 s | 52.2 s | **12.3 s** | **4.23×** | **3.7×** (46.0 s) |
+
+CG counts 1370/1370/1370 — like-for-like.
+
+**V4 forecast 2–2.5× end-to-end and was too pessimistic.** That estimate assumed
+`gs`, the CG vector operations and the reductions would stay on the host and
+become a larger fraction once the operator sped up. Phase 2 moved them onto the
+device too, so instead of eroding the operator's 3.3× the whole solve *improved*
+on it — **4.23×** against the Spark's own CPU, **3.7×** against the Mac.
+
+### Three bugs the tests caught, all of the silent kind
+
+**406 host transfers in 200 CG iterations.** `np.asarray(kz)` inside the kernel
+facade calls `.numpy()` on a tensor — a synchronising copy, twice per iteration.
+Correct answers, and the entire GPU advantage spent on PCIe. This is precisely
+the failure a numerical unit test passes; it took a test that *counts transfers*.
+
+**The facade forced every input to `device()`.** A caller holding CPU tensors got
+a CUDA result, which then met a CPU mask: `Expected all tensors to be on the same
+device`. On the Spark it raised; in a device-resident loop it would instead have
+inserted a silent transfer per call. The backend does not choose where data
+lives — the caller does.
+
+**An `id(mesh)`-keyed cache.** CPython reuses ids after garbage collection, so a
+new mesh could receive a dead one's index map — silently wrong gather-scatter
+whenever the shapes happened to be compatible. Found via a one-off flaky failure
+that three subsequent clean runs would have let us dismiss. Now a
+`WeakKeyDictionary`.
+
+### Gates
+
+* 237/237 in-container **on the GPU**, with the transfer test genuinely
+  exercising CUDA (it builds tensors on `KT.device()`, so a CPU-only run would
+  prove nothing).
+* Solutions agree to what the solve itself defines: two CG runs stopping at the
+  same *residual* differ in the *solution* by up to κ·tol, and κ ≈ 1e4. A fixed
+  `err < 1e-6` gate failed a correct port on first run (measured 1.19e-04 at
+  tol = 1e-8). The test now asserts the disagreement **shrinks with tolerance** —
+  a real defect would not.
+
+### Still not established
+
+`convect`/FFT are untouched (Phase 3), so a full *time step* is not yet measured
+— only the solve, which is ~99% of it on CPU but a smaller share on GPU. And
+nothing here says the minimal channel stays turbulent.
+
+**Implication for the run:** ~35 days on the Mac becomes roughly **9–10 days**
+at 3.7×, before Phase 3.
+
+---
+
 ## Order of work
 
 | | | risk |

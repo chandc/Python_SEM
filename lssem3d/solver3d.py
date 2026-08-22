@@ -17,6 +17,7 @@ the worst mode apply to all of them.
 """
 import numpy as np
 from lssem2d.assembly import gather_scatter
+from . import device as DEV
 from . import operator as OP
 from .timestep import ALPHA, BETA, GAMMA, ZETA, NSTAGE
 
@@ -31,7 +32,10 @@ def _dot(a, b, w=None):
     product is not the one the assembled operator is symmetric in.
     """
     ab = a*b if w is None else a*b*w
-    return np.sum(ab, axis=SPATIAL).sum(axis=0)[None, None, None, None, :]
+    # DEV.sum_over, not np.sum: on the GPU path `ab` is a torch tensor and this
+    # runs inside the CG loop, where a single host round trip costs 21.9x the
+    # matvec (TORCH_VERIFY_PLAN.md V3).
+    return DEV.sum_over(ab, (0,) + tuple(SPATIAL))[None, None, None, None, :]
 
 
 def gs(mesh, U):
@@ -42,6 +46,8 @@ def gs(mesh, U):
     single trailing axis reuses it exactly -- no modification to lssem2d, and no
     reimplementation of the connectivity.
     """
+    if DEV.is_tensor(U):
+        return DEV.gs_torch(mesh, U)          # index_add_, no scipy, stays on GPU
     nel, n, _, nv, nk = U.shape
     return gather_scatter(mesh, U.reshape(nel, n, n, nv*nk)).reshape(U.shape)
 
@@ -68,8 +74,9 @@ def make_continuous(mesh, U):
     Fields built by evaluating a smooth function at node coordinates are already
     continuous and need no projection.
     """
-    mult = gs(mesh, np.ones_like(U))
-    return gs(mesh, U)/np.where(mult < 1e-10, 1.0, mult)
+    ones = (DEV.zeros_like(U) + 1.0)
+    mult = gs(mesh, ones)
+    return gs(mesh, U)/DEV.where(mult < 1e-10, ones, mult)
 
 
 def normal_op(Ur, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None, kap=0.0, rw=None):
@@ -407,32 +414,35 @@ def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
     Convergence is per mode: a mode whose residual is already below tol
     contributes nothing further, and the loop exits when ALL modes are below.
     """
-    x = np.zeros_like(b) if x0 is None else x0.copy()
+    x = DEV.zeros_like(b) if x0 is None else DEV.clone(x0)
     if mask is not None:
         b = b*mask
         x = x*mask
     A = lambda v: normal_op(v, D, facx, facy, kz, nu, c, mesh, mask, wq, kap, rw)
-    mw = None if mesh is None else multiplicity_weight(mesh, b.shape)
+    mw = None if mesh is None else DEV.to_device(
+        multiplicity_weight(mesh, tuple(b.shape)), b)
     # M_inv may be an array (diagonal scaling) or a callable (block-Jacobi)
     P = ((lambda r: r) if M_inv is None else
          M_inv if callable(M_inv) else (lambda r: r*M_inv))
 
     r = b - A(x)
     z = P(r)
-    p = z.copy()
+    p = DEV.clone(z)
     rz = _dot(r, z, mw)
-    b_norm = np.sqrt(_dot(b, b, mw))
-    target = np.maximum(tol*b_norm, 1e-300)
+    b_norm = DEV.sqrt(_dot(b, b, mw))
+    target = DEV.maximum(tol*b_norm, 1e-300)
     it = 0
     restarts = 0
     for it in range(1, max_iter + 1):
         Ap = A(p)
         denom = _dot(p, Ap, mw)
-        alpha = np.where(np.abs(denom) > 1e-300, rz/np.where(denom == 0, 1, denom), 0.0)
+        one = DEV.zeros_like(denom) + 1.0
+        alpha = DEV.where(abs(denom) > 1e-300,
+                          rz/DEV.where(denom == 0, one, denom), 0.0*one)
         x = x + alpha*p
         r = r - alpha*Ap
-        rn = np.sqrt(_dot(r, r, mw))
-        if np.all(rn < target):
+        rn = DEV.sqrt(_dot(r, r, mw))
+        if DEV.all_(rn < target):
             # TRUE-RESIDUAL SAFEGUARD, ported from lssem2d.pcg_solve.
             #
             # `r` here is the RECURSIVE residual, updated as r - alpha*Ap.  Over
@@ -444,8 +454,8 @@ def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
             # Costs one extra matvec, and only when the recursive residual
             # claims convergence -- usually once per solve.
             r_true = b - A(x)
-            rn_true = np.sqrt(_dot(r_true, r_true, mw))
-            if np.all(rn_true < target):
+            rn_true = DEV.sqrt(_dot(r_true, r_true, mw))
+            if DEV.all_(rn_true < target):
                 break
             # Drift: restart the recursion from the true residual.  Doing it for
             # every mode at once is correct even though only some drifted -- the
@@ -453,17 +463,20 @@ def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
             # r_true is its recursive r to rounding.
             r = r_true
             z = P(r)
-            p = z.copy()
+            p = DEV.clone(z)
             rz = _dot(r, z, mw)
             restarts += 1
             continue
         z = P(r)
         rz_new = _dot(r, z, mw)
-        beta = np.where(np.abs(rz) > 1e-300, rz_new/np.where(rz == 0, 1, rz), 0.0)
+        one = DEV.zeros_like(rz) + 1.0
+        beta = DEV.where(abs(rz) > 1e-300,
+                         rz_new/DEV.where(rz == 0, one, rz), 0.0*one)
         p = z + beta*p
         rz = rz_new
     # report the TRUE residual, not the recursive one it may have drifted from
-    return x, it, np.sqrt(_dot(b - A(x), b - A(x), mw)).ravel()
+    rt = DEV.sqrt(_dot(b - A(x), b - A(x), mw))
+    return x, it, (rt.reshape(-1) if DEV.is_tensor(rt) else rt.ravel())
 
 
 def rkw3_step(Uh, dt, rhs_explicit, solve_stage, N_prev=None):

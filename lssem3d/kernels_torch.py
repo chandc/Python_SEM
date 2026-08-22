@@ -203,6 +203,22 @@ def _apply_LT(Rr, D, facx, facy, kz, nu, c, kap=0.0):
     return C
 
 
+def _kz(kz, nk, dev):
+    """Wavenumbers as a length-nk tensor.
+
+    THE `np.asarray` HERE WAS A DEVICE-TO-HOST COPY.  On a torch tensor
+    `np.asarray` calls `.numpy()`, which synchronises and copies -- twice per CG
+    iteration, once in apply_L and once in apply_LT.  `test_device.py` measured
+    406 transfers over 200 iterations before this branch existed.  Correct
+    answers, and the GPU advantage silently spent on PCIe traffic: exactly the
+    failure that passes a numerical unit test.
+    """
+    if isinstance(kz, torch.Tensor):
+        k = kz.to(device=dev, dtype=torch.float64).reshape(-1)
+        return k if k.numel() == nk else k.expand(nk)
+    return _t(np.broadcast_to(np.asarray(kz, dtype=float), (nk,)), dev)
+
+
 # ------------------------------------------------------------------ facades
 
 def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
@@ -211,12 +227,18 @@ def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
     NumPy input is converted and the result converted back, which is the PARITY
     path, not the performance path — Phase 2 keeps tensors on device end to end.
     """
+    # HONOUR THE CALLER'S DEVICE.  Forcing every input to `device()` looks
+    # harmless and is not: a caller holding CPU tensors gets a cuda result back,
+    # which then meets a CPU mask in normal_op --
+    #     RuntimeError: Expected all tensors to be on the same device
+    # Worse, in a device-resident CG loop it would silently insert a transfer per
+    # call, which is the 21.9x penalty V3 measured.  The backend does not choose
+    # where the data lives; the caller does.
     was_np = not isinstance(Ur, torch.Tensor)
-    dev = device()
+    dev = device() if was_np else Ur.device
     U = _t(Ur, dev)
     nk = U.shape[-1]
-    R = _apply_L(U, _t(D, dev), _t(facx, dev), _t(facy, dev),
-                 _t(np.broadcast_to(np.asarray(kz, dtype=float), (nk,)), dev),
+    R = _apply_L(U, _t(D, dev), _t(facx, dev), _t(facy, dev), _kz(kz, nk, dev),
                  float(nu), float(c),
                  None if wq is None else _t(wq, dev), float(kap),
                  None if rw is None else _t(rw, dev))
@@ -226,10 +248,9 @@ def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
 def apply_LT(Rr, D, facx, facy, kz, nu, c, kap=0.0):
     """Signature-compatible with operator.apply_LT."""
     was_np = not isinstance(Rr, torch.Tensor)
-    dev = device()
+    dev = device() if was_np else Rr.device
     R = _t(Rr, dev)
     nk = R.shape[-1]
-    C = _apply_LT(R, _t(D, dev), _t(facx, dev), _t(facy, dev),
-                  _t(np.broadcast_to(np.asarray(kz, dtype=float), (nk,)), dev),
+    C = _apply_LT(R, _t(D, dev), _t(facx, dev), _t(facy, dev), _kz(kz, nk, dev),
                   float(nu), float(c), float(kap))
     return C.cpu().numpy() if was_np else C
