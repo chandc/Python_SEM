@@ -12,15 +12,30 @@ The port buys roughly **3–7× over what the Mac already does today with numba*
 not the 85× that a naive `torch 5.3 ms vs numpy 450 ms` comparison suggests. That
 ratio is against the *unoptimised* NumPy path, and we no longer run that path.
 
+> **REVISED 2026-08-22 — the minimal-channel row was wrong by ~8×.** It was
+> taken from §8.6's estimate; `scratch/minchan.py price` then *measured* the real
+> configuration and the answer is **~35 days, not 14 hours**. §8.6's
+> `[flat … 2×]` bracket on CG iterations under *h*-refinement — flagged there as
+> assumed — plus a CFL limit that halves `dt` account for the gap. **This
+> reverses the recommendation below: the port is now worth it for the minimal
+> channel too.**
+
 | target | Mac + numba (today) | GB10 + torch (ported) | worth 6–8 days of work? |
 |---|---|---|---|
 | Stage 5 channel (validation) | seconds | seconds — **GPU loses** at 0.06 M dof | no |
-| **minimal channel** (4×12 elem, Nz=24) | ~14 h | ~2–5 h | **probably not** |
-| **full M7** (20×12 elem, Nz=128) | ~15–30 days | ~3–10 days | **yes** |
+| **minimal channel** (6×18 elem, Nz=32, 2.08 M dof) | **~35 days** *(measured)* | ~5–10 days | **yes** |
+| **full M7** (20×12 elem, Nz=128) | ~15–30 days¹ | ~3–10 days | **yes** |
 
-**If the goal is the minimal channel, do not port.** The Mac runs it overnight
-with the numba backend that already exists and is already validated. The port
-pays for itself only on full M7, or if M7-class runs will be *repeated*.
+¹ the full-M7 row is still an *estimate* and now looks optimistic for the same
+reason — it inherits the same iteration bracket the minimal channel just broke.
+Re-price it from a measured step before quoting it.
+
+**Measured on the real minimal-channel configuration** (`scratch/minchan.py`):
+4786 CG per stage against Stage 5's 650, 114–150 s/step at 2.08 M dof with
+numba, and CFL = 3.44 at `dt = 2e-3` against the RKW3 limit of √3 — so `dt` must
+halve as well. `minchan_hscan.py` shows *h*-refinement alone contributes only
+~2× (1118 → 2297 CG over a 9× element increase); the rest is the physical
+defect-correction RHS, which is harder than a synthetic `A·U` probe.
 
 Error bars on the runtime column are wide — see §5.
 

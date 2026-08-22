@@ -256,6 +256,8 @@ def _bind_backend(name):
     global _IMPL_L, _IMPL_LT
     if name == 'numba':
         from .kernels_numba import apply_L as _L, apply_LT as _LT
+    elif name == 'torch':
+        from .kernels_torch import apply_L as _L, apply_LT as _LT
     else:
         _L, _LT = _apply_L_numpy, _apply_LT_numpy
     _IMPL_L, _IMPL_LT = _L, _LT

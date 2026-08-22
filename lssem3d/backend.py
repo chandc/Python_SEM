@@ -4,7 +4,8 @@ Mirrors `lssem2d/backend.py` deliberately -- same names, same semantics, same
 environment variable -- so that switching backends is one habit, not two.
 
   'numpy'  -- the reference implementation in operator.py (default)
-  'numba'  -- fused @njit kernels in kernels_numba.py
+  'numba'  -- fused @njit kernels in kernels_numba.py  (CPU)
+  'torch'  -- PyTorch kernels in kernels_torch.py      (CUDA; 3D_STATUS.md sec 7O)
 
 Two ways to ask:
 
@@ -29,7 +30,7 @@ wq, rw, to_real).
 """
 import os
 
-VALID = ('numpy', 'numba')
+VALID = ('numpy', 'numba', 'torch')
 
 _backend = None
 _listeners = []
@@ -45,6 +46,12 @@ def available(name='numba'):
             return True
         except Exception:
             return False
+    if name == 'torch':
+        try:
+            import torch  # noqa: F401
+            return True
+        except Exception:
+            return False
     return False
 
 
@@ -52,12 +59,12 @@ def _resolve(name):
     name = (name or 'numpy').strip().lower()
     if name not in VALID:
         raise ValueError(f"unknown backend {name!r}; expected one of {VALID}")
-    if name == 'numba' and not available('numba'):
+    if name != 'numpy' and not available(name):
         raise ImportError(
-            "backend 'numba' was requested but numba is not importable in this "
-            "interpreter.  Install it (uv pip install numba) or use the default "
-            "'numpy' backend.  lssem3d.backend.available('numba') probes "
-            "without raising."
+            f"backend {name!r} was requested but its library is not importable "
+            f"in this interpreter.  Install it (uv pip install {name}) or use "
+            f"the default 'numpy' backend.  lssem3d.backend.available({name!r}) "
+            f"probes without raising."
         )
     return name
 
