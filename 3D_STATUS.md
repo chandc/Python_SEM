@@ -65,13 +65,18 @@ changes that cost a day and carried no correctness risk: an analytic Jacobi
 diagonal (the probing loop was 41% of every run) and a CG tolerance policy (the
 solver had been over-solving by ~10 orders).
 
-**A `numba` backend then bought another 3.5–6.2× on the matvec** (§7M) — not by
-compiling the NumPy code, which already calls BLAS, but by **fusing ~30 passes
-over the state into one**, the only lever that helps a memory-bandwidth-bound
-kernel. Verified bit-for-bit against the NumPy operator (33 parity cases) and
-against the analytic Stokes rate, which it reproduces to **8 significant
-figures**. It composes with the other two multipliers: measured **10.3×** over
-serial NumPy on a full solve. Opt in with `LSSEM3D_BACKEND=numba`.
+**A `numba` backend then bought another 4.0–8.4×** (§7M) — not by compiling the
+NumPy code, which already calls BLAS, but by **fusing ~30 passes over the state
+into one**, the only lever that helps a memory-bandwidth-bound kernel. Verified
+bit-for-bit against the NumPy operator (33 parity cases) and against the analytic
+Stokes rate, which it reproduces to **8 significant figures**.
+
+**Today's net-net is 21.7×** on the Stage 5 channel — 646.4 s → 29.9 s over 15
+steps, `E/E0` identical — from row-7 (5.39×) times numba (4.01×). **28.5× with
+the thread pool switched off**, which is now the fastest configuration at this
+mode count. An earlier 12.74× is **retracted**: it took one leg of the A/B from a
+stored file rather than measuring both back to back (§7M, L14). Opt in with
+`LSSEM3D_BACKEND=numba`.
 
 **Twelve silent bugs, none of which raised an exception.** Every one produced a
 correctly-shaped, plausible array. The two most consequential were found in the
@@ -156,6 +161,20 @@ thread scaling specifically, which is why `bench_numba_threads.py` exists as a
 gate rather than a curiosity: a **flat numba row** in that table is the
 signature. The general rule — when a new layer sits *underneath* an existing
 parallel one, re-measure the outer layer, not just the inner one (§7M).
+
+### L14. Never take one leg of an A/B from a file
+
+The day's headline number was first reported as 12.74× and was actually 21.7×.
+The cause was not arithmetic: the NumPy leg came from a JSON written by an
+earlier process, after ~45 minutes of thermal load, while the numba leg was
+measured fresh. Re-run back to back in one process, numba went from 2.36× to
+4.01× on the same case.
+
+This is the same shape as the default-argument bug in §7J.1, where an A/B
+silently compared a configuration against itself: **the comparison looked
+complete, and was not.** Stored results are fine as a record and unusable as a
+control. If two numbers are going to be divided by each other, they have to be
+produced in the same process, in the same session, back to back (§7M).
 
 ### L5. Know your floor before calling something an error
 
@@ -1830,7 +1849,18 @@ worth a line even when the answer turns out to be "no".
 ### 8.5 Then the original queue
 
 ~~M6 (numba, aimed at *fusing* passes — the matvec is bandwidth-bound, §3.3)~~
-**done, §7M.** Remaining: the M7 step-cost model, the Stage 6 forcing decision
+**done, §7M.**
+
+**New, and it came out of the numba work (§7M):** re-calibrate
+`parallel.n_workers`. It picks on performance-core count alone, and the thread
+pool is now *losing* at small mode counts (0.90× numpy, 0.77× numba) — `workers=1`
+is worth 1.32×. The crossover must be re-measured with numba active, since a
+faster matvec moves it. Cheap, and it is a straight win on every small-Nz run.
+
+Also **not** to be built: a fused `_dot`. The hypothesis that the GIL-bound CG
+reductions had become the bottleneck was tested and refuted (§7M).
+
+Remaining: the M7 step-cost model, the Stage 6 forcing decision
 (constant mass flux vs constant pressure gradient — undecided, and it changes the
 per-step constraint), closing M2 by restarting from the saved field, and the
 minimal channel (Jiménez–Moin box) as M7's intermediate target.
@@ -1972,7 +2002,7 @@ queue**, with the minimal channel as its first customer. **Done — §7M**, and 
 measured 3.5–6.2× brackets the ×4 assumed above, so the ~1-month estimate for
 full M7 stands. The minimal channel is now the next thing to run.
 
-## 7M. A Numba backend: one fused pass instead of thirty (2026-08-21)
+## 7M. A Numba backend: one fused pass instead of thirty (2026-08-21/22)
 
 `prof3d.py` put `normal_op` at **99.4 %** of a step and `prof3d_procs.py` showed
 threads tying processes, so the matvec is **memory-bandwidth bound**, not compute
@@ -1996,12 +2026,16 @@ directly on `(elem, i, j, var, mode)` with fields `0..6` real and `7..13`
 imaginary. This avoids materialising the complex temporary entirely and makes
 the coupling explicit: `i·k·(a + i·b)` → real part `−k·b`, imaginary part `+k·a`.
 
-**`nogil=True`.** `parallel.pcg` spreads the z-modes over a `ThreadPoolExecutor`
-and gets 6.7× from it — which works *only* because NumPy's `einsum` and BLAS
+**`nogil=True`.** `parallel.pcg` spreads the z-modes over a `ThreadPoolExecutor`,
+worth 6.7× at Nz = 128 — which works *only* because NumPy's `einsum` and BLAS
 release the GIL. An njit kernel holds the GIL unless told otherwise, so without
 this flag the fused kernels would **serialise the mode loop and hand back most of
 what they had just won**: correct answers, and a mysterious loss of the parallel
 speedup. Measured below, and the reason `bench_numba_threads.py` exists.
+
+(At *small* mode counts the pool turns out to lose outright, numba or not — see
+"Threading now LOSES on this problem size" below. `nogil` is still required:
+it is what keeps the choice open rather than forcing serialisation everywhere.)
 
 The element loop is deliberately left **serial** (no `prange`). Parallelism
 belongs at the mode level, where the data is disjoint; a nested thread layer
@@ -2144,48 +2178,95 @@ directory with the flavour (`LSSEM3D_FASTMATH=0` to disable).
 
 ### The gain is CASE-DEPENDENT, and the range is wider than the microbenchmark suggests
 
-On the Stage 5 channel (N=6, 3×3 elements, Nz=16, convection active) numba is
-worth **2.4×**, not the 4.5× measured on Stokes decay. Both are real; quoting
-either alone would mislead. Measured end-to-end gains so far:
+Measured end-to-end gains, all back-to-back in one process:
 
 | case | numba gain |
 |---|---|
 | Stokes decay, N=8, no convection | 4.49× |
 | synthetic CG solve, N=8 / N=10 | 4.72× / 3.75× |
-| **Stage 5 channel, N=6, convection active** | **2.36–2.49×** |
+| Stage 5 channel, N=6, convection active — threaded | 3.64–4.01× |
+| Stage 5 channel, `workers=1` | **4.28×** |
 | single matvec (bench) | 3.54–6.19× |
+| bare `apply_L` + `apply_LT` at the channel shape | **8.4×** |
 
-**Why it varies is NOT established.** The obvious candidate — Amdahl, i.e. the
-row-7 fix having already removed most of the matvec-dominated time so numba has
-less left to attack — is **refuted** by the 2×2 below. Order (N=6 vs N=8),
-convection (untouched by numba), and cache residency are all still live. Given
-how many mechanism stories this project has had to retract, the honest statement
-is: **numba's gain is 2.4–6.2× depending on the case, and it should be measured
-on yours rather than assumed.**
+The spread is modest and largely accounted for: **8.4× on the kernels, ~5.0×
+predicted per CG iteration** once the 34% of an iteration that sits outside them
+is counted (`numba_where_now.py`), and **4.0–4.3× measured**. A **2.4×** figure
+reported earlier for this case does not appear here — it was an artifact of the
+stale-file confound described below, not a property of the case.
 
-### Net-net for the day: 12.74×, measured rather than multiplied
+### Net-net for the day: 21.7×, and a retracted 12.74×
 
-Row-7 (§7J) cuts *iterations*; numba cuts *cost per iteration*. That argues they
-should compose — but it is an argument, and §7J's own history is four mechanism
-arguments that measurement refuted. So the 2×2 was run out in full on one case
-(Stage 5 channel, 60 steps, `scratch/netnet_today.py` and `netnet_2x2.py`):
+**RETRACTED: 12.74×.** That figure took its NumPy reference from
+`validate_row7_stage5.json` — measured in a *different process*, at a different
+time, after ~45 min of thermal load from the `w7 = 1` leg that ran before it.
+Comparing a fresh numba run against it made numba look worth 2.36× when a clean
+back-to-back measurement puts it at 4.0×. The NumPy legs were sound; the numba
+leg in that comparison ran ~45% slower per iteration than it does clean.
 
-| 60 steps | numpy | numba | numba gain |
+**L14: never take one leg of an A/B from a file.** Both legs must be measured in
+one process, back to back. This is the same class of error as the default-argument
+bug in §7J.1 (an A/B silently comparing a config against itself) — the comparison
+looked complete and was not.
+
+Re-measured, all five legs in one process (`scratch/netnet_clean.py`, 15 steps):
+
+| config | wall | CG/step | vs this morning |
 |---|---|---|---|
-| `w7 = 1` | 2277.5 s (3577 CG/step) | 914.6 s (3546 CG/step) | **2.49×** |
-| `w7 = 1e-4` | 421.3 s (649 CG/step) | 178.8 s (650 CG/step) | **2.36×** |
-| row-7 gain | **5.41×** | **5.12×** | |
+| `w7=1` numpy threaded — **this morning's starting point** | 646.4 s | 3737.5 | 1.00× |
+| `w7=1e-4` numpy threaded | 119.8 s | 681.8 | 5.39× |
+| `w7=1e-4` numba threaded | 29.9 s | 682.3 | **21.65×** |
+| `w7=1e-4` numba **serial** | 22.7 s | 682.0 | **28.48×** |
+| `w7=1` numpy serial | 533.4 s | 3774.5 | 1.21× |
 
-**2277.5 s → 178.8 s = 12.74×**, with `E/E0` identical to 5.3e-09 across all
-four cells.
+`E/E0 = 0.942102` in all five. **Today's net-net is 21.7× like-for-like, 28.5×
+if threads are also turned off.**
 
-The 2×2 is what makes this a result rather than a product. Read across: numba is
-worth 2.49× where the run is nearly pure matvec and 2.36× where iterations have
-already been cut 5.5× — **essentially the same**. Amdahl predicted the second
-number should collapse; it did not, so the two changes are **independent
-multipliers**, not competitors for the same time. (Note that
-`netnet_today.py`'s "product of the two" line is a tautology — `base/r ≡
-(base/mid)·(mid/r)` — and proves nothing on its own. This cell does.)
+### The reductions are NOT the bottleneck — hypothesis tested and refuted
+
+`numba_where_now.py` showed the fused kernels at **8.4×** (2.77 → 0.33 ms) but
+34% of a CG iteration now outside them, predicting ~5.0×. A `cProfile` of a real
+step ranked `_dot` alongside `normal_op`, suggesting the GIL-bound NumPy
+reductions had become the serialization point under `parallel.pcg`'s thread pool
+— which would have meant another ~2× was available by fusing `_dot`.
+
+`scratch/numba_gil_test.py` ran the discriminator (same case, `workers=1` vs
+`workers=auto`):
+
+| | numpy | numba | numba gain |
+|---|---|---|---|
+| `workers = 1` | 98.7 s | 23.1 s | **4.28×** |
+| `workers = auto` | 109.2 s | 30.0 s | **3.64×** |
+
+**Refuted.** 4.28× vs 3.64× is nowhere near the gap the GIL story required, and
+4.28× is close to the 5.0× the serial accounting predicted. Once the stale-file
+confound above is removed there is no missing factor to explain. **Do not build a
+fused `_dot`** — the arithmetic already closes.
+
+### Threading now LOSES on this problem size
+
+The same test found the thread pool costing time on both backends:
+
+| | thread scaling |
+|---|---|
+| numpy | **0.90×** |
+| numba | **0.77×** |
+
+Reproduced independently in `netnet_clean.py` (533.4 s serial vs 646.4 s threaded
+at `w7 = 1`). `workers = 1` is the fastest configuration available, worth **1.32×**
+on top of numba.
+
+This does not contradict §3.4's 6.7×: that was measured at Nz = 128, i.e. **65
+modes**, and this case has **9**. Pool overhead is per-solve and roughly fixed,
+so it wins only when there is enough per-mode work to amortise it — and *the
+faster the matvec gets, the less there is*. numba makes the crossover worse,
+which is why its thread scaling (0.77×) is worse than NumPy's (0.90×).
+
+**Open, and now the highest-value numba-adjacent item:** `parallel.n_workers`
+picks by performance-core count alone. It should account for mode count and
+per-mode work, and it should be re-calibrated *with the numba backend active*,
+since numba moves the crossover. Until then, pass `workers=1` explicitly on
+small-Nz cases.
 
 ### Where this lands
 
@@ -2196,7 +2277,12 @@ Four independent multipliers, all measured on this operator:
 | analytic Jacobi diagonal + CG tolerance (§7F, §7G) | 2.38× | fixed overhead + iterations |
 | row-7 down-weighting (§7J) | 5.4× | iterations |
 | mode-parallelism (§3.4) | up to 6.7× | wall clock |
-| **numba fusion (§7M)** | **2.4–6.2×** | **per matvec** |
+| **numba fusion (§7M)** | **4.0–8.4×** | **per matvec** |
+| **`workers=1` at small Nz (§7M)** | **1.32×** | **thread-pool overhead** |
+
+Today's two (row-7 × numba) compose to a measured **21.7×**, 28.5× with threads
+off. The numba figures above supersede the 2.4× quoted before the stale-file
+confound was found (L14).
 
 
 ## 9. Inventory
@@ -2246,7 +2332,10 @@ uv run --quiet python -m pytest lssem3d/tests -q
 | **`bench_numba_threads.py`** | **does numba still scale over threads — the `nogil` check (§7M)** |
 | **`validate_numba_physics.py`** | **numba reproduces the analytic Stokes rate (§7M)** |
 | **`numba_drift.py`** | **do the backends drift apart over 200 steps? (§7M)** |
-| **`netnet_today.py`**, **`netnet_2x2.py`** | **the row-7 × numba 2×2: 12.74× composed (§7M)** |
+| `netnet_today.py`, `netnet_2x2.py` | the row-7 × numba 2×2 — **superseded, its NumPy leg came from a file (§7M, L14)** |
+| **`netnet_clean.py`** | **all five legs in one process: today's net-net, 21.7× (§7M)** |
+| **`numba_where_now.py`** | **where a CG iteration goes under numba (§7M)** |
+| **`numba_gil_test.py`** | **are the reductions the bottleneck? — refuted; found threading losing (§7M)** |
 
 ### Using the parallel solver
 

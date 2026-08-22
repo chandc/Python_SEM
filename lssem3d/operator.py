@@ -42,6 +42,7 @@ adjoint machinery apply unchanged -- 3D_DEVELOPMENT_PLAN.md sec 1.2.  The
 split/join pair is trivial and is tested as a round trip.
 """
 import numpy as np
+from . import backend
 from .deriv import ddx as dUdx, ddy as dUdy, ddxT as DxT, ddyT as DyT
 
 NVAR = 7                 # u v w ox oy oz p          (complex)
@@ -227,16 +228,50 @@ def momentum_row_weights(c, w7=ROW7_WEIGHT):
 
 # --------------------------------------------------------- split-real facade
 
-def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
+def _apply_L_numpy(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
     """(..., 14, nmode) real -> (..., 16, nmode) real.  Weighted if wq given."""
     return to_real(apply_L_complex(to_complex(Ur), D, facx, facy, kz, nu, c, wq,
                                    kap, rw))
 
 
-def apply_LT(Rr, D, facx, facy, kz, nu, c, kap=0.0):
+def _apply_LT_numpy(Rr, D, facx, facy, kz, nu, c, kap=0.0):
     """(..., 16, nmode) real -> (..., 14, nmode) real."""
     Rc = Rr[..., :NROW, :] + 1j*Rr[..., NROW:, :]
     return to_real(apply_LT_complex(Rc, D, facx, facy, kz, nu, c, kap))
+
+
+# ------------------------------------------------------------ backend binding
+#
+# The public names apply_L / apply_LT stay put, so every call site and every
+# test exercises whichever backend is active without being edited -- the same
+# arrangement as lssem2d/lssem.py.  Resolution happens once per switch, not per
+# call.  The NumPy pair above remains the reference: `test_backend_parity.py`
+# holds the numba kernels to it.
+
+_IMPL_L = None
+_IMPL_LT = None
+
+
+def _bind_backend(name):
+    global _IMPL_L, _IMPL_LT
+    if name == 'numba':
+        from .kernels_numba import apply_L as _L, apply_LT as _LT
+    else:
+        _L, _LT = _apply_L_numpy, _apply_LT_numpy
+    _IMPL_L, _IMPL_LT = _L, _LT
+
+
+backend.register(_bind_backend)
+
+
+def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
+    """(..., 14, nmode) real -> (..., 16, nmode) real.  Weighted if wq given."""
+    return _IMPL_L(Ur, D, facx, facy, kz, nu, c, wq, kap, rw)
+
+
+def apply_LT(Rr, D, facx, facy, kz, nu, c, kap=0.0):
+    """(..., 16, nmode) real -> (..., 14, nmode) real."""
+    return _IMPL_LT(Rr, D, facx, facy, kz, nu, c, kap)
 
 
 def reduces_to_2d(kz):

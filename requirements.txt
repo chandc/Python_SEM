@@ -6,7 +6,8 @@
 numpy
 scipy
 matplotlib
-numba                 # optional backend, see NUMBA_BACKEND.md (LSSEM_BACKEND=numba)
+numba                 # optional backend for BOTH modules: LSSEM_BACKEND=numba (2D,
+                      # NUMBA_BACKEND.md) and LSSEM3D_BACKEND=numba (3D, 3D_STATUS.md sec 7M)
 pandas
 sympy
 tomli                 # .toml case files (bfs.toml, cavity.toml)

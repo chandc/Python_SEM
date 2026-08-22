@@ -123,8 +123,19 @@ operator-AC. That does **not** transfer to the cavity or to high Reynolds number
   the state into one**: `to_complex`, 14 einsums, 8 row assemblies, `wq`, `rw`,
   `to_real` all become a single loop that accumulates in registers, working in
   real arithmetic directly on the split-real layout. **3.5–6.2× per matvec**
-  (the gain *falls* with size, as a bandwidth-bound kernel should), **3.8–4.7×**
-  on a whole solve, **10.3×** best-to-best against serial NumPy.
+  (the gain *falls* with size, as a bandwidth-bound kernel should) and
+  **2.4–4.7× end to end** — the spread is real and its cause is not established,
+  so measure it on your case rather than assuming the microbenchmark number.
+* **Net-net for the day: 21.7×** on the Stage 5 channel (15 steps,
+  646.4 s -> 29.9 s, `E/E0` identical), from row-7 (5.39×) x numba (4.01×) --
+  **28.5×** with the thread pool off. A first report of 12.74× is retracted: one
+  leg of that A/B came from a stored JSON written by an earlier, thermally loaded
+  process instead of being measured back to back (3D_STATUS.md L14).
+* **The thread pool now LOSES at small mode counts** -- 0.90× for numpy, 0.77×
+  for numba, so `workers=1` is fastest. Not a contradiction of the documented
+  6.7×, which was at Nz=128 (65 modes) against this case's 9: pool overhead is
+  roughly fixed per solve, so a faster matvec moves the crossover. Re-calibrating
+  `parallel.n_workers` **with numba active** is the open item.
   * `nogil=True` is load-bearing: `parallel.pcg` uses a `ThreadPoolExecutor`, and
     an njit kernel holding the GIL would have serialised it — correct answers,
     most of the 6.7× silently gone. `bench_numba_threads.py` gates it.
