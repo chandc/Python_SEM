@@ -221,12 +221,14 @@ $e$ = 0.0028 sits alongside their $256^3$ DNS reference value of 0.0020.
 
 **Caveats, stated because they bound the claim.**
 
-* **$E_0$ ambiguity.** The paper states "the corresponding energy at $t = 0$ is
-  $E_0 = u_0^2/2$", but the TGV initial condition carries mean kinetic energy
-  density $u_0^2/8$ — a factor of 4. We normalise by the **actual** initial
-  kinetic energy. If their $E_0$ is the stated $u_0^2/2$, every one of our
-  numbers above should be divided by 4, which *improves* our standing — so the
-  conservative choice is the one made.
+* ~~**$E_0$ ambiguity**~~ — **RESOLVED by digitising their figure** (§8.1).
+  The paper's text states $E_0 = u_0^2/2$ while the TGV initial condition
+  carries mean kinetic energy density $u_0^2/8$, a factor of 4. The $t = 0$
+  intercept of their own Fig. 3b settles it: measured 0.0472 against the
+  analytic $2\nu\Omega_0/V \big/ (E_0/T_0) = 0.0471$ for $E_0 = u_0^2/8$,
+  versus 0.0118 for $u_0^2/2$. **Their normalisation is the actual initial
+  kinetic energy — the same one we used — so the $e$ values above are directly
+  comparable with no factor of four.**
 * **Window coverage**: the $Re$ = 100 run ends at $t = 12.0$ against the
   window's $2T_0 = 12.57$ (95%); the $Re$ = 400 run covers it fully.
 * Different $Re$, different flow states: this compares *numerical fidelity at
@@ -238,3 +240,52 @@ $Re$ = 400 — were reported as an unbenchmarked resolution price. On the
 published scale they are **DNS-class and better-than-compressed-MPS
 respectively**, which is the first external, quantitative corroboration that
 the LSSEM/VVP formulation dissipates energy physically rather than numerically.
+
+
+### 8.1 Curve-level comparison: their Fig. 3b, digitised
+
+`reference/gourianov_digitize.py` → `reference/gourianov_fig3b_tgv_re800.csv`.
+Fig. 3b is **vector art**, so the curves and the axis ticks are read straight
+out of the PDF content stream — nothing is estimated by pixel analysis, and the
+accuracy is limited by the authors' plotting rather than by our extraction.
+Extracted: $\varepsilon(t)/(E_0/T_0)$ for their DNS ($256^3$) and their MPS at
+$\chi$ = 192 / 128 / 96, all at $Re$ = 800. (Their enstrophy $\zeta(t)$ is
+drawn as markers; for the DNS curve it coincides with $\varepsilon$ to their
+own $e$ = 0.002, and the $\zeta-\varepsilon$ gap is exactly what Table 1
+already quantifies.)
+
+![dissipation vs Gourianov](figs/tgv_dissipation_vs_gourianov.png)
+
+**The $t = 0$ intercept is a parameter-free calibration.** For the TGV initial
+condition $\Omega_0/V = 3/8$ exactly, so
+$\varepsilon(0)/(E_0/T_0) = 2\nu(3/8)/(E_0/T_0)$ — a pure function of $\nu$.
+Extraction reproduces it to 0.1%, which validates the digitisation *and* fixes
+their $E_0$ convention (above). Our runs land on their own analytic intercepts
+by construction: 0.375 at $Re$ = 100, 0.094 at $Re$ = 400, 0.047 at $Re$ = 800.
+
+**The Reynolds-number family.** The three curves are *not* expected to
+coincide — different $Re$, different flows — and what the overlay tests is
+whether ours extend the published one in the right direction:
+
+| run | $Re$ | peak $\varepsilon/(E_0/T_0)$ | $t_\mathrm{peak}/T_0$ |
+|---|---|---|---|
+| ours, $24^3$ | 100 | 0.650 | 0.77 |
+| ours, $48^3$ | 400 | 0.578 | 0.96 |
+| **their DNS, $256^3$** | **800** | **0.589** | **1.43** |
+| literature (Brachet / workshop) | 1600 | ≈0.588 | ≈1.43 |
+
+Both trends are the textbook ones: the peak **moves monotonically later** with
+$Re$ (0.77 → 0.96 → 1.43), and its **height flattens onto the high-$Re$
+plateau** — elevated at $Re$ = 100 where viscosity dissipates the large scales
+directly, then essentially $Re$-independent from 400 upward (0.578, 0.589,
+0.588), which is the dissipation anomaly. Our two points sit on the published
+family, on both axes.
+
+**What is still not a same-$Re$ test.** Nothing here compares our solver with
+theirs *on the same flow*. That needs a run at $Re$ = 800 — and now that the
+row-7 fix and the numba backend have cut the cost ~40×, the decisive experiment
+is affordable: **repeat their exact URDNS grids ($60^3$, $70^3$, $88^3$) at
+$Re$ = 800** and compare $e$ against their published 0.4563 / 0.2133 / 0.1599 at
+identical resolution and Reynolds number. Estimated cost with numba: ~7 h at
+$60^3$, ~1.5 days at $88^3$. That is the experiment this section makes possible
+and does not yet contain.

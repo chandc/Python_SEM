@@ -112,5 +112,50 @@ def main():
     print('\nwrote figs/tgv_vs_gourianov.png')
 
 
+
+def curve_overlay():
+    """Our eps(t) against the digitised Fig. 3b DNS curve, in THEIR normalisation."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    ref = np.genfromtxt('reference/gourianov_fig3b_tgv_re800.csv', delimiter=',',
+                        names=True, skip_header=6)
+    E0V, = (1/8.,)                      # mean initial kinetic energy density
+    norm = E0V/T0                       # their y-axis unit, E0/T0
+    fig, ax = plt.subplots(figsize=(8.2, 5.6))
+    ax.plot(ref['t_over_T0'], ref['DNS_256'], 'k-', lw=2.4,
+            label='Gourianov et al. DNS, $Re$ = 800, $256^3$ (digitised)')
+    ax.plot(ref['t_over_T0'], ref['MPS_chi96'], color='0.55', ls=':', lw=1.6,
+            label='their MPS $\\chi$ = 96, $Re$ = 800')
+    for tag, col in (('re100', 'C2'), ('re400', 'C0')):
+        d = np.load(f'scratch/tgv_diag_{tag}.npz')
+        t, Om, nu = d['t'], d['Om'], float(d['nu'])
+        ax.plot(t/T0, (2*nu*Om/V)/norm, col, lw=2,
+                label=f'ours (LSSEM/VVP), $Re$ = {1/nu:.0f}, '
+                      f'{GRID[tag]}$^3$')
+    ax.set_xlabel('$t/T_0$')
+    ax.set_ylabel(r'$\varepsilon(t)\,/\,(E_0/T_0)$')
+    ax.set_xlim(0, 2); ax.set_ylim(0, 0.72); ax.grid(alpha=0.3)
+    ax.legend(fontsize=9, loc='upper left')
+    ax.set_title('TGV energy dissipation, in Gourianov et al. normalisation\n'
+                 'the $t = 0$ intercept is analytic ($2\\nu\\Omega_0/V$) and '
+                 'calibrates the comparison exactly')
+    fig.tight_layout()
+    fig.savefig('figs/tgv_dissipation_vs_gourianov.png', dpi=150)
+    print('wrote figs/tgv_dissipation_vs_gourianov.png')
+    # the Reynolds-number family, quantified
+    print(f"\n{'case':>22}{'Re':>6}{'peak eps/(E0/T0)':>19}{'t_peak/T0':>11}")
+    for tag in ('re100', 're400'):
+        d = np.load(f'scratch/tgv_diag_{tag}.npz')
+        e = (2*float(d['nu'])*d['Om']/V)/norm
+        i = int(np.argmax(e))
+        print(f"{'ours ' + tag:>22}{1/float(d['nu']):>6.0f}{e[i]:>19.3f}"
+              f"{d['t'][i]/T0:>11.2f}")
+    i = int(np.nanargmax(ref['DNS_256']))
+    print(f"{'Gourianov DNS':>22}{800:>6}{ref['DNS_256'][i]:>19.3f}"
+          f"{ref['t_over_T0'][i]:>11.2f}")
+
+
 if __name__ == '__main__':
     main()
+    curve_overlay()
