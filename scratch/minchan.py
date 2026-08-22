@@ -250,9 +250,14 @@ def _precond(s_host, dt, like=None):
     return [DEV.to_device(q, like) for q in Minv] if like is not None else Minv
 
 
-def advance(s, U, Nprev, dt, Minv, tol=1e-6, max_iter=20000):
+def advance(s, U, Nprev, dt, Minv, tol=1e-6, max_iter=20000, **kw):
+    """One RKW3/CN step.  `tol` = 1e-6 is the measured policy (3D_STATUS.md
+    sec 7F): error unchanged to within 1%, ~40% fewer iterations than 1e-12.
+    1e-3 was swept and REJECTED there -- 19-238x the error.
+
+    **kw forwards to `channel3d.stage`, notably `warm=` for the warm start."""
     return C.step(s, U, Nprev, dt, 0.0, rowweight=True, Minv=Minv, tol=tol,
-                  max_iter=max_iter)
+                  max_iter=max_iter, **kw)
 
 
 def check(N=8, ex=6, ey=18, nz=32):

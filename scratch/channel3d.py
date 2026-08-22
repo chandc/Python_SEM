@@ -123,13 +123,27 @@ def _fw(rw, nrow2):
 
 
 def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
-          Minv=None, nsub=1, sub_tol=1e-10, rw=None):
+          Minv=None, nsub=1, sub_tol=1e-10, rw=None, warm=None):
     """One RKW3/CN stage with AC and the body force.
 
     The body force is a constant, so it rides in the EXPLICIT term: per stage the
     weights are gamma_k + zeta_k, which sum to 1 over the three stages, giving
     exactly dt*f per step.  Putting it in the implicit term instead would weight
     it by alpha+beta and quietly rescale the driving.
+
+    WARM START (`warm`).  A dict carried by the CALLER across steps, keyed by
+    stage index.  `pcg` has always accepted `x0` and nothing ever passed it, so
+    every stage solved the defect-correction system from ZERO -- three times per
+    step, ~15000 times over a minimal-channel run -- when consecutive steps solve
+    very nearly the same system.
+
+    This is a change of STARTING POINT, not of the convergence criterion: the
+    target is still ||b - A x|| < tol*||b||, so the answer is the same to within
+    the same tolerance.  It cannot trade accuracy for speed, which is exactly why
+    it is worth trying before anything that can.
+
+    Whether the previous dU is a GOOD guess is an empirical question -- a stale
+    one could be worse than zero -- so it is measured, not assumed.
 
     SUB-ITERATIONS (nsub > 1) -- dual time stepping, which is what makes AC
     legitimate for an UNSTEADY problem.  The continuity row solves
@@ -177,6 +191,11 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
     wqR = wq[..., None, None]            # quadrature weights where the state is
     p_prev = Uc[..., OP.P_, :]          # sub-iterate 0: previous time level
     Uit, its, nit = U, 0, 0
+    x0 = None
+    if warm is not None:
+        cached = warm.get(k)
+        if cached is not None and tuple(cached.shape) == tuple(U.shape):
+            x0 = cached
     for _ in range(max(1, nsub)):
         fc[..., 0, :] = kap*p_prev
         f = DEV.cat([fc.real, fc.imag], -2)
@@ -194,7 +213,10 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
             lambda *a, **kw: PAR.pcg(*a, workers=workers, **kw))
         dU, it, _ = solve(b, D, m.facx, m.facy, kz, nu, c, mesh=m, mask=mask,
                           M_inv=None if Minv is None else Minv[k], tol=tol,
-                          max_iter=max_iter, wq=wq, kap=kap, rw=rw)
+                          max_iter=max_iter, wq=wq, kap=kap, rw=rw, x0=x0)
+        if warm is not None:
+            warm[k] = dU
+        x0 = None                       # sub-iterates continue from dU already
         Uit = Uit + dU
         its += it
         nit += 1
