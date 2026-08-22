@@ -132,15 +132,57 @@ This is L5 ("know your floor before calling something an error") in a new
 costume, and it is the reason a bitwise-parity habit has to be dropped
 deliberately rather than by accident when a backend goes non-deterministic.
 
+## Phase 3: the VALIDATION LADDER, re-run on the CuPy path — ALL THREE PASS
+
+`scratch/cupy_validation_ladder.py`, device-resident throughout, in the
+container on the GB10. Each gate is checked against something NumPy cannot
+influence — an analytic rate, the design order, or a parameter-free identity —
+and, where a NumPy run is on record, against that record too.
+
+### Gate 1 — Stokes decay against the analytic σ = 9.3137399
+
+| `dt` | CuPy σ | rel err | NumPy record (`stokes_afterfix.log`) |
+|---|---|---|---|
+| 0.01 | 9.3153041 | 1.679e−04 | 9.3153041, 1.680e−04 |
+| 0.005 | 9.3141300 | 4.188e−05 | 9.3141300, 4.189e−05 |
+| 0.0025 | 9.3138373 | 1.045e−05 | 9.3138373, 1.046e−05 |
+
+**σ reproduces the recorded NumPy values to all eight printed digits**, with
+convergence order **2.00**.
+
+### Gate 2 — rotated (x,z) TG, z-convection active
+
+| `dt` | CuPy L2 err | NumPy record (§7E.1) | ratio |
+|---|---|---|---|
+| 0.02 | 5.7239e−07 | 5.724e−07 | **1.000** |
+| 0.01 | 1.4308e−07 | 1.431e−07 | **1.000** |
+| 0.005 | 3.5769e−08 | 3.577e−08 | **1.000** |
+
+Order **2.00, 2.00** — the design order, on the path that exercises `w ∂/∂z`,
+the `i k_z` terms and the 3/2-dealiased mode convolution inside the stage loop.
+
+### Gate 3 — the parameter-free balance
+
+`E(0)` = 31.006277 and `Ω(0)` = 93.018830 against the analytic
+$(2\pi)^3/8$ and $3(2\pi)^3/8$; the balance
+$-dE/dt = 2\nu\Omega$ holds over ten steps with a worst deviation of
+**6.65e−06**.
+
+**What this establishes.** The CuPy path is not merely bit-comparable to NumPy
+on one operator application — it reproduces the project's physics results, to
+the recorded digits, on a different array library, a different kernel compiler
+and a different device. Two ports that share no device code now agree with the
+reference; that is the evidence L1 asks for, and neither port alone provides
+it.
+
 ## Next
 
 1. **Deterministic mode** for CuPy, mirroring `DEV.deterministic()` on the
    torch path — a sort-based or sparse-matmul gather-scatter would restore
    bitwise reproducibility for parity work, at a cost only paid in testing.
-2. Re-run the **validation ladder** (Stokes σ, rotated-TG order 2.00, TGV
-   balance) end to end on the CuPy path. Phase 2 above proves one stage; the
-   ladder proves the physics.
-3. Benchmark on an **A100** (Colab), where FP64 is 46× the GB10's — that is
+2. Benchmark on an **A100** (Colab), where FP64 is 46× the GB10's — that is
    where a production number can honestly be quoted. The 1.6× whole-solve
    figure above is GB10 FP64 against Grace-core NumPy and is *not* a
    production number.
+3. Merge coordination with the torch/CUDA port: the shared-file surface is the
+   four small hunks listed above, all additive.
