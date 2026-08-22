@@ -2419,6 +2419,101 @@ output in `scratch/gpu_fp64_probe_spark-b85b.log`. On the Spark it runs inside
 `chandc/unsloth-dgx-spark:latest` (torch 2.10 nv25.11, sm_121); the host `uv`
 venv gives the CPU-only baseline.
 
+## 7O. PyTorch vs cuPyNumeric on the GB10 — measured (2026-08-22)
+
+Both run FP64 on the GB10. The question was whether cuPyNumeric's **drop-in
+NumPy** promise lets us skip the port. §7M measured the win as coming from
+**fusion** — ~30 passes collapsed into one — so a library whose selling point is
+*preserving* your NumPy might inherit exactly the structure that costs 7.6×.
+Measured rather than argued.
+
+Same machine, same base image, same CUDA 13 stack, FP64, dtypes asserted.
+**Derivative contractions only** (no row assembly), both libraries timed
+identically, so the columns are comparable to each other but *not* to the Mac
+numba figure, which is the complete fused operator.
+
+| implementation | 48³ (1.02M dof) | 88³ (6.17M dof) |
+|---|---|---|
+| Mac, numba — fused, **complete operator** | 9.4 ms | 59.6 ms |
+| cuPyNumeric, batched (4 einsums) | 3.1 ms | 10.2 ms |
+| cuPyNumeric, **unfused — the drop-in form** | 20.0 ms | 28.4 ms |
+| torch, batched (4 einsums) | 1.6 ms | 10.1 ms |
+| **torch, unfused (14 per-field einsums)** | **1.1 ms** | **5.3 ms** |
+
+### Three findings, none of which were predictable from the docs
+
+**1. Legate does not fuse the 30-pass structure away.** cuPyNumeric's unfused
+form costs **2.8× its own batched form** at 88³ (6.5× at 48³). The hypothesis
+that lazy evaluation would recover fusion automatically is **refuted**. The
+drop-in convenience is therefore not free — it is the library's *slowest* mode.
+
+**2. torch is FASTER unfused than batched — the opposite of cuPyNumeric.**
+5.3 ms vs 10.1 ms at 88³. The 5-D batched contraction `pi,eijvk->epjvk` evidently
+falls off a good path that the 4-D `pi,eijk->epjk` stays on. **einsum
+performance is strongly shape-sensitive and the two libraries have opposite
+preferences**, so any port must benchmark formulations rather than assume the
+"obviously vectorised" one wins. This was found by running the symmetric test
+only because cuPyNumeric's result looked odd.
+
+**3. Best-form against best-form, torch wins** — 1.9× at 88³, 2.8× at 48³.
+
+### The verdict: PyTorch
+
+The drop-in argument for cuPyNumeric collapses under its own measurement. Its
+zero-rewrite mode is 28.4 ms; to reach its competitive 10.2 ms you must rewrite
+to batched form — and having rewritten, torch does the same job in 5.3 ms. **You
+pay the porting cost either way, so pay it into the faster library.**
+
+Supporting, in order of weight:
+
+* **torch has a custom-CUDA-kernel escape hatch and cuPyNumeric does not.**
+  §7M's 7.6× came from a hand-fused kernel; `_kernel_L` is already written as
+  explicit scalar arithmetic, which is what CUDA wants. That path stays open.
+* **torch is better at the SMALL sizes**, by 2.8×. Development, the minimal
+  channel and every regression test live there; Legate's per-task launch
+  overhead shows up badly (its 48³ unfused case is 20.0 ms, worse than the Mac).
+* **`backend.py` already dispatches `_IMPL_L`/`_IMPL_LT`**, and
+  `test_backend_parity.py` holds any new backend to the NumPy reference across
+  `kap`, row weights and `k_z = 0`/`≠0`. A `'torch'` backend drops into a slot
+  built for it.
+* **The drop-in promise has real holes.** `cupynumeric.random.Generator` has no
+  `standard_normal`; `gs` goes through `scipy.sparse`, which is not covered at
+  all.
+* **cuPyNumeric's differentiator — transparent multi-GPU/multi-node — does not
+  apply.** There is one GB10.
+
+### Where cuPyNumeric would still be the right call
+
+Running `operator.py` **unchanged** on the GPU gives 28.4 ms against the Mac's
+fused 59.6 ms — a genuine **~2.1×** for essentially zero engineering. If the goal
+were one result this week rather than a solver to keep, that is a real option and
+it is the honest case for it.
+
+### Caveats
+
+* These are **derivative contractions only**. Row assembly, `wq`/`rw` and the
+  transpose recombination are elementwise and bandwidth-bound; at 141.8 GB/s and
+  49 MB of state they add a few ms. The Mac numba column *includes* them, so
+  torch's true margin over it is smaller than 59.6/5.3 suggests.
+* **Gather-scatter is measured on neither** and is the awkward part on any GPU.
+* The `_cpu_`/`_gpu_` build trap is documented in
+  `scratch/cupynumeric/Dockerfile`: a docker build sees no GPU, so conda never
+  sets `__cuda` and silently resolves the **CPU-only** Legate. It imports fine
+  and reports a GPU in `rt.machine`. Only `LEGATE_CONFIG=--gpus 1` surfaced it —
+  without that flag it would have benchmarked on the host and been reported as
+  GPU numbers. Same failure mode as L15; the fix is `CONDA_OVERRIDE_CUDA=13.0`
+  plus an explicit `=*=cuda13_py313_gpu*` pin.
+
+### Reproducing
+
+```bash
+ssh Spark 'cd /tmp && docker build -f Dockerfile.cpn -t cpn-spark:latest .'
+ssh Spark 'docker run --rm --gpus all --ipc=host -e LEGATE_CONFIG="--gpus 1 --fbmem 30000" \
+    -v /tmp/cpn_matvec.py:/m.py:ro cpn-spark:latest /opt/cpn/bin/python /m.py'
+```
+
+`scratch/cupynumeric/` holds the Dockerfile and benchmark.
+
 ## 9. Inventory
 
 ### Modules (`lssem3d/`)
@@ -2468,6 +2563,7 @@ uv run --quiet python -m pytest lssem3d/tests -q
 | **`numba_drift.py`** | **do the backends drift apart over 200 steps? (§7M)** |
 | `mlx_bandwidth_probe.py` | **SUPERSEDED — measured FP32 while claiming FP64 (§7N, L15)** |
 | **`mac_fp64_recheck.py`** | **what the Mac can really do in FP64, dtypes asserted (§7N)** |
+| **`cupynumeric/`** | **PyTorch vs cuPyNumeric on the GB10 — Dockerfile + benchmark (§7O)** |
 | **`gpu_fp64_probe.py`**, **`run_gpu_probe.sh`** | **standalone FP64 go/no-go for any remote GPU (§7N)** |
 | `netnet_today.py`, `netnet_2x2.py` | the row-7 × numba 2×2 — **superseded, its NumPy leg came from a file (§7M, L14)** |
 | **`netnet_clean.py`** | **all five legs in one process: today's net-net, 21.7× (§7M)** |
