@@ -231,6 +231,15 @@ CASES = dict(
     # tighten as dt falls.
     re400=dict(nu=0.0025, N=8, ex=6, ey=6, nz=48, tend=15.0, snap=0.5,
                cfl=1.1, chk_every=2.5, tol=1e-6),
+    # re800_88: the same-Re, same-grid comparison against Gourianov et al.
+    # (2022) Table 1.  11x11 elements at N = 8 gives exactly 88 unique points
+    # per periodic direction, matching their 1:25 URDNS grid; Nz = 88 likewise.
+    # tend = 2*T0 = 4*pi is THEIR integration window, so e is computed over the
+    # same interval.  Measured 70.5 s/step with LSSEM3D_BACKEND=numba
+    # (TGV_VALIDATION.md sec 8.2); snapshots at dt = 1.0 because each frame is
+    # ~25 MB at 45 modes.
+    re800_88=dict(nu=1/800., N=8, ex=11, ey=11, nz=88, tend=4*np.pi, snap=1.0,
+                  cfl=1.0, chk_every=2.5, tol=1e-6),
 )
 
 
