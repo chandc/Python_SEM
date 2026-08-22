@@ -48,6 +48,8 @@ def gs(mesh, U):
     """
     if DEV.is_tensor(U):
         return DEV.gs_torch(mesh, U)          # index_add_, no scipy, stays on GPU
+    if DEV.is_cupy(U):
+        return DEV.gs_cupy(mesh, U)           # scatter_add, stays on GPU
     nel, n, _, nv, nk = U.shape
     return gather_scatter(mesh, U.reshape(nel, n, n, nv*nk)).reshape(U.shape)
 

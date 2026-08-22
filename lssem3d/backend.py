@@ -30,7 +30,7 @@ wq, rw, to_real).
 """
 import os
 
-VALID = ('numpy', 'numba', 'torch')
+VALID = ('numpy', 'numba', 'torch', 'cupy')
 
 _backend = None
 _listeners = []
@@ -44,6 +44,12 @@ def available(name='numba'):
         try:
             import numba  # noqa: F401
             return True
+        except Exception:
+            return False
+    if name == 'cupy':
+        try:
+            import cupy  # noqa: F401
+            return cupy.cuda.runtime.getDeviceCount() > 0
         except Exception:
             return False
     if name == 'torch':
