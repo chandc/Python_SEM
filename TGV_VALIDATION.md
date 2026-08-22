@@ -122,3 +122,36 @@ $\varepsilon_{max} = 0.0129 \pm {\sim}0.0001$ from resolution.
   under exactly that upgrade set.
 * Terminology note: the quantity tracked here is **enstrophy** ($\tfrac{1}{2}\int |\omega|^2$), the
   standard companion to energy for this benchmark.
+
+---
+
+## 7. The Re = 400 companion run (2026-08-22)
+
+Same rig at $\nu = 0.0025$, 48³ (6×6 N = 8, $N_z$ = 48), dt = 0.0114,
+$t \to 15$ — **9.9 hours** under the row-7 weighting (the pre-fix attempt
+priced at ~5 days and matched this trajectory to every printed digit while it
+ran, a live cross-weighting consistency check).
+
+![TGV Re=400 transient](figs/tgv_re400_transient.png)
+
+| headline | Re = 400 | Re = 100 |
+|---|---|---|
+| enstrophy growth | **6.13×** | 1.72× |
+| $\varepsilon_{max}$ | **0.01150 at $t = 6.00$** | 0.01293 at $t = 4.84$ |
+| energy dissipated by run end | 81.3% | ~50% |
+| worst balance ratio | 0.9495 at $t = 9.54$ | 0.993 |
+
+The deep-cascade signatures are all present and correctly ordered against the
+Brachet family: enstrophy grows immediately (no initial viscous dip — at 4×
+the Reynolds number, stretching outruns viscosity from $t = 0$), the peak
+arrives later than Re = 100 and earlier than the published Re ≥ 800 members
+($t \approx 9$), and the growth factor jumps from 1.7× to 6.1×. The **5.1%
+balance gap** in the post-peak phase is the measured price of 48³ at this
+Reynolds number — the honest error bar on the peak ($\pm\sim$0.0006, with the
+gap's sign implying the true peak is slightly higher). Tightening it is a 64³
+rerun under the numba backend; the digit-level Brachet comparison still awaits
+the digitisation of §4.
+
+Data: 31 frames + 6 checkpoints in `scratch/tgv_frames_re400/`, diagnostics in
+`scratch/tgv_diag_re400.npz`, movie `figs/tgv_re400_movie.mp4`, ParaView
+export `scratch/tgv_vtk_re400/tgv_re400.pvd`.

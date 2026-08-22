@@ -1899,15 +1899,36 @@ Classical interacting TGV, (2π)³ triply periodic, ν = 0.01, ≈24³ resolutio
   49 complex64 frames + 6 float64 checkpoints in `scratch/tgv_frames_re100/`,
   per-step series in `scratch/tgv_diag_re100.npz`.
 
-### 7E.3 TGV Re = 400 — in flight
+### 7E.3 TGV Re = 400 — COMPLETE (2026-08-22, 9.9 h under the row-7 weighting)
 
-48³ (6×6 N = 8, Nz = 48), tol 1e−7, ~3–4 days numpy; judged against Brachet's
-Re = 400 dissipation curve plus the balance ratio.  The 64³ version priced at
-~19 min/step — weeks — and is deferred to M6 (numba); that pricing exercise is
-the step-cost model §8.5 asks for, in miniature.  Expect the balance ratio to
-dip below re100's 0.993 floor near peak enstrophy: at Re = 400 the cascade
-genuinely reaches scales 48³ only marginally resolves, and the ratio is the
-honest meter of exactly how marginally.
+48³ (6×6 N = 8, Nz = 48), dt = 0.0114, tol 1e−6, legacy row weights +
+w7 = 1e−4, t → 15 in **9.9 hours** (1312 steps, ~1600 CG/step, zero capped
+solves — the run the row-7 fix bought: the archived w7 = 1 attempt priced at
+~5 days, and matched this trajectory to every printed digit while it ran).
+
+| headline | value | Re = 100 contrast |
+|---|---|---|
+| enstrophy growth | **6.13×**, peak near $t \approx 5.8$ | 1.72× |
+| $\varepsilon_{max}$ | **0.01150 at t = 6.00** | 0.01293 at t = 4.84 |
+| energy dissipated by t = 15 | 81.3% | ~50% by t = 12 |
+| balance ratio worst | **0.9495 at t = 9.54**, recovering to 0.987 | 0.993 |
+
+* **IC anchors machine-exact** (same $E_0$, $\Omega_0$ identities as §7E.2).
+* **Family shape vs Brachet**: peak later and growth far larger than Re = 100,
+  with the peak time sitting between the Re = 100 (t ≈ 4.8) and Re ≥ 800
+  (t ≈ 9) members — the correct monotone family. Digit-level comparison
+  still awaits the Brachet digitisation (open item, §7E.2).
+* **The predicted resolution price arrived on schedule**: the balance gap
+  reaches **5.1%** in the post-peak phase — the honest error bar on
+  $\varepsilon_{max}$ (± ~0.0006), and the statement of what 48³ costs at
+  this Re. The gap direction implies the true peak is slightly *higher*
+  (missing small-scale dissipation). The tightening step is the 64³ rerun
+  under M6 numba.
+* Deliverables: `figs/tgv_re400_transient.png`, `figs/tgv_re400_movie.mp4`,
+  `figs/tgv_re400_diagnostics.png`; 31 frames + 6 checkpoints in
+  `scratch/tgv_frames_re400/`; ParaView export in `scratch/tgv_vtk_re400/`;
+  the w7 = 1 partial in `scratch/tgv_re400_w7-1_archive/` as the
+  cross-weighting reference.
 
 ### 8.6 The M7 step-cost model — measured, post-row-7 (2026-08-21)
 
@@ -2121,15 +2142,61 @@ njit flags such as `fastmath`; a cache written with `fastmath=True` is silently
 reused when `False` is asked for. `kernels_numba.py` therefore stamps the cache
 directory with the flavour (`LSSEM3D_FASTMATH=0` to disable).
 
+### The gain is CASE-DEPENDENT, and the range is wider than the microbenchmark suggests
+
+On the Stage 5 channel (N=6, 3×3 elements, Nz=16, convection active) numba is
+worth **2.4×**, not the 4.5× measured on Stokes decay. Both are real; quoting
+either alone would mislead. Measured end-to-end gains so far:
+
+| case | numba gain |
+|---|---|
+| Stokes decay, N=8, no convection | 4.49× |
+| synthetic CG solve, N=8 / N=10 | 4.72× / 3.75× |
+| **Stage 5 channel, N=6, convection active** | **2.36–2.49×** |
+| single matvec (bench) | 3.54–6.19× |
+
+**Why it varies is NOT established.** The obvious candidate — Amdahl, i.e. the
+row-7 fix having already removed most of the matvec-dominated time so numba has
+less left to attack — is **refuted** by the 2×2 below. Order (N=6 vs N=8),
+convection (untouched by numba), and cache residency are all still live. Given
+how many mechanism stories this project has had to retract, the honest statement
+is: **numba's gain is 2.4–6.2× depending on the case, and it should be measured
+on yours rather than assumed.**
+
+### Net-net for the day: 12.74×, measured rather than multiplied
+
+Row-7 (§7J) cuts *iterations*; numba cuts *cost per iteration*. That argues they
+should compose — but it is an argument, and §7J's own history is four mechanism
+arguments that measurement refuted. So the 2×2 was run out in full on one case
+(Stage 5 channel, 60 steps, `scratch/netnet_today.py` and `netnet_2x2.py`):
+
+| 60 steps | numpy | numba | numba gain |
+|---|---|---|---|
+| `w7 = 1` | 2277.5 s (3577 CG/step) | 914.6 s (3546 CG/step) | **2.49×** |
+| `w7 = 1e-4` | 421.3 s (649 CG/step) | 178.8 s (650 CG/step) | **2.36×** |
+| row-7 gain | **5.41×** | **5.12×** | |
+
+**2277.5 s → 178.8 s = 12.74×**, with `E/E0` identical to 5.3e-09 across all
+four cells.
+
+The 2×2 is what makes this a result rather than a product. Read across: numba is
+worth 2.49× where the run is nearly pure matvec and 2.36× where iterations have
+already been cut 5.5× — **essentially the same**. Amdahl predicted the second
+number should collapse; it did not, so the two changes are **independent
+multipliers**, not competitors for the same time. (Note that
+`netnet_today.py`'s "product of the two" line is a tautology — `base/r ≡
+(base/mid)·(mid/r)` — and proves nothing on its own. This cell does.)
+
 ### Where this lands
 
-The three multipliers are independent and compose:
+Four independent multipliers, all measured on this operator:
 
-| | gain | on |
+| | gain | acts on |
 |---|---|---|
+| analytic Jacobi diagonal + CG tolerance (§7F, §7G) | 2.38× | fixed overhead + iterations |
 | row-7 down-weighting (§7J) | 5.4× | iterations |
 | mode-parallelism (§3.4) | up to 6.7× | wall clock |
-| **numba fusion (§7M)** | **3.5–6.2×** | **per matvec** |
+| **numba fusion (§7M)** | **2.4–6.2×** | **per matvec** |
 
 
 ## 9. Inventory
@@ -2179,6 +2246,7 @@ uv run --quiet python -m pytest lssem3d/tests -q
 | **`bench_numba_threads.py`** | **does numba still scale over threads — the `nogil` check (§7M)** |
 | **`validate_numba_physics.py`** | **numba reproduces the analytic Stokes rate (§7M)** |
 | **`numba_drift.py`** | **do the backends drift apart over 200 steps? (§7M)** |
+| **`netnet_today.py`**, **`netnet_2x2.py`** | **the row-7 × numba 2×2: 12.74× composed (§7M)** |
 
 ### Using the parallel solver
 
