@@ -13,11 +13,20 @@ __nbcache__/
 # Simulation output: every run saves a uniquely-named .npz so results can be
 # compared without re-solving, but they are working data (30 MB and growing),
 # not artefacts.  Regenerate with the driver scripts.
+#
+# Frame dumps from long runs land in SUBDIRECTORIES, which `scratch/*.npz` does
+# not match, so the nested pattern is separate.  It must be on its own line:
+# .gitignore has no trailing-comment syntax, so `pattern  # note` is read as one
+# literal pattern and silently matches nothing.  That is exactly what happened
+# here -- the nested rule never fired, and 45 checkpoints from the Re=400 TGV run
+# were sitting uncovered.
 scratch/*.npz
-scratch/**/*.npz          # frame dumps from long runs land in subdirectories,
-                          # which `scratch/*.npz` does not match -- a multi-week
-                          # TGV run would otherwise commit its checkpoints
+scratch/**/*.npz
 *.log
+
+# Rendered frames and VTK exports from those same runs: regenerate from the npz.
+scratch/**/png/
+scratch/tgv_vtk_*/
 
 # Third-party publications: fetch locally, never commit.  See reference/README.md
 reference/*.pdf
