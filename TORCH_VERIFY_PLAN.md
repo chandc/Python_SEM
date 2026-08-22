@@ -182,6 +182,79 @@ Note `/src` is mounted **read-only**, so pytest cannot write `.pyc` there —
 
 ---
 
+## RESULTS (2026-08-22) — V0–V4 executed
+
+### 0b. Circular import — FIXED
+
+Both kernel modules now restate `NV`, `NR` and the field indices instead of
+importing `operator.py`. Restating means they can *drift*, so
+`test_kernel_constants_match_operator` pins them.
+
+### V0 — environment gate: **PASS, 232/232**
+
+One failure on the first attempt, and it was exactly what V0 is for:
+`scratch/spectrum.py` hardcoded `/Users/danielchan/...` and is imported by
+`test_spectrum_tool.py`, so the *suite* was unportable. Fixed to derive from
+`__file__`. **~290 such references remain across ~135 scratch scripts** — only
+this one blocks the tests, but any driver that must run on the Spark needs the
+same treatment.
+
+### V1 — torch(GPU) vs numpy parity: **PASS**
+
+| | worst relative error |
+|---|---|
+| `apply_L`, full sweep (`kap`, `rw`, `wq`, `k_z=0` and `≠0`, `facx≠facy`) | **3.478e-16** |
+| `apply_LT` | **2.799e-16** |
+| full `normal_op` — numba / torch | **1.837e-16 / 1.837e-16** |
+
+Device asserted `cuda` (NVIDIA GB10), dtype asserted `float64`.
+
+**The predicted tolerance was wrong, pessimistically.** This plan expected
+~1e-13–1e-14 from GPU reduction reordering; the measurement is 1e-16 —
+indistinguishable from the numba backend, which suggests the residual is the
+NumPy reference's own rounding rather than either backend.
+
+### V3 — the real operator, replacing every proxy
+
+`apply_L` + `apply_Lᵀ`, FP64, no einsum stand-ins:
+
+| shape | dof | Spark numpy | Spark numba | **torch device-resident** | Mac numba |
+|---|---|---|---|---|---|
+| 48³ TGV ref | 1.02 M | 69.8 ms | 7.9 ms | **2.8 ms** | 10.1 ms |
+| **minimal channel** | 2.08 M | 140.0 ms | 16.8 ms | **5.9 ms** | 19.4 ms |
+| 88³ | 6.17 M | 380.7 ms | 57.2 ms | **17.6 ms** | 68.5 ms |
+
+**torch GPU vs Mac numba: 3.6× / 3.3× / 3.9×** — consistent across an order of
+magnitude in problem size. Against the Spark's *own* CPU it is 2.8–3.2×, so the
+gain is the GPU and not a slow host.
+
+**H2D/D2H is confirmed as the thing Phase 2 must eliminate.** Timing the NumPy
+facade — which copies host→device→host per call, i.e. what Phase 1 alone would
+deliver — gives **386.0 ms at 88³ against 17.6 ms device-resident, a 21.9×
+penalty**, essentially erasing the GPU. (The facade column is erratic at the
+smaller shapes and should not be read closely; the 88³ figure is the one that
+matters and it is unambiguous.)
+
+### V4 — the go/no-go: **PROCEED, but only just**
+
+The threshold was set in advance at **≥3× Mac numba** on the minimal-channel
+shape. Measured: **3.3×**. That clears it — barely.
+
+**Read that number honestly.** 3.3× on the operator will *not* be 3.3×
+end-to-end. §7M measured 34% of a CG iteration falling outside the fused kernel
+on CPU; on GPU the operator is faster, so the untouched remainder — `gs`, the CG
+vector operations, the FFTs — becomes a *larger* fraction. A realistic
+end-to-end expectation is **2–2.5×**, i.e. the minimal channel drops from ~35
+days to roughly **14–17 days**. Substantial, not transformative.
+
+The upside case is unchanged and is now the main reason to continue: torch's
+kernels are **unfused**, making ~30 passes over the state. §7M got **7.6×** from
+fusing exactly that on the CPU, and `_kernel_L` is already written as explicit
+scalar arithmetic — the form a CUDA kernel wants. A fused CUDA kernel is where
+another 2–3× would come from.
+
+---
+
 ## Order of work
 
 | | | risk |

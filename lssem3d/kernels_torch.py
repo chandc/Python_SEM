@@ -40,10 +40,16 @@ import os
 import numpy as np
 import torch
 
-from . import operator as OP
-
-NV = OP.NVAR       # 7 complex fields  -> 14 real
-NR = OP.NROW       # 8 complex rows    -> 16 real
+# NO `from . import operator` HERE.  operator._bind_backend imports THIS module,
+# so importing it back at module scope is a circular import that fails the moment
+# the backend is selected:
+#     ImportError: cannot import name 'apply_L' from partially initialized
+#                  module lssem3d.kernels_torch
+# The constants are part of the format, not of operator.py's behaviour, so they
+# are stated here and pinned to operator.py by test_backend_parity.
+NV = 7             # complex fields u v w ox oy oz p  -> 14 real
+NR = 8             # complex residual rows            -> 16 real
+U_, V_, W_, OX_, OY_, OZ_, P_ = range(NV)
 
 
 def device():
@@ -58,8 +64,13 @@ def _t(a, dev):
     """To a float64 tensor on `dev`, without copying a tensor already there."""
     if isinstance(a, torch.Tensor):
         return a.to(device=dev, dtype=torch.float64)
-    return torch.as_tensor(np.ascontiguousarray(a), dtype=torch.float64,
-                           device=dev)
+    arr = np.ascontiguousarray(a, dtype=np.float64)
+    if not arr.flags.writeable:
+        # torch shares memory with the numpy buffer and warns on a read-only
+        # one.  Copy only in that case -- copying unconditionally would double
+        # the traffic on a bandwidth-bound operator.
+        arr = arr.copy()
+    return torch.as_tensor(arr, device=dev)
 
 
 # ------------------------------------------------------------- derivatives
@@ -114,16 +125,16 @@ def _apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
     def gy(i):
         return dy[..., i, :], dy[..., NV + i, :]
 
-    ur, ui = f(OP.U_);  vr, vi = f(OP.V_);  wr, wi = f(OP.W_)
-    oxr, oxi = f(OP.OX_); oyr, oyi = f(OP.OY_); ozr, ozi = f(OP.OZ_)
-    pr, pi_ = f(OP.P_)
-    uxr, uxi = gx(OP.U_); uyr, uyi = gy(OP.U_)
-    vxr, vxi = gx(OP.V_); vyr, vyi = gy(OP.V_)
-    wxr, wxi = gx(OP.W_); wyr, wyi = gy(OP.W_)
-    oxxr, oxxi = gx(OP.OX_); oxyr, oxyi = gy(OP.OX_)
-    oyxr, oyxi = gx(OP.OY_); oyyr, oyyi = gy(OP.OY_)
-    ozxr, ozxi = gx(OP.OZ_); ozyr, ozyi = gy(OP.OZ_)
-    pxr, pxi = gx(OP.P_);   pyr, pyi = gy(OP.P_)
+    ur, ui = f(U_);  vr, vi = f(V_);  wr, wi = f(W_)
+    oxr, oxi = f(OX_); oyr, oyi = f(OY_); ozr, ozi = f(OZ_)
+    pr, pi_ = f(P_)
+    uxr, uxi = gx(U_); uyr, uyi = gy(U_)
+    vxr, vxi = gx(V_); vyr, vyi = gy(V_)
+    wxr, wxi = gx(W_); wyr, wyi = gy(W_)
+    oxxr, oxxi = gx(OX_); oxyr, oxyi = gy(OX_)
+    oyxr, oyxi = gx(OY_); oyyr, oyyi = gy(OY_)
+    ozxr, ozxi = gx(OZ_); ozyr, ozyi = gy(OZ_)
+    pxr, pxi = gx(P_);   pyr, pyi = gy(P_)
 
     R[..., 0, :]  = kap*pr + uxr + vyr - k*wi
     R[..., 8, :]  = kap*pi_ + uxi + vyi + k*wr
@@ -175,20 +186,20 @@ def _apply_LT(Rr, D, facx, facy, kz, nu, c, kap=0.0):
     t6xr, t6xi = Tx(6); t6yr, t6yi = Ty(6)
     t7xr, t7xi = Tx(7); t7yr, t7yi = Ty(7)
 
-    C[..., OP.U_, :]       = t0xr + k*r2i - t3yr + c*r4r
-    C[..., NV + OP.U_, :]  = t0xi - k*r2r - t3yi + c*r4i
-    C[..., OP.V_, :]       = t0yr - k*r1i + t3xr + c*r5r
-    C[..., NV + OP.V_, :]  = t0yi + k*r1r + t3xi + c*r5i
-    C[..., OP.W_, :]       = k*r0i + t1yr - t2xr + c*r6r
-    C[..., NV + OP.W_, :]  = -k*r0r + t1yi - t2xi + c*r6i
-    C[..., OP.OX_, :]      = -r1r + nu*k*r5i - nu*t6yr + t7xr
-    C[..., NV + OP.OX_, :] = -r1i - nu*k*r5r - nu*t6yi + t7xi
-    C[..., OP.OY_, :]      = -r2r - nu*k*r4i + nu*t6xr + t7yr
-    C[..., NV + OP.OY_, :] = -r2i + nu*k*r4r + nu*t6xi + t7yi
-    C[..., OP.OZ_, :]      = -r3r + nu*t4yr - nu*t5xr + k*r7i
-    C[..., NV + OP.OZ_, :] = -r3i + nu*t4yi - nu*t5xi - k*r7r
-    C[..., OP.P_, :]       = t4xr + t5yr + k*r6i + kap*r0r
-    C[..., NV + OP.P_, :]  = t4xi + t5yi - k*r6r + kap*r0i
+    C[..., U_, :]       = t0xr + k*r2i - t3yr + c*r4r
+    C[..., NV + U_, :]  = t0xi - k*r2r - t3yi + c*r4i
+    C[..., V_, :]       = t0yr - k*r1i + t3xr + c*r5r
+    C[..., NV + V_, :]  = t0yi + k*r1r + t3xi + c*r5i
+    C[..., W_, :]       = k*r0i + t1yr - t2xr + c*r6r
+    C[..., NV + W_, :]  = -k*r0r + t1yi - t2xi + c*r6i
+    C[..., OX_, :]      = -r1r + nu*k*r5i - nu*t6yr + t7xr
+    C[..., NV + OX_, :] = -r1i - nu*k*r5r - nu*t6yi + t7xi
+    C[..., OY_, :]      = -r2r - nu*k*r4i + nu*t6xr + t7yr
+    C[..., NV + OY_, :] = -r2i + nu*k*r4r + nu*t6xi + t7yi
+    C[..., OZ_, :]      = -r3r + nu*t4yr - nu*t5xr + k*r7i
+    C[..., NV + OZ_, :] = -r3i + nu*t4yi - nu*t5xi - k*r7r
+    C[..., P_, :]       = t4xr + t5yr + k*r6i + kap*r0r
+    C[..., NV + P_, :]  = t4xi + t5yi - k*r6r + kap*r0i
     return C
 
 

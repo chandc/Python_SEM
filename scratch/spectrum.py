@@ -34,8 +34,13 @@ import os, sys, json
 for _v in ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS',
            'VECLIB_MAXIMUM_THREADS'):
     os.environ.setdefault(_v, '1')
-sys.path.insert(0, '/Users/danielchan/Dropbox/Apple_MLX_CFD/sem_demo')
-os.chdir('/Users/danielchan/Dropbox/Apple_MLX_CFD/sem_demo')
+# Derived from __file__, NOT hardcoded.  This module is imported by
+# lssem3d/tests/test_spectrum_tool.py, so a machine-specific absolute path makes
+# the SUITE unportable -- caught when the tests were first run on the Spark
+# (TORCH_VERIFY_PLAN.md V0), where it was the only failure in 232.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, _ROOT)
+os.chdir(_ROOT)
 import numpy as np
 from lssem2d.mesh import build_channel
 from lssem2d.lgl import diff_matrix

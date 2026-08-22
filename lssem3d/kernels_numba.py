@@ -43,7 +43,10 @@ import os
 import numpy as np
 from numba import njit
 
-from . import operator as OP
+# NOT `from . import operator`: operator._bind_backend imports THIS module, so
+# the reverse import at module scope is a cycle.  It survives today on import
+# ordering alone -- kernels_torch.py, written the same way, did not.  Pinned to
+# operator.py by test_backend_parity.
 
 # Stamp the cache directory with the fastmath flavour -- numba will not do it.
 _FASTMATH = os.environ.get('LSSEM3D_FASTMATH', '1') not in ('0', 'false', 'False')
@@ -52,8 +55,8 @@ os.environ.setdefault(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), '__nbcache__',
                  'fastmath' if _FASTMATH else 'strict'))
 
-NV = OP.NVAR      # 7
-NR = OP.NROW      # 8
+NV = 7            # complex fields u v w ox oy oz p -> 14 real
+NR = 8            # complex residual rows           -> 16 real
 
 
 @njit(fastmath=_FASTMATH, nogil=True, boundscheck=False, cache=True)
