@@ -131,15 +131,20 @@ operator-AC. That does **not** transfer to the cavity or to high Reynolds number
   **28.5×** with the thread pool off. A first report of 12.74× is retracted: one
   leg of that A/B came from a stored JSON written by an earlier, thermally loaded
   process instead of being measured back to back (3D_STATUS.md L14).
-* **GPU triage, measured (3D_STATUS.md sec 7N).** The operator is bandwidth
-  bound in FP64, so two numbers decide any port: achieved FP64 bandwidth and the
-  FP32:FP64 ratio. The LAN DGX Spark (GB10) gives **141.8 GB/s against the M3
-  Max's 314.8 via MLX** and throttles FP64 by **4.4×** -- slower than the machine
-  already on the desk, on both counts. **Not a port target.** Local MLX is:
-  **11.02x** at full-M7 shape, but **0.09x** at the current toy scale, which is
-  exactly why it has gone unused in a repo named for it. `gpu_fp64_probe.py` is
-  standalone and self-calibrating (~2.0x on any full-rate-FP64 device) so it can
-  triage a new machine in two minutes.
+* **GPU triage (3D_STATUS.md sec 7N), corrected after a retraction.** The
+  operator is bandwidth bound in FP64, so a port hinges on achieved FP64
+  throughput. **MLX cannot do FP64 on the GPU at all** -- Metal has no double
+  precision, and FP32 is not an escape because the LS normal equations square
+  kappa ~ 1e4. An earlier claim that MLX gave 11x at M7 scale was measuring FP32:
+  `mx.array()` silently downcasts float64 -> float32 and complex128 -> complex64.
+  Retracted (lesson L15: assert the dtype before timing).
+  * The LAN DGX Spark (GB10) is the fastest FP64 device available -- **141.8 GB/s
+    against the Mac's best 33.6**, and the only GPU here with FP64 units.
+  * **But a naive torch port ties what we already run:** ~187 ms estimated at
+    full-M7 shape against the fused numba operator's **171.5 ms measured**. Only
+    a *fused* CUDA kernel would buy the next ~7x, and that is an extrapolation
+    that must be measured before anyone commits to it.
+  * Gather-scatter remains uncosted on any GPU.
 * **The thread pool now LOSES at small mode counts** -- 0.90× for numpy, 0.77×
   for numba, so `workers=1` is fastest. Not a contradiction of the documented
   6.7×, which was at Nz=128 (65 modes) against this case's 9: pool overhead is
