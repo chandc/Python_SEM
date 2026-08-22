@@ -2432,13 +2432,31 @@ Same machine, same base image, same CUDA 13 stack, FP64, dtypes asserted.
 identically, so the columns are comparable to each other but *not* to the Mac
 numba figure, which is the complete fused operator.
 
-| implementation | 48³ (1.02M dof) | 88³ (6.17M dof) |
+**A** = 4 batched einsums (what a torch port would naturally write).
+**B** = 14 per-field einsums + assembly (**what `operator.py` actually runs**, and
+therefore what a drop-in replacement inherits).
+
+| library | device | A batched 48³ | B unfused 48³ | A batched 88³ | B unfused 88³ |
+|---|---|---|---|---|---|
+| **NumPy** | M3 Max CPU | 9.3 ms | 7.7 ms | 61.0 ms | 44.8 ms |
+| **NumPy** | Grace CPU (Spark host) | 27.3 ms | 13.0 ms | 170.5 ms | 73.7 ms |
+| **cuPyNumeric** | GB10 GPU | 3.1 ms | **20.0 ms** | 10.2 ms | **28.4 ms** |
+| **PyTorch** | GB10 GPU | 1.6 ms | **1.1 ms** | 10.1 ms | **5.3 ms** |
+
+For scale, the production path today — **Mac numba, fused, complete operator
+including row assembly, `wq`/`rw` and everything B omits**: **9.4 ms** at 48³ and
+**59.6 ms** at 88³.
+
+The bold cells are what each option would actually deliver: NumPy and
+cuPyNumeric run form B unchanged, torch would be written in whichever form is
+faster, which is also B.
+
+| | 48³ | 88³ |
 |---|---|---|
-| Mac, numba — fused, **complete operator** | 9.4 ms | 59.6 ms |
-| cuPyNumeric, batched (4 einsums) | 3.1 ms | 10.2 ms |
-| cuPyNumeric, **unfused — the drop-in form** | 20.0 ms | 28.4 ms |
-| torch, batched (4 einsums) | 1.6 ms | 10.1 ms |
-| **torch, unfused (14 per-field einsums)** | **1.1 ms** | **5.3 ms** |
+| **torch B vs cuPyNumeric B** (drop-in vs port) | **18.2×** | **5.4×** |
+| **torch B vs Mac NumPy B** | 7.0× | 8.5× |
+| **torch B vs Mac numba** (today's production) | 8.5× | 11.2× |
+| Grace CPU vs M3 Max CPU (B) | 0.59× | 0.61× |
 
 ### Three findings, none of which were predictable from the docs
 
@@ -2446,6 +2464,12 @@ numba figure, which is the complete fused operator.
 form costs **2.8× its own batched form** at 88³ (6.5× at 48³). The hypothesis
 that lazy evaluation would recover fusion automatically is **refuted**. The
 drop-in convenience is therefore not free — it is the library's *slowest* mode.
+
+**1b. And cuPyNumeric is the ONLY one that prefers batched.** NumPy on both CPUs
+is *faster* unfused (B/A = 0.7–0.8 on the M3 Max, 0.4–0.5 on Grace), as is torch.
+So form B — the one the code already has — is the right form everywhere except
+Legate. cuPyNumeric is penalised precisely on the code you would hand it
+unmodified, which is the one thing it exists to accept.
 
 **2. torch is FASTER unfused than batched — the opposite of cuPyNumeric.**
 5.3 ms vs 10.1 ms at 88³. The 5-D batched contraction `pi,eijvk->epjvk` evidently
@@ -2488,6 +2512,11 @@ Running `operator.py` **unchanged** on the GPU gives 28.4 ms against the Mac's
 fused 59.6 ms — a genuine **~2.1×** for essentially zero engineering. If the goal
 were one result this week rather than a solver to keep, that is a real option and
 it is the honest case for it.
+
+Note how narrow that case is, though: 28.4 ms is barely better than **NumPy's own
+44.8 ms on the M3 Max CPU** for the same form. Handing your unmodified NumPy to a
+GPU-backed drop-in buys **1.6× over just running it on the laptop** — while torch
+in the same form is 5.3 ms.
 
 ### Caveats
 
