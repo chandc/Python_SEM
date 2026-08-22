@@ -71,6 +71,11 @@ into one**, the only lever that helps a memory-bandwidth-bound kernel. Verified
 bit-for-bit against the NumPy operator (33 parity cases) and against the analytic
 Stokes rate, which it reproduces to **8 significant figures**.
 
+**GPU triage settled (§7N):** the LAN DGX Spark is **2.2× slower than this
+Mac** in FP64 and throttles FP64 arithmetic 4.4× — do not port to it. **Local
+MLX is the GPU answer**, measured at **11× at full-M7 scale** and 0.09× at
+today's toy scale, which is why it has sat unused.
+
 **Today's net-net is 21.7×** on the Stage 5 channel — 646.4 s → 29.9 s over 15
 steps, `E/E0` identical — from row-7 (5.39×) times numba (4.01×). **28.5× with
 the thread pool switched off**, which is now the fastest configuration at this
@@ -2285,6 +2290,86 @@ off. The numba figures above supersede the 2.4× quoted before the stale-file
 confound was found (L14).
 
 
+## 7N. GPU triage: local MLX wins, the DGX Spark loses — measured (2026-08-22)
+
+The operator is memory-bandwidth bound in **double** precision (§3.3, §7M), so
+"which GPU is fastest" is the wrong question. Two numbers decide it, and both
+are now measured rather than argued: **achieved FP64 streaming bandwidth**, and
+the **FP32:FP64 ratio** — datacenter parts run FP64 at ~1:2, parts built for
+low-precision AI inference throttle it to 1:32 or worse. FP32 is not an escape
+here: the least-squares normal equations *square* the condition number
+(κ ≈ 1e4 after the row-7 fix, §7J), so single precision would leave ~3 digits.
+
+### The answer
+
+| FP64, full-M7 shape (240 elem, N=8, nk=65) | M3 Max, MLX | GB10, torch |
+|---|---|---|
+| streaming triad | **314.8 GB/s** | 141.8 GB/s |
+| `ddx` batched contraction | **2.97 ms** | 6.68 ms |
+| FP64 penalty vs FP32 | — | **4.4×** |
+
+**The DGX Spark is 2.2× SLOWER than the Mac already on the desk**, and its FP64
+arithmetic is throttled on top of that. Both go/no-go criteria fail. **Do not
+port this solver to the Spark.**
+
+The Grace host CPU is not a way out either: 27.3 GB/s FP64 triad against the
+M3 Max CPU's 47.8, and full-M7 `ddx` at 34.35 ms against 32.68 ms — slightly
+worse across the board, on 20 ARM cores.
+
+None of this says the Spark is a bad machine. It says it is built for
+low-precision AI, which is the opposite of what a double-precision least-squares
+CFD solver needs.
+
+### Local MLX is the GPU answer, and its gain is all in the size
+
+`scratch/mlx_bandwidth_probe.py`, `ddx`-shaped batched contraction:
+
+| shape | dof | numpy | MLX | ratio |
+|---|---|---|---|---|
+| 9 elem, N=6, nk=9 — **today's channel** | 0.06 M | 0.06 ms | 0.65 ms | **0.09×** |
+| 144 elem, N=8, nk=16 | 2.61 M | 4.01 ms | 0.91 ms | 4.42× |
+| 240 elem, N=8, nk=65 — **full M7** | 17.7 M | 32.68 ms | 2.97 ms | **11.02×** |
+
+That spread is the finding, and it explains why MLX has sat unused in a repo
+named for it: **every case run so far is far below the crossover**, where the GPU
+loses outright by 11×. It becomes an 11× lever exactly at the problem M7 needs.
+The same pattern as the thread pool in §7M — a fixed overhead that only pays
+once there is enough work to amortise it.
+
+### What the probe does and does not establish
+
+Honest limits, because this is a go/no-go on a large piece of work:
+
+* It measures `einsum` throughput, **not the fused kernel**. §7M's win came from
+  eliminating temporaries, and neither MLX nor torch `einsum` does that — so a
+  hand-written kernel could beat these numbers on *both* platforms. The
+  comparison is like-for-like, but it is a proxy.
+* GB10 achieved 141.8 GB/s against a ~273 GB/s spec (52%); MLX's 314.8 GB/s is a
+  larger fraction of the M3 Max's peak. Some of the gap is therefore torch's
+  einsum rather than the silicon, and a hand-written CUDA kernel would close part
+  of it. It would not close 2.2× *and* a 4.4× FP64 penalty.
+* **Gather-scatter is not measured at all**, and it is the awkward part on any
+  GPU — irregular indexing, currently a scipy sparse matmul. It must be costed
+  before an MLX port, not after.
+
+### Reproducing
+
+```bash
+bash scratch/run_gpu_probe.sh Spark      # needs working ssh auth
+```
+
+The probe (`scratch/gpu_fp64_probe.py`) is standalone — numpy only, torch or
+cupy if present — so it drops onto any machine. **It self-calibrates:** on
+hardware with genuine full-rate FP64 it reports ~2.0×, which is pure bandwidth
+and nothing else. Measured 1.9–2.1× on both the M3 Max and Grace CPUs, so the
+thresholds are anchored rather than assumed. Full output:
+`scratch/gpu_fp64_probe_spark-b85b.log`.
+
+On the Spark it ran inside `chandc/unsloth-dgx-spark:latest` (torch 2.10
+nv25.11, sm_121) rather than a fresh install — the container already has a CUDA
+stack built for the part, and a torch wheel matching sm_121 is a multi-GB
+gamble. The host-side `uv` venv gives the CPU-only baseline.
+
 ## 9. Inventory
 
 ### Modules (`lssem3d/`)
@@ -2332,6 +2417,8 @@ uv run --quiet python -m pytest lssem3d/tests -q
 | **`bench_numba_threads.py`** | **does numba still scale over threads — the `nogil` check (§7M)** |
 | **`validate_numba_physics.py`** | **numba reproduces the analytic Stokes rate (§7M)** |
 | **`numba_drift.py`** | **do the backends drift apart over 200 steps? (§7M)** |
+| **`mlx_bandwidth_probe.py`** | **MLX vs numpy at three problem sizes — 11× at M7 scale (§7N)** |
+| **`gpu_fp64_probe.py`**, **`run_gpu_probe.sh`** | **standalone FP64 go/no-go for any remote GPU (§7N)** |
 | `netnet_today.py`, `netnet_2x2.py` | the row-7 × numba 2×2 — **superseded, its NumPy leg came from a file (§7M, L14)** |
 | **`netnet_clean.py`** | **all five legs in one process: today's net-net, 21.7× (§7M)** |
 | **`numba_where_now.py`** | **where a CG iteration goes under numba (§7M)** |

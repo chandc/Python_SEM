@@ -131,6 +131,15 @@ operator-AC. That does **not** transfer to the cavity or to high Reynolds number
   **28.5×** with the thread pool off. A first report of 12.74× is retracted: one
   leg of that A/B came from a stored JSON written by an earlier, thermally loaded
   process instead of being measured back to back (3D_STATUS.md L14).
+* **GPU triage, measured (3D_STATUS.md sec 7N).** The operator is bandwidth
+  bound in FP64, so two numbers decide any port: achieved FP64 bandwidth and the
+  FP32:FP64 ratio. The LAN DGX Spark (GB10) gives **141.8 GB/s against the M3
+  Max's 314.8 via MLX** and throttles FP64 by **4.4×** -- slower than the machine
+  already on the desk, on both counts. **Not a port target.** Local MLX is:
+  **11.02x** at full-M7 shape, but **0.09x** at the current toy scale, which is
+  exactly why it has gone unused in a repo named for it. `gpu_fp64_probe.py` is
+  standalone and self-calibrating (~2.0x on any full-rate-FP64 device) so it can
+  triage a new machine in two minutes.
 * **The thread pool now LOSES at small mode counts** -- 0.90× for numpy, 0.77×
   for numba, so `workers=1` is fastest. Not a contradiction of the documented
   6.7×, which was at Nz=128 (65 modes) against this case's 9: pool overhead is
