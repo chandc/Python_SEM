@@ -43,6 +43,7 @@ split/join pair is trivial and is tested as a round trip.
 """
 import numpy as np
 from . import backend
+from . import device as DEV
 from .deriv import ddx as dUdx, ddy as dUdy, ddxT as DxT, ddyT as DyT
 
 NVAR = 7                 # u v w ox oy oz p          (complex)
@@ -68,7 +69,7 @@ def to_complex(Ur):
 
 def to_real(Uc):
     """(..., 7, nmode) complex -> (..., 14, nmode) real."""
-    return np.concatenate([Uc.real, Uc.imag], axis=-2)
+    return DEV.cat([Uc.real, Uc.imag], -2)
 
 
 # ------------------------------------------------------------------ operator
@@ -92,7 +93,7 @@ def apply_L0_complex(U, D, facx, facy, kz, nu, c, kap=0.0):
     p = U[..., P_, :]
     ik = 1j*kz
 
-    R = np.empty(U.shape[:-2] + (NROW, U.shape[-1]), dtype=complex)
+    R = DEV.empty_complex(tuple(U.shape[:-2]) + (NROW, U.shape[-1]), U)
     R[..., 0, :] = kap*p + ux + vy + ik*w        # kap: artificial compressibility
     R[..., 1, :] = wy - ik*v - ox
     R[..., 2, :] = ik*u - wx - oy
@@ -126,7 +127,7 @@ def apply_LT_complex(R, D, facx, facy, kz, nu, c, kap=0.0):
     mik = -1j*kz                                     # conjugate of i*k
     r0, r1, r2, r3, r4, r5, r6, r7 = (R[..., i, :] for i in range(NROW))
 
-    C = np.empty(R.shape[:-2] + (NVAR, R.shape[-1]), dtype=complex)
+    C = DEV.empty_complex(tuple(R.shape[:-2]) + (NVAR, R.shape[-1]), R)
     C[..., U_, :] = dxT(r0) + mik*r2 - dyT(r3) + c*r4
     C[..., V_, :] = dyT(r0) - mik*r1 + dxT(r3) + c*r5
     C[..., W_, :] = mik*r0 + dyT(r1) - dxT(r2) + c*r6
@@ -181,7 +182,7 @@ def apply_L_complex(U, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
     """
     R = apply_L0_complex(U, D, facx, facy, kz, nu, c, kap)
     if rw is not None:
-        R = R*np.asarray(rw).reshape((1,)*(R.ndim-2) + (len(rw), 1))
+        R = R*DEV.reshape_rw(rw, R.ndim)
     return R if wq is None else R*wq[..., None, None]
 
 
@@ -258,6 +259,8 @@ def _bind_backend(name):
         from .kernels_numba import apply_L as _L, apply_LT as _LT
     elif name == 'torch':
         from .kernels_torch import apply_L as _L, apply_LT as _LT
+    elif name == 'cuda':
+        from .kernels_cuda import apply_L as _L, apply_LT as _LT
     else:
         _L, _LT = _apply_L_numpy, _apply_LT_numpy
     _IMPL_L, _IMPL_LT = _L, _LT

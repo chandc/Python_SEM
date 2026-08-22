@@ -67,7 +67,8 @@ from lssem2d.lgl import diff_matrix
 from lssem2d.mesh import build_channel
 
 from lssem3d import (backend, operator as OP, solver3d as S3, bc as BC,
-                     fourier as FR, timestep as T, convect as CV, deriv as DV)
+                     fourier as FR, timestep as T, convect as CV, deriv as DV,
+                     device as DEV)
 import channel3d as C
 
 RE_TAU = 180.0
@@ -208,8 +209,45 @@ def wall_units(s, ex=6, ey=18):
 
 # ---------------------------------------------------------------------- driver
 
-def _precond(s, dt):
-    return C.make_precond(s, dt, 0.0, rowweight=True)
+def to_device(s, U):
+    """Move the whole problem onto the accelerator, once, before stepping.
+
+    WHY THIS EXISTS.  Phase 3 made the operator, FFTs and convection dispatch,
+    but the DRIVER still handed NumPy in -- so every call crossed the bus.
+    Measured on one step with CG capped at 40/stage: **6768 host->device and
+    1128 device->host transfers**, and the full step ran 636.8 s against numba's
+    76.8 s.  8x SLOWER while every unit test passed, which is the failure mode
+    GPU_PORT_PLAN.md sec 1 warned about: "the trap is thinking this is port the
+    matvec".
+
+    The mesh is SHALLOW-COPIED before facx/facy are replaced, so the original
+    stays usable by the NumPy path -- a run is entirely one or the other, and
+    mutating the shared mesh would silently couple them.
+    """
+    import copy
+    import torch
+    from lssem3d import kernels_torch as KT
+    dev = KT.device()
+    t = lambda a: torch.as_tensor(np.ascontiguousarray(a, dtype=np.float64),
+                                  device=dev)
+    m2 = copy.copy(s['m'])
+    m2.facx, m2.facy = t(s['m'].facx), t(s['m'].facy)
+    m2.wq = t(s['m'].wq)
+    s2 = dict(s, m=m2, D=t(s['D']), kz=t(s['kz']), mask=t(s['mask']))
+    return s2, t(U)
+
+
+def _precond(s_host, dt, like=None):
+    """Build the Jacobi preconditioner ON THE HOST, then move it.
+
+    `jacobi_diagonal_analytic` is closed-form NumPy and is evaluated ONCE per
+    dt, not per iteration, so there is nothing to gain from porting it -- and
+    handing it tensors just fails (`can't convert cuda:0 device type tensor to
+    numpy`).  Build from the host setup, move the result to wherever the state
+    lives.
+    """
+    Minv = C.make_precond(s_host, dt, 0.0, rowweight=True)
+    return [DEV.to_device(q, like) for q in Minv] if like is not None else Minv
 
 
 def advance(s, U, Nprev, dt, Minv, tol=1e-6, max_iter=20000):

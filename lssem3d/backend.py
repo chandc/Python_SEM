@@ -5,7 +5,8 @@ environment variable -- so that switching backends is one habit, not two.
 
   'numpy'  -- the reference implementation in operator.py (default)
   'numba'  -- fused @njit kernels in kernels_numba.py  (CPU)
-  'torch'  -- PyTorch kernels in kernels_torch.py      (CUDA; 3D_STATUS.md sec 7O)
+  'torch'  -- PyTorch kernels in kernels_torch.py      (CUDA, unfused)
+  'cuda'   -- FUSED CUDA kernels in kernels_cuda.py    (one launch, 5-7x 'torch')
 
 Two ways to ask:
 
@@ -30,7 +31,7 @@ wq, rw, to_real).
 """
 import os
 
-VALID = ('numpy', 'numba', 'torch')
+VALID = ('numpy', 'numba', 'torch', 'cuda')
 
 _backend = None
 _listeners = []
@@ -50,6 +51,12 @@ def available(name='numba'):
         try:
             import torch  # noqa: F401
             return True
+        except Exception:
+            return False
+    if name == 'cuda':
+        try:
+            from . import kernels_cuda as KC
+            return KC.available()
         except Exception:
             return False
     return False

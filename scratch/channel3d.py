@@ -39,7 +39,8 @@ import numpy as np
 from lssem2d.mesh import build_channel
 from lssem2d.lgl import diff_matrix
 from lssem3d import (operator as OP, solver3d as S3, bc as BC, convect as CV,
-                     fourier as FR, timestep as T, parallel as PAR, deriv as DV)
+                     fourier as FR, timestep as T, parallel as PAR, deriv as DV,
+                     device as DEV)
 
 LX, LY = 2.0*np.pi, 1.0
 KPERT = 1                         # z-mode INDEX of the perturbation (not a wavenumber)
@@ -118,7 +119,7 @@ def _fw(rw, nrow2):
     """Row weights broadcast onto the split-real f array (real rows then imag)."""
     if rw is None:
         return 1.0
-    return np.concatenate([rw, rw]).reshape((1, 1, 1, nrow2, 1))
+    return DEV.cat([rw, rw], 0).reshape((1, 1, 1, nrow2, 1))
 
 
 def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
@@ -153,6 +154,11 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
     """
     m, D, kz, mask, nu, nz = s['m'], s['D'], s['kz'], s['mask'], s['nu'], s['nz']
     c = T.implicit_coeff(dt, k)
+    # Row weights arrive as NumPy from momentum_row_weights.  Multiplying a CUDA
+    # tensor by a host array raises rather than promoting, so move them once here
+    # instead of at each of the three use sites.
+    if rw is not None:
+        rw = DEV.to_device(rw, U)
     Uc = OP.to_complex(U)
     Nk = -CV.convective(Uc, D, m.facx, m.facy, kz, nz)
     Nk[..., 0, 0] += s['fx']*nz                    # body force, mode 0, physical
@@ -160,35 +166,40 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
     Lk = -R0[..., 4:7, :]
 
     # momentum rows: fixed for the whole stage
-    fc = np.zeros(Uc.shape[:-2] + (OP.NROW, Uc.shape[-1]), dtype=complex)
+    fc = DEV.zeros_complex(tuple(Uc.shape[:-2]) + (OP.NROW, Uc.shape[-1]), Uc)
     for row, fld in ((4, OP.U_), (5, OP.V_), (6, OP.W_)):
         i = row - 4
         fc[..., row, :] = c*(Uc[..., fld, :] + dt*(
             T.GAMMA[k]*Nk[..., i, :] + T.ZETA[k]*Nprev[..., i, :]
             + T.ALPHA[k]*Lk[..., i, :]))
 
-    wqR = m.wq[..., None, None]
+    wq = DEV.to_device(m.wq, U)          # device-resident driver: keep the
+    wqR = wq[..., None, None]            # quadrature weights where the state is
     p_prev = Uc[..., OP.P_, :]          # sub-iterate 0: previous time level
     Uit, its, nit = U, 0, 0
     for _ in range(max(1, nsub)):
         fc[..., 0, :] = kap*p_prev
-        f = np.concatenate([fc.real, fc.imag], axis=-2)
+        f = DEV.cat([fc.real, fc.imag], -2)
         # f must carry the SAME row weighting as the operator, or the defect
         # correction solves a different problem than apply_L represents.
         r = OP.apply_LT(
-            OP.apply_L(Uit, D, m.facx, m.facy, kz, nu, c, m.wq, kap, rw)
+            OP.apply_L(Uit, D, m.facx, m.facy, kz, nu, c, wq, kap, rw)
             - f*wqR*_fw(rw, f.shape[-2]),
             D, m.facx, m.facy, kz, nu, c, kap)
         b = -S3.gs(m, r)*mask
-        dU, it, _ = PAR.pcg(b, D, m.facx, m.facy, kz, nu, c, mesh=m, mask=mask,
-                            M_inv=None if Minv is None else Minv[k], tol=tol,
-                            max_iter=max_iter, wq=m.wq, kap=kap, workers=workers,
-                        rw=rw)
+        # On a device the thread pool is meaningless (and PAR would slice
+        # tensors across workers); go straight to the serial solver, which is
+        # already device-resident.
+        solve = S3.pcg if DEV.is_tensor(b) else (
+            lambda *a, **kw: PAR.pcg(*a, workers=workers, **kw))
+        dU, it, _ = solve(b, D, m.facx, m.facy, kz, nu, c, mesh=m, mask=mask,
+                          M_inv=None if Minv is None else Minv[k], tol=tol,
+                          max_iter=max_iter, wq=wq, kap=kap, rw=rw)
         Uit = Uit + dU
         its += it
         nit += 1
         p_new = OP.to_complex(Uit)[..., OP.P_, :]
-        dp = np.abs(p_new - p_prev).max()/max(np.abs(p_new).max(), 1e-30)
+        dp = DEV.abs_max(p_new - p_prev)/max(DEV.abs_max(p_new), 1e-30)
         p_prev = p_new
         if kap == 0.0 or dp < sub_tol:   # AC off => nothing to sub-iterate
             break
