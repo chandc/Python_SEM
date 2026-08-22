@@ -85,12 +85,62 @@ docker run --rm --gpus all -v "$PWD":/work -w /work lssem-cupy:latest \
        python scratch/cupy_parity.py
 ```
 
+## Phase 2: whole-solve parity and a physics stage — PASSED
+
+`scratch/cupy_ladder.py`, in the container on the GB10:
+
+```
+A. WHOLE-SOLVE PARITY (device-resident CG)
+   numpy :   542 iters   err vs planted solution 9.54e-07
+   cupy  :   544 iters   err vs planted solution 8.57e-07
+   cupy vs numpy       : 3.25e-07
+   cupy vs cupy (rerun): 9.04e-07   <- the atomics floor, measured
+   relative residual   : numpy 6.69e-11   cupy 6.26e-11
+   verdict: PASS -- backend difference is 0.4x the self-spread   (1.6x wall)
+
+B. PHYSICS STAGE (convection + dealiased FFT + solve), host vs device
+   numpy: E = 30.9998230587  Omega = 93.00164866  (441 CG)
+   cupy : E = 30.9998230587  Omega = 93.00164866  (441 CG)
+   rel diff: E 0.00e+00   Omega 1.53e-16   PASS
+```
+
+**A** is the entire preconditioned CG — hundreds of iterations, every dot
+product, the gather-scatter, the convergence test — running device-resident.
+**B** is a real TGV stage: convection, the 3/2-dealiased FFT, the
+defect-corrected right-hand side and the solve, compared in the two quantities
+this project actually validates on.
+
+### Getting the acceptance criterion right took two wrong tries
+
+Worth recording, because both wrong versions looked reasonable:
+
+1. **Absolute threshold** (`< 1e-8`) — wrong. At this conditioning *both*
+   solves sit ~1e−6 from the planted solution at `tol` = 1e−10, so this asks
+   the two backends to agree far more closely than either agrees with the
+   truth.
+2. **Fraction of the solver error** (`< 10%`) — also wrong, and it failed.
+   `gs_cupy` accumulates with atomics, so **CuPy does not reproduce itself**
+   run to run; the criterion demanded determinism the method does not have.
+3. **Self-calibrated** — right. Solve twice on the device: *that spread is the
+   reduction noise*. The port is correct if cupy-vs-numpy is the same size as
+   cupy-vs-cupy, and if both solutions independently meet the residual
+   tolerance they were asked for. Measured: the backend difference is **0.4×
+   the self-spread** — CuPy differs from NumPy *less than it differs from
+   itself* — with residuals 6.7e−11 and 6.3e−11 against a requested 1e−10.
+
+This is L5 ("know your floor before calling something an error") in a new
+costume, and it is the reason a bitwise-parity habit has to be dropped
+deliberately rather than by accident when a backend goes non-deterministic.
+
 ## Next
 
-1. Device-resident **whole-solve** parity (`pcg` end to end), the analogue of
-   the torch port's Phase 2 — the shim work above should already permit it.
+1. **Deterministic mode** for CuPy, mirroring `DEV.deterministic()` on the
+   torch path — a sort-based or sparse-matmul gather-scatter would restore
+   bitwise reproducibility for parity work, at a cost only paid in testing.
 2. Re-run the **validation ladder** (Stokes σ, rotated-TG order 2.00, TGV
-   balance) on the CuPy path. A backend is not trusted until it re-passes the
-   ladder.
+   balance) end to end on the CuPy path. Phase 2 above proves one stage; the
+   ladder proves the physics.
 3. Benchmark on an **A100** (Colab), where FP64 is 46× the GB10's — that is
-   where a production number can honestly be quoted.
+   where a production number can honestly be quoted. The 1.6× whole-solve
+   figure above is GB10 FP64 against Grace-core NumPy and is *not* a
+   production number.
