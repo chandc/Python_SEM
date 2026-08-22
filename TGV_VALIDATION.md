@@ -289,3 +289,43 @@ $Re$ = 800** and compare $e$ against their published 0.4563 / 0.2133 / 0.1599 at
 identical resolution and Reynolds number. Estimated cost with numba: ~7 h at
 $60^3$, ~1.5 days at $88^3$. That is the experiment this section makes possible
 and does not yet contain.
+
+
+### 8.2 The same-$Re$ experiment: measured cost, and the configuration launched
+
+The comparison §8.1 identifies as missing — our solver against theirs on the
+*same* flow at the *same* resolution — was priced by direct measurement rather
+than extrapolation (three timed RKW3 steps per configuration, preconditioner
+build included, `LSSEM3D_BACKEND=numba`):
+
+| their grid | our matching config | $\Delta t$ (CFL) | CG/step | s/step | wall to $2T_0$ |
+|---|---|---|---|---|---|
+| $60^3$ (URDNS 1:78) | 6×6 elems N = 10, $N_z$ = 60 | 0.00683 | 2320 | 18.5 | **9.5 h** |
+| $88^3$ (URDNS 1:25) | 11×11 elems N = 8, $N_z$ = 88 | 0.00567 | 3180 | 70.5 | **43.4 h** |
+
+**Numba is worth 3.8× here** (the same $60^3$ step costs 70.3 s on numpy
+against 18.5 s compiled) — squarely inside the 3.5–6.4× the backend benchmark
+measured across problem sizes, and the difference between "overnight" and "a
+day and a half".
+
+**$88^3$ was chosen over the cheaper $60^3$**, for three reasons worth
+recording before the result exists:
+
+1. It is simultaneously their **best URDNS** ($e$ = 0.1599) and, at equal
+   variable count, their **best MPS** ($\chi$ = 192, $e$ = 0.0385) — so it
+   tests the paper's central claim (tensor-network compression beats
+   conventional discretisation at equal NVPS) on its own terms. $60^3$ would
+   only beat a badly under-resolved case.
+2. It is the least under-resolved of the three ($k_\mathrm{max}\eta \approx$ 0.88
+   against 0.60), so the run stands alone as a defensible $Re$ = 800
+   simulation rather than only as a controlled comparison.
+3. Counter-intuitively it is also the **safer** run: the one new risk at
+   $Re$ = 800 is under-resolution pathology in the SEM plane, which has no
+   explicit dealiasing — and that risk is largest at the *coarsest* grid.
+
+Prediction on the record, so the result can falsify it: from the $Re$ = 400
+run's $e$ = 0.0172 at $k_\mathrm{max}\eta$ = 0.82, we expect
+$e \sim 0.02$–$0.06$ at $88^3$ — i.e. comparable to or better than their best
+MPS (0.0385) and several times better than their URDNS at the same grid
+(0.1599). A result far outside that band means something in the $Re$ = 800
+regime is not behaving as the $Re$ = 100/400 runs suggest.
