@@ -19,6 +19,8 @@ and the number of per-mode solves for no gain.
 """
 import numpy as np
 
+from . import device as DEV
+
 
 def wavenumbers(nz, lz):
     """k_z for an rfft of nz real points on a period lz.  Shape (nz//2 + 1,)."""
@@ -27,12 +29,12 @@ def wavenumbers(nz, lz):
 
 def to_modes(u):
     """Physical -> spectral along the last axis."""
-    return np.fft.rfft(u, axis=-1)
+    return DEV.rfft(u)
 
 
 def to_physical(uh, nz):
     """Spectral -> physical along the last axis.  nz is the physical count."""
-    return np.fft.irfft(uh, n=nz, axis=-1)
+    return DEV.irfft(uh, nz)
 
 
 def ddz(uh, kz):
@@ -78,14 +80,14 @@ def dealias_forward(uh, nz):
     is quadratic; without this a DNS piles up energy at high k_z.
     """
     m = padded_size(nz)
-    out = np.zeros(uh.shape[:-1] + (m//2 + 1,), dtype=uh.dtype)
+    out = DEV.zeros_complex(tuple(uh.shape[:-1]) + (m//2 + 1,), uh)
     out[..., :uh.shape[-1]] = uh
     # irfft normalises by the transform length, so rescale to preserve amplitude
-    return np.fft.irfft(out, n=m, axis=-1)*(m/nz)
+    return DEV.irfft(out, m)*(m/nz)
 
 
 def dealias_backward(u_pad, nz):
     """PADDED physical -> spectral (nz modes), truncating the padded tail."""
     m = u_pad.shape[-1]
-    uh = np.fft.rfft(u_pad, axis=-1)/(m/nz)
+    uh = DEV.rfft(u_pad)/(m/nz)
     return uh[..., :nz//2 + 1]

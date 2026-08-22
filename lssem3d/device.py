@@ -96,6 +96,62 @@ def abs_max(a):
     return float(torch.abs(a).max()) if is_tensor(a) else float(np.abs(a).max())
 
 
+# ------------------------------------------------------------------- fft
+#
+# The convection term is the only place complex arrays survive to the public
+# API, and torch supports complex128, so the 3/2-rule dealiasing ports directly.
+# numpy takes `axis=`, torch takes `dim=` -- the same asymmetry as the reductions.
+
+def rfft(a):
+    return torch.fft.rfft(a, dim=-1) if is_tensor(a) else np.fft.rfft(a, axis=-1)
+
+
+def irfft(a, n):
+    if is_tensor(a):
+        return torch.fft.irfft(a, n=n, dim=-1)
+    return np.fft.irfft(a, n=n, axis=-1)
+
+
+def zeros_complex(shape, like):
+    """Complex zeros matching `like`'s namespace and device."""
+    if is_tensor(like):
+        return torch.zeros(tuple(shape), dtype=torch.complex128,
+                           device=like.device)
+    return np.zeros(tuple(shape), dtype=complex)
+
+
+def empty_complex(shape, like):
+    if is_tensor(like):
+        return torch.empty(tuple(shape), dtype=torch.complex128,
+                           device=like.device)
+    return np.empty(tuple(shape), dtype=complex)
+
+
+def einsum(sub, *ops):
+    """np.einsum / torch.einsum share this signature for our subscripts.
+
+    BUT NOT THEIR TYPE PROMOTION.  numpy promotes a real operand against a
+    complex one silently; torch refuses:
+
+        RuntimeError: expected m1 and m2 to have the same dtype,
+                      but got: double != c10::complex<double>
+
+    which bites immediately in `convect`, where the real differentiation matrix
+    D multiplies a complex mode array.  Promote explicitly, and lift any stray
+    NumPy operand onto the same device so a mixed call cannot silently fall back
+    to the host.
+    """
+    if not any(is_tensor(o) for o in ops):
+        return np.einsum(sub, *ops)
+    ref = next(o for o in ops if is_tensor(o))
+    ops = tuple(o if is_tensor(o)
+                else torch.as_tensor(np.ascontiguousarray(o), device=ref.device)
+                for o in ops)
+    if any(o.is_complex() for o in ops):
+        ops = tuple(o.to(torch.complex128) for o in ops)
+    return torch.einsum(sub, *ops)
+
+
 # ---------------------------------------------------------- gather-scatter
 
 # WeakKeyDictionary, NOT a dict keyed on id(mesh).  CPython reuses ids after

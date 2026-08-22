@@ -180,3 +180,84 @@ def test_pcg_never_returns_to_the_host_inside_the_loop():
     assert calls['n'] == 0, (
         f'{calls["n"]} host transfers during {it} iterations -- the CG loop is '
         f'copying to the host, which costs 21.9x the matvec (V3)')
+
+
+# ------------------------------------------------- Phase 3: convection / FFT
+
+def _ct(a):
+    return torch.as_tensor(np.ascontiguousarray(a), device=DEVICE)
+
+
+def test_fourier_round_trip_on_device():
+    """rfft/irfft must be the same transform, including the ODD-nz case where
+    there is no Nyquist mode and the padded size differs."""
+    from lssem3d import fourier as FR
+    rng = np.random.default_rng(0)
+    for nz in (8, 16, 15):
+        u = rng.standard_normal((3, 4, 4, 2, nz))
+        ref = FR.to_physical(FR.to_modes(u), nz)
+        got = FR.to_physical(FR.to_modes(_ct(u)), nz).cpu().numpy()
+        assert np.abs(got - ref).max() <= 1e-12*np.abs(ref).max(), f'nz={nz}'
+
+
+def test_dealiasing_matches_on_device():
+    """The 3/2-rule pad/truncate pair, which carries an amplitude rescale that
+    is easy to drop on one side only."""
+    from lssem3d import fourier as FR
+    nz = 16
+    rng = np.random.default_rng(1)
+    uh = (rng.standard_normal((2, 4, 4, nz//2 + 1))
+          + 1j*rng.standard_normal((2, 4, 4, nz//2 + 1)))
+    ref = FR.dealias_backward(FR.dealias_forward(uh, nz), nz)
+    t = torch.as_tensor(np.ascontiguousarray(uh), device=DEVICE)
+    got = FR.dealias_backward(FR.dealias_forward(t, nz), nz).cpu().numpy()
+    assert np.abs(got - ref).max() <= 1e-12*np.abs(ref).max()
+
+
+def test_convective_matches_on_device():
+    """u.grad u, dealiased -- the whole explicit term.
+
+    Complex arithmetic throughout, so this is also the check that torch's
+    complex128 path agrees with numpy's on the derivative contractions.
+    """
+    from lssem3d import convect as CV
+    m = build_channel(2.0, 1.0, 3, 2, 5, bcs=(1, 1, 1, 1))
+    D = diff_matrix(5)
+    nz = 16
+    nk = nz//2 + 1
+    kz = np.arange(nk, dtype=float)
+    rng = np.random.default_rng(2)
+    Uh = (rng.standard_normal((m.nelem, 6, 6, OP.NVAR, nk))
+          + 1j*rng.standard_normal((m.nelem, 6, 6, OP.NVAR, nk)))
+    ref = CV.convective(Uh, D, m.facx, m.facy, kz, nz)
+    got = CV.convective(_ct(Uh), _ct(D), _ct(m.facx), _ct(m.facy), _ct(kz),
+                        nz).cpu().numpy()
+    assert np.abs(got - ref).max() <= 1e-11*np.abs(ref).max()
+
+
+def test_dealiasing_is_load_bearing_on_device():
+    """Negative control: without the 3/2 padding the answer must CHANGE.
+
+    A device port that silently skipped dealiasing would still produce a
+    plausible, converging run -- with energy piling up at high k_z.  The
+    equivalence test above cannot see that; this can.
+    """
+    from lssem3d import convect as CV, fourier as FR
+    m = build_channel(2.0, 1.0, 2, 2, 4, bcs=(1, 1, 1, 1))
+    D = diff_matrix(4)
+    nz = 16
+    nk = nz//2 + 1
+    kz = np.arange(nk, dtype=float)
+    rng = np.random.default_rng(3)
+    Uh = (rng.standard_normal((m.nelem, 5, 5, OP.NVAR, nk))
+          + 1j*rng.standard_normal((m.nelem, 5, 5, OP.NVAR, nk)))
+    good = CV.convective(_ct(Uh), _ct(D), _ct(m.facx), _ct(m.facy), _ct(kz), nz)
+    orig = FR.pad_factor
+    FR.pad_factor = lambda: 1.0                      # padding disabled
+    try:
+        naive = CV.convective(_ct(Uh), _ct(D), _ct(m.facx), _ct(m.facy),
+                              _ct(kz), nz)
+    finally:
+        FR.pad_factor = orig
+    d = float(torch.abs(good - naive).max()/torch.abs(good).max())
+    assert d > 1e-3, f'dealiasing changed nothing ({d:.2e}) -- it is not active'

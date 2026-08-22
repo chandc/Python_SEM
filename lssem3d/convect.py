@@ -32,6 +32,7 @@ a negative control.
 import numpy as np
 from .deriv import ddx as dUdx, ddy as dUdy
 from .fourier import dealias_forward, dealias_backward
+from . import device as DEV
 from . import operator as OP
 
 
@@ -65,7 +66,7 @@ def convective(Uh, D, facx, facy, kz, nz):
     dzp = [dealias_forward(a, nz) for a in dzm]
 
     # 4-5. products on the padded grid, then back and truncate
-    out = np.empty(Uh.shape[:-2] + (3, Uh.shape[-1]), dtype=complex)
+    out = DEV.empty_complex(tuple(Uh.shape[:-2]) + (3, Uh.shape[-1]), Uh)
     for c in range(3):
         Np = up[0]*dxp[c] + up[1]*dyp[c] + up[2]*dzp[c]
         out[..., c, :] = dealias_backward(Np, nz)

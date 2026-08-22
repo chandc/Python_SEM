@@ -15,6 +15,8 @@ is checked rather than assumed.
 """
 import numpy as np
 
+from . import device as DEV
+
 
 def _fac(fac, U):
     """Reshape (nelem,) to broadcast against (nelem, n, n, *trailing)."""
@@ -23,19 +25,19 @@ def _fac(fac, U):
 
 def ddx(U, D, facx):
     """d/dx.  U is (nelem, n, n, ...); contracts D over the i index."""
-    return np.einsum('pi,eij...->epj...', D, U)*_fac(facx, U)
+    return DEV.einsum('pi,eij...->epj...', D, U)*_fac(facx, U)
 
 
 def ddy(U, D, facy):
     """d/dy.  Contracts D over the j index."""
-    return np.einsum('qj,eij...->eiq...', D, U)*_fac(facy, U)
+    return DEV.einsum('qj,eij...->eiq...', D, U)*_fac(facy, U)
 
 
 def ddxT(S, D, facx):
     """Adjoint of ddx (transpose of the differentiation matrix)."""
-    return np.einsum('pi,epj...->eij...', D, S)*_fac(facx, S)
+    return DEV.einsum('pi,epj...->eij...', D, S)*_fac(facx, S)
 
 
 def ddyT(S, D, facy):
     """Adjoint of ddy."""
-    return np.einsum('qj,eiq...->eij...', D, S)*_fac(facy, S)
+    return DEV.einsum('qj,eiq...->eij...', D, S)*_fac(facy, S)
