@@ -421,7 +421,49 @@ every derivative call was the scaling, not the derivative.
 The fused kernels already read every one of those values, so the `fx`/`fy`
 multiply moves inside them, where it is a register operation and free. The
 CuPy path now calls the bare contraction and passes the metrics through.
-Parity is **unchanged at 2.613e-16**, 167 tests pass.
+
+Two more wasted passes came from calling *correct* pieces in sequence.
+`normal_op` calls `apply_L` then `apply_LT` back to back — and `apply_L` ends
+with `_to_real(R)` while `apply_LT` opens by converting straight back, a whole
+real→complex→real round trip per matvec. `apply_LTL` does both while staying
+complex in between. And the row and quadrature weights were two further full
+passes over an 8-row complex array *after* the kernel had already written it;
+they are now kernel parameters, declared as scalars so an unweighted call
+passes `1.0` and reads nothing rather than streaming an array of ones.
+
+| | normal_op | CG iteration |
+|---|---|---|
+| batched + fused rows | 9.04 | 12.04 |
+| + metric folding | 8.01 | 10.68 |
+| **+ LᵀL fusion, weights in-kernel** | **6.40** | **9.62** |
+
+Parity **2.613e-16 throughout**, 167 tests, and gate 1's σ bit-identical to
+the pre-change run.
+
+### Where it ended, and why to stop
+
+**248 h → ~65 h, ~3.8×**; 20 chained Colab sessions down to about 6.
+
+| | ms/iteration | Re = 1600 128³ |
+|---|---|---|
+| first A100 run | — | 248 h |
+| CG convergence test every 10 | 30.6 | 212 h |
+| **inner product as a GEMM** | **12.53** | **84.6 h** |
+| metric folding | 10.68 | 72 h |
+| LᵀL fusion + weights | **9.62** | **~65 h** |
+
+What remains is diffuse: `to_complex` 2.1× off bandwidth, gather-scatter
+1.8×, `_dot` 2.1×, derivatives ~2.5×, the matvec 2.9×. **No single anomaly is
+left** — every large win today was a 12–17× outlier, and no comparable one is
+visible. Elementwise ops sitting at exactly **1.0×** is the evidence that the
+card is being driven properly, rather than that measurement has stopped
+working.
+
+The one structural idea left is abandoning split-real packing and carrying
+complex through the whole operator, killing the remaining conversions. That is
+a format change across the operator and the BC/mask machinery — and the first
+change that would genuinely threaten the 2.613e-16 that has held through
+everything above.
 
 ### One honest caveat on the batching fix
 
