@@ -32,7 +32,7 @@ def _dot(a, b, w=None):
     product is not the one the assembled operator is symmetric in.
     """
     ab = a*b if w is None else a*b*w
-    if DEV.is_cupy(ab):
+    if DEV.is_cupy(ab) or (DEV.is_tensor(ab) and ab.is_cuda):
         # This reduction keeps ONLY the mode axis, so ~19 M inputs produce ~65
         # outputs (290,304:1).  CuPy gives such a reduction roughly one block
         # per output -- 65 blocks on a 108-SM A100, most of the card idle --
@@ -53,9 +53,6 @@ def _dot(a, b, w=None):
     # DEV.sum_over, not np.sum: on the GPU path `ab` is a torch tensor and this
     # runs inside the CG loop, where a single host round trip costs 21.9x the
     # matvec (TORCH_VERIFY_PLAN.md V3).
-    # NOTE for the torch path: the shape problem above is a property of the
-    # reduction, not of CuPy, so torch is likely paying it too.  Unmeasured
-    # here, and left alone deliberately -- see CUPY_BACKEND.md.
     return DEV.sum_over(ab, (0,) + tuple(SPATIAL))[None, None, None, None, :]
 
 
@@ -68,9 +65,16 @@ def _ones_row(M, like):
     Cached because allocating and filling it per call would reintroduce the
     traffic the GEMM form exists to avoid.
     """
-    hit = _ONES_ROW.get(M)
+    # Keyed on device and dtype as well as M: a tensor cache keyed on size
+    # alone would hand a CPU row to a CUDA matmul, or fp32 to an fp64 one.
+    key = (M, str(getattr(like, 'device', 'cupy')), str(like.dtype))
+    hit = _ONES_ROW.get(key)
     if hit is None:
-        hit = _ONES_ROW[M] = DEV.xp(like).ones((1, M), dtype=like.dtype)
+        if DEV.is_tensor(like):
+            hit = DEV.xp(like).ones((1, M), dtype=like.dtype, device=like.device)
+        else:
+            hit = DEV.xp(like).ones((1, M), dtype=like.dtype)
+        _ONES_ROW[key] = hit
     return hit
 
 
