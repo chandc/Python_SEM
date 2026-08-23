@@ -370,6 +370,59 @@ Still open: the derivative einsums measure 4.61 ms against a 0.96 ms bound
 (5× off, and now the dominant term in a 12.53 ms iteration) — worth perhaps
 another 1.4×.
 
+### CuPy vs PyTorch on the same A100: a tie
+
+Settled by measurement, in separate processes (two GPU allocators in one
+process interfere, and library init would be charged to whichever ran second).
+`scratch/backend_shootout.py`, 18.87 M dof:
+
+| | CuPy 14.0.1 | torch 2.11.0 |
+|---|---|---|
+| `normal_op` | 9.04 ms | 9.99 ms |
+| **CG iteration** (differenced) | **12.04 ms** | **12.72 ms** |
+| `to_complex` | 0.47 | 0.47 |
+| gather-scatter | 0.61 | 0.65 |
+| elementwise `U*mask` | 0.34 | 0.33 |
+| `_dot` as the solver calls it | 0.69 | 0.68 |
+| **raw reduction** `sum(axis/dim=0..3)` | **9.30** | **0.68** |
+
+**6% apart on the real solver, and every primitive matches within noise.** The
+one genuine library difference is the raw reduction, where CuPy is **13.7×**
+worse — and it disappears entirely once written as a GEMM: `_dot` is 0.69 vs
+0.68 ms. CuPy's weakness here is real but exactly one line of code wide.
+
+**Backend choice is therefore not a performance decision.** Pick on
+ergonomics: torch for ecosystem and `torch.compile`; CuPy for drop-in NumPy
+semantics and easy custom kernels.
+
+Two further results worth keeping:
+
+- **Fusion buys only 6% here.** The CuPy path has hand-written fused
+  `ElementwiseKernel`s; `kernels_torch.py` is *deliberately* unfused. At
+  18.87 M dof that is worth almost nothing, because fusion mainly saves
+  dispatch and the loop is bandwidth-bound. Consistent, not disappointing:
+  the same fusion was worth **6.2×** when the loop *was* dispatch-bound.
+- **The 4-D contraction merge is worth nothing at this size — on either
+  backend** (1.01×). `kernels_torch.py` records merging the field and mode
+  axes for ~1.9× at 88³ and warns against reverting it without
+  re-benchmarking; this *is* the re-benchmark, and on torch 2.11 at 18.87 M
+  dof the two forms are identical. That note may be stale or
+  version-dependent. A 1.91× *did* appear in a tiny smoke case — which is a
+  dispatch artifact, and a good reminder that a micro-benchmark at the wrong
+  size will confidently tell you the wrong thing.
+
+### Phase 6: folding the metric scaling into the kernels
+
+`ddx` is `einsum(...)*fac`, and that trailing multiply is a whole extra pass
+over a complex array — ~576 MiB of traffic per call, four calls per matvec.
+It measured 1.08 ms against 0.55 for the bare contraction, so roughly half of
+every derivative call was the scaling, not the derivative.
+
+The fused kernels already read every one of those values, so the `fx`/`fy`
+multiply moves inside them, where it is a register operation and free. The
+CuPy path now calls the bare contraction and passes the metrics through.
+Parity is **unchanged at 2.613e-16**, 167 tests pass.
+
 ### One honest caveat on the batching fix
 
 Batching trades dispatches for **strided field views**. That is a clear win on
