@@ -32,7 +32,7 @@ def _dot(a, b, w=None):
     product is not the one the assembled operator is symmetric in.
     """
     ab = a*b if w is None else a*b*w
-    if DEV.is_cupy(ab) or (DEV.is_tensor(ab) and ab.is_cuda):
+    if DEV.is_cupy(ab):
         # This reduction keeps ONLY the mode axis, so ~19 M inputs produce ~65
         # outputs (290,304:1).  CuPy gives such a reduction roughly one block
         # per output -- 65 blocks on a 108-SM A100, most of the card idle --

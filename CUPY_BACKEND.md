@@ -343,11 +343,32 @@ subtract, so everything per-iteration survives and everything per-solve
 cancels — took two minutes to write and would have pointed straight here.
 **Instrument before predicting.**
 
+Confirmed on the A100: **30.59 → 12.53 ms per iteration**, 148.7 → 59.4 s per
+step, and the case 211.9 → **84.6 h** (20 → 8 sessions).
+
+**Does torch pay the same cost? No — measured, not assumed.** The starved
+shape belongs to the problem rather than to CuPy, so the torch path looked
+like it should. On the *same* A100:
+
+| | ms |
+|---|---|
+| CuPy `sum(axis=0..3)` | 9.41 |
+| **torch `sum(dim=0..3)`** | **0.78** |
+| torch, as a GEMM | 0.79 (no gain) |
+
+**Torch's reduction kernels handle this shape; CuPy's do not** — a 12×
+library difference on identical hardware and identical arrays. So the GEMM
+form is applied on the CuPy path *only*, and there is nothing to fix in the
+PyTorch port. `scratch/torch_dot_variants.py` re-checks it if CuPy ever
+improves.
+
+Worth carrying into the cupy-vs-torch question generally: the two are not
+interchangeable at the kernel level. A shape CuPy handles badly may cost 12×,
+and the only way to know is to time it.
+
 Still open: the derivative einsums measure 4.61 ms against a 0.96 ms bound
-(5× off, now 72% of what remains). And the shape problem is a property of the
-reduction, not of CuPy — **the torch path is likely paying it too**, on the
-same shared `_dot`. Left untouched deliberately; that port is another
-session's.
+(5× off, and now the dominant term in a 12.53 ms iteration) — worth perhaps
+another 1.4×.
 
 ### One honest caveat on the batching fix
 
