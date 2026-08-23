@@ -82,6 +82,20 @@ class Ops:
         return (self.t.cat(arrs, dim=axis) if self.name == 'torch'
                 else self.t.concatenate(arrs, axis=axis))
 
+    def mem(self):
+        """(pool used, pool reserved, device used, device total) in GiB."""
+        if self.name == 'cupy':
+            mp = self.t.get_default_memory_pool()
+            free, total = self.t.cuda.runtime.memGetInfo()
+            return (mp.used_bytes()/2**30, mp.total_bytes()/2**30,
+                    (total-free)/2**30, total/2**30)
+        if self.name == 'torch' and self.dev == 'cuda':
+            free, total = self.t.cuda.mem_get_info()
+            return (self.t.cuda.memory_allocated()/2**30,
+                    self.t.cuda.memory_reserved()/2**30,
+                    (total-free)/2**30, total/2**30)
+        return None
+
     def sync(self):
         if self.name == 'torch' and self.dev == 'cuda':
             self.t.cuda.synchronize()
@@ -359,12 +373,12 @@ def main():
         for k, it, el in its[:T.NSTAGE]:
             print(f'         stage {k}: {it:6d} its  {el:7.2f} s  '
                   f'{1e3*el/max(it, 1):6.2f} ms/it')
-        if xp is not np:
-            mp = xp.get_default_memory_pool()
-            free, total = xp.cuda.runtime.memGetInfo()
-            print(f'       GPU memory: pool {mp.used_bytes()/2**30:.1f} GiB used '
-                  f'/ {mp.total_bytes()/2**30:.1f} GiB reserved, '
-                  f'device {(total-free)/2**30:.1f} / {total/2**30:.1f} GiB')
+        mem = s['ops'].mem()
+        if mem is not None:
+            used, reserved, dev_used, dev_tot = mem
+            print(f'       GPU memory: pool {used:.1f} GiB used / '
+                  f'{reserved:.1f} GiB reserved, '
+                  f'device {dev_used:.1f} / {dev_tot:.1f} GiB')
         if a.budget < 1e8:
             print(f'       sessions at {a.budget/3600:.1f} h: '
                   f'{int(np.ceil(nstep*per/a.budget))}')
