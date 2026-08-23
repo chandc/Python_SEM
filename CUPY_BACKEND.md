@@ -721,6 +721,48 @@ It also explains why plain Jacobi + CG is hard to beat here: **CG's own
 polynomial adapts to the actual spectrum**, which is the right response to
 rough slow modes, and it costs one matvec.
 
+### A real BC bug in PMG — invisible at tol 1e-6, fatal at 1e-9
+
+Prompted by "are we sure the boundary conditions are applied correctly?"  They
+were not.
+
+`_Level` built every mask itself with `build_mask(pin_p=True)`, which pins
+pressure at **every Fourier mode**. The driver pins it at **k = 0 only**, which
+is what the physics requires — for k ≠ 0 the `ik·p` term in the z-momentum row
+already determines pressure uniquely. On a 3×3 N=8 Nz=16 mesh that left **60
+dofs free in the solve but pinned in the preconditioner**: 32 pressure real
+parts and their imaginary partners, every mode except k = 0. The V-cycle
+returned exactly zero on 60 directions CG was searching, so **M was singular on
+the space CG operates in**.
+
+| tol | Jacobi | PMG old | PMG fixed |
+|---|---|---|---|
+| 1e-6 | 200 | 27 | 27 |
+| **1e-9** | **293** | **20000 — never converged** | **42** |
+
+**The bug is tolerance-dependent, which is why it survived.** At 1e-6 the
+residual never reaches the deficient subspace and old and fixed are
+indistinguishable. At 1e-9 the old preconditioner stalls outright, and the
+largest deviation sits in **pressure, real part, mode k = 2** — exactly the
+wrongly-pinned field and modes.
+
+**Two gates could not have caught it.** The V-cycle is symmetric to 2.95e-17
+*and* singular, so a symmetry check passes; and at the production tolerance the
+iteration count is identical, so a benchmark passes. Symmetry is not
+correctness, and neither is convergence at a loose tolerance.
+
+**What it does not change:** §7K's ratio. Fixed PMG gives 293/42 = **7.0×**
+against Jacobi at 1e-9, matching §7K's 7.3–7.4× measured at 1e-6. The
+wall-clock closure stands — the fix makes PMG *correct*, not competitive.
+
+`PMG` and `_Level` now accept the caller's mask and use it verbatim for the
+finest level, with coarse levels reproducing the same convention. The coarsest
+solve also moved from `np.linalg.pinv` to a Cholesky (residual 1.77e-11):
+the matrix is a Galerkin projection of an SPD operator, so a full SVD was
+10-30× the work, stored a dense inverse where a triangular factor needs half
+the memory, and carried an `rcond` that silently truncates exactly the
+near-null directions a coarse solve exists to resolve.
+
 Three non-defect limitations, worth knowing before anyone invests:
 `DirectCoarse` setup is O(dof) gather-scatter calls (fine at 700 dofs/mode,
 unusable at production scale); there is **no GPU path** — `pinv`, the basis

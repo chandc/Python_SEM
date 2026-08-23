@@ -78,11 +78,26 @@ for N in Ns:
     new = PC.PMG(s['m'], s['nk'], nz, cfg['nu'], c, s['kz'],
                  mask=s['mask'], **common)
     rwd = ops.to_dev(rw)
+    # check_every=1.  A V-cycle converges in tens of iterations, and testing
+    # every 10 quantises the count to multiples of 10 -- old and fixed can
+    # differ by up to 9 and both report 30, which is exactly what a first run
+    # showed.  The sync cost that check_every exists to avoid is irrelevant at
+    # these sizes and on the host.
     r = []
     for M in (Mj, old, new):
         _, _, it = TG.stage(s, U0, Np0, 0, dt, {0: M}, rwd, cfg['tol'],
-                            max_iter=CAP, check_every=10)
+                            max_iter=CAP, check_every=1)
         r.append(it)
+    # Do the two preconditioners even differ?  If their outputs are identical
+    # the mask fix is not reaching this configuration and the counts are
+    # meaningless.
+    rng = np.random.default_rng(0)
+    probe = S3.gs(s['m'], ops.to_dev(rng.standard_normal(shape)))*s['maskg']
+    zo, zn = old(probe), new(probe)
+    d = float(ops.t.abs(zo - zn).max()/max(float(ops.t.abs(zo).max()), 1e-300))
+    nbad = int(((s['mask'] == 1) & (old.levels[0].mask == 0)).sum())
+    print(f'    [old vs fixed preconditioner output differs by {d:.2e}; '
+          f'{nbad} dofs wrongly pinned by old]')
     print(f'{N:>3} {r[0]:>8} {r[1]:>9} {r[2]:>10} '
           f'{r[0]/max(r[1],1):>10.2f} {r[0]/max(r[2],1):>12.2f}', flush=True)
 print('\n  ratios are Jacobi/PMG -- above 1 means PMG needs fewer iterations.')
