@@ -75,12 +75,12 @@ def _shifts(field, lam, a, b, s):
     return np.full((lam.size, lam.size), s)      # oz: pure mass
 
 
-def build(mesh, N, kz, nu, c, rw, mask, kap=0.0, floor=1e-30, like=None):
+def build(mesh, N, kz, nu, c, rw, mask, kap=0.0, floor=1e-300, like=None):
     """Return a callable preconditioner z = M^-1 r.
 
-    `floor` guards the pressure block, whose k = 0 mode is singular on an
-    element (the constant-pressure null space).  The assembled system is
-    regularised by the pin in bc.py, but the element-local block is not.
+    Each block's diagonal is clamped against its OWN maximum, which keeps the
+    preconditioner SPD -- see the note at the clamp.  `floor` only guards
+    against a block that is identically zero.
     """
     S, lam = reference_factors(N)
     n1 = N + 1
@@ -106,16 +106,38 @@ def build(mesh, N, kz, nu, c, rw, mask, kap=0.0, floor=1e-30, like=None):
                 blk = _shifts(f, lam, a, b, s)
                 d[e, :, :, f, k] = blk
                 d[e, :, :, f + OP.NVAR, k] = blk      # imaginary part, same block
-    dinv = np.where(np.abs(d) < floor, 0.0, 1.0/np.where(d == 0, 1.0, d))
+    # CLAMP PER BLOCK, RELATIVELY.  Each diagonal block is a Gram matrix of
+    # the least-squares rows, so its eigenvalues are non-negative in exact
+    # arithmetic -- but the PRESSURE block at kz = 0 is genuinely singular
+    # (constant-pressure null space; the assembled system is regularised by the
+    # pin in bc.py, the element-local block is not), and eigh returns its zero
+    # as a tiny NEGATIVE number.  Reciprocating that gives a huge negative
+    # entry: symmetric still, but indefinite, and CG requires SPD.
+    #
+    # An absolute floor cannot do this job: blocks span ~1e-6 (pressure, which
+    # carries 1/c^2) to ~10 (momentum), so one threshold is either useless or
+    # destroys the pressure block.  Clamp each block against its own maximum.
+    dmax = d.max(axis=(1, 2), keepdims=True)
+    d = np.maximum(d, np.maximum(dmax, floor)*1e-12)
+    dinv = 1.0/d
 
     Sd = DEV.to_device(S, like) if like is not None else S
     dinv = DEV.to_device(dinv, like) if like is not None else dinv
     maskd = mask
 
     def apply(r):
-        # transform -> divide -> transform back, one direction at a time
-        g = DEV.einsum('pi,eijvk->epjvk', Sd, r)
-        g = DEV.einsum('qj,epjvk->epqvk', Sd, g)
+        # A = (S(x)S)^-T D (S(x)S)^-1, so A^-1 = (S(x)S) D^-1 (S(x)S)^T.
+        # The FORWARD pass is therefore (S(x)S)^T, contracting S's ROW index
+        # ('ip'), and the back pass is (S(x)S), contracting its column ('ip'
+        # again, but with i in the output).  Writing the forward pass as 'pi'
+        # silently transposes it: still a linear operator, no longer symmetric,
+        # and CG diverges rather than erroring.
+        #
+        # The mask goes on BOTH sides for the same reason -- masking only the
+        # output gives M^-1 * mask, which is not symmetric.
+        g = r*maskd if maskd is not None else r
+        g = DEV.einsum('ip,eijvk->epjvk', Sd, g)
+        g = DEV.einsum('jq,epjvk->epqvk', Sd, g)
         g = g*dinv
         g = DEV.einsum('ip,epqvk->eiqvk', Sd, g)
         g = DEV.einsum('jq,eiqvk->eijvk', Sd, g)
