@@ -127,6 +127,23 @@ def empty_complex(shape, like):
     return np.empty(tuple(shape), dtype=complex)
 
 
+def cat(parts, axis):
+    """np.concatenate / torch.cat -- different names, different keyword."""
+    if any(is_tensor(q) for q in parts):
+        ref = next(q for q in parts if is_tensor(q))
+        return torch.cat([q if is_tensor(q)
+                          else torch.as_tensor(np.ascontiguousarray(q),
+                                               device=ref.device)
+                          for q in parts], dim=axis)
+    return np.concatenate(parts, axis=axis)
+
+
+def reshape_rw(rw, ndim):
+    """Row weights broadcast onto (..., NROW, nmode)."""
+    shape = (1,)*(ndim - 2) + (len(rw), 1)
+    return rw.reshape(shape) if is_tensor(rw) else np.asarray(rw).reshape(shape)
+
+
 def einsum(sub, *ops):
     """np.einsum / torch.einsum share this signature for our subscripts.
 

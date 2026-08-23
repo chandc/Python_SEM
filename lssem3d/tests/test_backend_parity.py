@@ -163,5 +163,19 @@ def test_switching_backend_actually_rebinds():
 
 
 def test_unavailable_backend_raises_rather_than_falling_back():
+    """A silent fallback would turn a missing dependency into a mysterious
+    slowdown.  Two distinct failures, and they must stay distinct:
+
+      unknown NAME          -> ValueError
+      known name, no LIB    -> ImportError
+
+    ('cuda' used to be the example of an unknown name here; it is a real backend
+    now, which is how this test caught the rename.)
+    """
     with pytest.raises(ValueError):
-        backend.set_backend('cuda')
+        backend.set_backend('opencl')
+    for name in ('numba', 'torch', 'cuda'):
+        if not backend.available(name):
+            with pytest.raises(ImportError):
+                backend.set_backend(name)
+            break
