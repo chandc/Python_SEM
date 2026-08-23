@@ -370,6 +370,29 @@ Still open: the derivative einsums measure 4.61 ms against a 0.96 ms bound
 (5× off, and now the dominant term in a 12.53 ms iteration) — worth perhaps
 another 1.4×.
 
+### The per-iteration host sync — `check_every`
+
+The first real finding of the 174 s/step investigation, worth 5.4 ms of 36.
+CG tested convergence every iteration:
+
+```python
+rn = DEV.sqrt(_dot(r, r, mw))
+if DEV.all_(rn < target):        # returns a Python bool
+```
+
+`DEV.all_` forces a host synchronisation — the CPU drains the GPU queue,
+waits, reads one bit, re-issues everything. Invisible to a matvec benchmark,
+which is part of why `normal_op` timings extrapolated so badly, and it also
+explains 100% reported GPU utilisation while doing far less work than the card
+can: the queue keeps emptying.
+
+`pcg` now takes **`check_every`** and skips both the residual reduction and
+the sync it feeds in between. **Default 1**, so every CPU path stays
+bit-identical; `scratch/tgv_gpu_run.py` defaults to **10** on GPU. On the
+Spark: 2.44 → 0.96 ms per iteration, **2.5×**, while the iteration count moved
+894 → 900 — six extra iterations out of nine hundred, 0.7%, which is the whole
+price.
+
 ### CuPy vs PyTorch on the same A100: a tie
 
 Settled by measurement, in separate processes (two GPU allocators in one
@@ -474,6 +497,66 @@ from fewer launches. The Spark A/B that would settle it is **contaminated** —
 the GPU was at 95% running the parallel session's `minchan` job when it was
 taken — so it is deliberately not quoted here. If a clean re-measure shows a
 regression, the batching should become conditional rather than unconditional.
+
+## Running long jobs: `scratch/tgv_gpu_run.py`
+
+Colab has no batch queue and every VM eventually dies, so a long run is a
+**chain of sessions**: each resumes the last checkpoint, works until its
+`--budget` is nearly spent, checkpoints, and exits saying how much compute
+remains. Re-running the launch cell continues; it never restarts from t = 0.
+
+**Restarts are exact, for a specific reason.** RKW3's `ZETA[0] = 0`, so the
+convective history `N_prev` is multiplied by zero at the top of every step and
+carries **no information across step boundaries**. A checkpoint therefore
+needs only the state and the time — no history, no stage index. `--selftest`
+proves this rather than asserting it, comparing 6 straight steps against
+3 + checkpoint + 3:
+
+| backend | max abs difference |
+|---|---|
+| numpy (deterministic) | **0.000e+00 — bit-exact** |
+| CuPy | 8.7e-11 relative |
+
+The CuPy figure is that backend's scatter-add atomics, which the run has
+anyway, restart or not — not a restart defect.
+
+Checkpoints are written to a temp name and renamed, so a file is complete or
+absent, never half-written; one generation of history is kept so a crash
+mid-write cannot destroy the only copy; and a configuration fingerprint is
+stored and checked, so resuming into a mismatched `--outdir` is a clear error
+rather than a silently wrong run. Diagnostics append to CSV across sessions.
+
+`--price` reports **iterations *and* ms/iteration**, per stage, plus GPU pool
+and device memory. Reporting only their product is what let a 46 h projection
+become a measured 248 h without anyone noticing which factor was wrong: too
+many iterations is a conditioning problem, a slow iteration is a memory or
+dispatch one, and they have opposite remedies. The driver also **names the GPU
+and warns on a card without a fast FP64 path** — every timing here is FP64 and
+bandwidth-bound, A100/H100/V100 run it at ~1/2 the FP32 rate while T4 and L4
+run it at 1/32 to 1/64, and Colab does not always give you the card you asked
+for.
+
+`--outdir` for `--price` should be a scratch directory: pricing advances the
+state a few steps without recording them.
+
+## Diagnostic tools written for this work
+
+Each exists because a prediction failed, and each is reusable:
+
+| script | answers |
+|---|---|
+| `cupy_parity.py` | does the CuPy operator match numpy (2.613e-16) |
+| `cupy_validation_ladder.py` | gates 1–3: Stokes σ, rotated TG, energy balance |
+| `cupy_dispatch_profile.py` | how much of a matvec is host dispatch |
+| `cupy_matvec_profile.py` | where a CG iteration's GPU time goes, **with the bandwidth bound beside each component**, and the true per-iteration cost by **differencing two solves at different `max_iter`** — everything per-iteration survives the difference, everything per-solve cancels |
+| `cupy_dot_variants.py` | five ways to compute the per-mode inner product |
+| `torch_dot_variants.py` | whether torch pays the same reduction cost (it does not) |
+| `backend_shootout.py` | CuPy vs torch, real solver and primitives, one GPU |
+
+**The differencing measurement is the one to reach for first.** It required no
+model of the code, took two minutes to write, and would have pointed straight
+at the inner product — instead of which it arrived after four wrong
+predictions built on a matvec benchmark that was, the whole time, correct.
 
 ## Next
 
