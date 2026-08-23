@@ -444,11 +444,37 @@ blocker, was not a problem at all.
 
 That inverts the prediction recorded here before the experiment ran (this
 document said compile failure was the likely outcome) and it makes most of
-Phase 6 redundant *on the torch path*. The honest conclusion:
+Phase 6 redundant *on the torch path*.
 
-**Use torch with `torch.compile` for production.** 9.42 vs 9.62 ms is a small
-margin, but the effort ratio is not small, and it keeps improving with the
-compiler rather than with our maintenance. CuPy's advantage —
+**In the production driver the two are a dead heat.** The isolated benchmark
+is not the number to plan with, so both were re-measured through
+`scratch/tgv_gpu_run.py --price` on the same case, same session:
+
+| | ms/iteration | s/step | Re = 1600 128³ |
+|---|---|---|---|
+| **torch + `torch.compile`** | **10.10** | 48.0 | **68.4 h** |
+| CuPy, hand-written Phase 6 | 10.29 | 48.8 | 69.6 h |
+
+**1.9% apart — noise.** Both are ~0.6 ms slower here than in the isolated
+shootout, consistently, because the driver applies the Jacobi preconditioner
+that the shootout passed as `M_inv=None`.
+
+Two things that gap teaches. `torch.compile` wraps only `_apply_L`/`_apply_LT`,
+so the convective term with its FFTs, the RHS assembly and gather-scatter run
+uncompiled — **compile the hot function and you win the microbenchmark; the
+production number depends on what fraction of the step that function actually
+is.** And a 1.36× on an isolated CG iteration became 1.02× end to end, which
+is the difference between a benchmark result and a run you can plan two days
+around.
+
+The honest conclusion:
+
+**On speed, they tie — so choose on effort, and there torch wins outright.**
+68.4 vs 69.6 h is not a reason to prefer either. But CuPy reached its figure
+through roughly a day of hand-written `ElementwiseKernel` fusion, metric
+folding and LᵀL fusion, all of which must now be maintained; torch reached the
+same figure with **one line and 20 s of compile**, and improves with the
+compiler rather than with our attention. CuPy's advantage —
 `ElementwiseKernel` making hand-fusion easy — turns out to be an advantage at
 solving a problem torch does not have.
 
@@ -637,11 +663,14 @@ predictions built on a matvec benchmark that was, the whole time, correct.
      size will confidently tell you the wrong thing.)
 4. ~~`torch.compile` on `kernels_torch.py`~~ — **done, and it wins**: 12.85 →
    **9.42 ms** per iteration, past the hand-written CuPy path's 9.62, for 20 s
-   of compile time and no code change. See the verdict above. The follow-ups
-   are `mode="max-autotune"` (untried), and wiring `--backend torch` into
-   `scratch/tgv_gpu_run.py`, whose device handling currently understands only
-   numpy and cupy — that is the gap between this result and actually running
-   production on it.
+   of compile time and no code change — **but only 1.02× in the production
+   driver** (68.4 vs 69.6 h), because the compiled region is a smaller share of
+   a full RK stage than of an isolated CG iteration. `--backend torch` is now
+   wired into `scratch/tgv_gpu_run.py` and verified bit-exact on restart. The
+   remaining follow-ups are `mode="max-autotune"` (untried) and extending
+   `torch.compile` to the convective path, where the FFT-adjacent elementwise
+   work is exactly what inductor fuses well and is where torch's uncompiled
+   remainder sits.
 5. The split-real format. Dropping it and carrying complex through the whole
    operator would remove the remaining `to_complex`/`to_real` traffic, worth
    perhaps 1.15× — and would be the first change to genuinely threaten the
