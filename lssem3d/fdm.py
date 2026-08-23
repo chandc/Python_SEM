@@ -141,6 +141,8 @@ def build(mesh, N, kz, nu, c, rw, mask, kap=0.0, floor=1e-300, like=None):
     dinv = DEV.to_device(dinv, like) if like is not None else dinv
     maskd = mask
 
+    from . import solver3d as _S3        # local import: solver3d is the caller
+
     def apply(r):
         # A = (S(x)S)^-T D (S(x)S)^-1, so A^-1 = (S(x)S) D^-1 (S(x)S)^T.
         # The FORWARD pass is therefore (S(x)S)^T, contracting S's ROW index
@@ -157,6 +159,20 @@ def build(mesh, N, kz, nu, c, rw, mask, kap=0.0, floor=1e-300, like=None):
         g = g*dinv
         g = DEV.einsum('ip,epqvk->eiqvk', Sd, g)
         g = DEV.einsum('jq,eiqvk->eijvk', Sd, g)
+        # RESTORE CONTINUITY.  CG's vectors live in discontinuous element
+        # storage but are CONSTRAINED to the continuous subspace: normal_op
+        # ends with gather-scatter, so b and every A*p carry the same value at
+        # all copies of a shared node.  A purely element-local inverse takes a
+        # continuous input to a DISCONTINUOUS output, and the iterates then
+        # leave the subspace the operator is defined on -- which is why this
+        # ran to 40000 iterations while being provably symmetric and SPD.
+        #
+        # Point-Jacobi never had the problem: its diagonal is assembled, so
+        # scaling preserves continuity for free.  With Q the scatter and
+        # Q^T = gs, the assembled operator is Q^T A_loc Q and the matching
+        # preconditioner is Q^T M_loc^-1 Q -- i.e. additive Schwarz, which is
+        # what this becomes once the gather-scatter is here.
+        g = _S3.gs(mesh, g)
         return g*maskd if maskd is not None else g
 
     return apply
