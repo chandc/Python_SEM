@@ -142,10 +142,33 @@ def initial_state(s, amp_roll=1.0, amp_noise=0.3, seed=0):
 
     # x-dependent noise.  WITHOUT THIS THE TRIP CANNOT WORK: the rolls above are
     # streamwise-independent, and by Squire's theorem such a disturbance decays.
-    # Damped at the walls so the no-slip condition is not violated at t = 0.
+    #
+    # BUILT AS THE CURL OF A VECTOR POTENTIAL, so it is DIVERGENCE-FREE by
+    # construction.  Independent randn on u, v, w is NOT solenoidal, and that
+    # cost a run: it injected relative divergence of 2.0e-01, the solver reduced
+    # it only to 1.1e-01 and then stalled there -- against 5e-09 on the
+    # Stokes-decay case that reproduces the analytic rate to 8 significant
+    # figures.  Seven orders of magnitude, constant over t = 0.1 ... 1.0.
+    #
+    # LSSEM penalises div u as a weighted ROW; it does not project the state
+    # onto the solenoidal manifold, so divergence put into the INITIAL CONDITION
+    # is not removed.  It has to be absent to begin with.
+    #
+    # A = wall-damped random potential; u' = curl A vanishes at the walls because
+    # A and its tangential derivatives do (the envelope is sin^2, so A ~ y^2).
     wall = np.sin(np.pi*Y/(2.0*DELTA))**2
-    for f in (OP.U_, OP.V_, OP.W_):
-        P[..., f, :] += amp_noise*wall*rng.standard_normal(P[..., f, :].shape)
+    A = [wall*rng.standard_normal(P[..., 0, :].shape) for _ in range(3)]
+    Ah = [FR.to_modes(a)[..., :nk] for a in A]
+    ikz = 1j*s['kz']
+    dx = lambda q: DV.ddx(q, s['D'], m.facx)
+    dy = lambda q: DV.ddy(q, s['D'], m.facy)
+    cx = FR.to_physical(dy(Ah[2]) - ikz*Ah[1], nz)
+    cy = FR.to_physical(ikz*Ah[0] - dx(Ah[2]), nz)
+    cz = FR.to_physical(dx(Ah[1]) - dy(Ah[0]), nz)
+    scale = amp_noise/max(np.abs(cx).max(), np.abs(cy).max(), np.abs(cz).max(), 1e-30)
+    P[..., OP.U_, :] += scale*cx
+    P[..., OP.V_, :] += scale*cy
+    P[..., OP.W_, :] += scale*cz
 
     Uc = FR.to_modes(P)[..., :nk]
     C._set_vorticity(s, Uc)                    # discrete curl, not analytic
@@ -185,6 +208,63 @@ def rms_w(s, U):
     """Spanwise rms -- zero in any 2-D state, so it is the 3-D liveness check."""
     P = to_physical(s, U)
     return float(np.sqrt(np.mean(P[..., OP.W_, :]**2)))
+
+
+def momentum_budget(s, U):
+    """The x-momentum balance, integrated over the domain.
+
+        V dU_b/dt  =  f_x*V  +  nu*Int lap(u)  -  Int (u.grad u)_x
+
+    THE LAST TERM IS NOT ZERO, and assuming it was cost a day of chasing a
+    phantom.  `Int (u.grad u)_x = 0` requires the flow to be EXACTLY
+    divergence-free; in a least-squares formulation it never is -- continuity is
+    a weighted row, not a constraint (3D_STATUS.md L5).  Dropping it made the
+    balance miss by ~18%, which looked like an 18% error in the body force and
+    then like an 18% error in u_tau, and was neither.
+
+    Returns (f_x*V, viscous, convective, div_measure).  `convective` is therefore
+    a direct DIAGNOSTIC OF DIVERGENCE ERROR: it would vanish for a solenoidal
+    field, so its size relative to f_x*V says how far the state is from one.
+    """
+    m, D, kz, nz, nu = s['m'], s['D'], s['kz'], s['nz'], s['nu']
+    Uc = OP.to_complex(U)
+    u = Uc[..., OP.U_, :]
+    wq3 = m.wq[..., None]
+    dz = LZ/nz
+    vol = float(m.wq.sum())*LZ
+    vint = lambda phys: float((phys*wq3).sum()*dz)
+
+    uxx = DV.ddx(DV.ddx(u, D, m.facx), D, m.facx)
+    uyy = DV.ddy(DV.ddy(u, D, m.facy), D, m.facy)
+    visc = nu*vint(FR.to_physical(uxx + uyy - (kz**2)*u, nz))
+    conv = vint(FR.to_physical(CV.convective(Uc, D, m.facx, m.facy, kz, nz)[..., 0, :], nz))
+
+    d = (DV.ddx(u, D, m.facx) + DV.ddy(Uc[..., V_ if False else OP.V_, :], D, m.facy)
+         + 1j*kz*Uc[..., OP.W_, :])
+    divrms = float(np.sqrt(np.mean(FR.to_physical(d, nz)**2)))
+    return FX*vol, visc, conv, divrms
+
+
+def energy(s, U):
+    """(kinetic energy, dissipation nu*Int|grad u|^2) -- both TOTAL, not per volume.
+
+    Dissipation from grad u, NOT from the stored omega.  They agree here to
+    0.05% (checked), but omega is an independent unknown in VVP that satisfies
+    omega = curl u only to the least-squares residual, and bc.py leaves it
+    entirely free on the walls -- where enstrophy is largest.
+    """
+    m, D, kz, nz, nu = s['m'], s['D'], s['kz'], s['nz'], s['nu']
+    Uc = OP.to_complex(U)
+    wq3 = m.wq[..., None]; dz = LZ/nz
+    vint = lambda phys: float((phys*wq3).sum()*dz)
+    P = FR.to_physical(Uc, nz)
+    ke = 0.5*sum(vint(P[..., f, :]**2) for f in (OP.U_, OP.V_, OP.W_))
+    g2 = 0.0
+    for f in (OP.U_, OP.V_, OP.W_):
+        c = Uc[..., f, :]
+        for q in (DV.ddx(c, D, m.facx), DV.ddy(c, D, m.facy), 1j*kz*c):
+            g2 += vint(FR.to_physical(q, nz)**2)
+    return ke, nu*g2
 
 
 def cfl(s, U, dt):
@@ -392,14 +472,19 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
             Uh = U.cpu().numpy() if dev else U
             ut, ub, rw_ = u_tau(s, Uh), bulk(s, Uh), rms_w(s, Uh)
             cf = cfl(s, Uh, dt)
+            ke, eps = energy(s, Uh)
+            Pf, visc, conv, divrms = momentum_budget(s, Uh)
             line = (f't={(i+1)*dt:8.3f} u_tau={ut:.4f} U_b={ub:6.3f} '
-                    f"rms_w={rw_:.4f} CFL={cf:.2f} CG={it} [{time.perf_counter()-t0:.0f}s]")
+                    f"rms_w={rw_:.4f} E={ke:9.2f} eps={eps:8.2f} "
+                    f"div={divrms:.2e} conv={conv:7.3f} "
+                    f"CFL={cf:.2f} CG={it} [{time.perf_counter()-t0:.0f}s]")
             if cf > 1.732:
                 line += '  ** CFL ABOVE THE RKW3 LIMIT **'
             if ut < 0.5:
                 line += '  ** u_tau COLLAPSING -- possible relaminarisation **'
             print(line, flush=True); log.write(line + '\n'); log.flush()
-            hist.append((( i+1)*dt, ut, ub, rw_, cf, it))
+            hist.append(((i+1)*dt, ut, ub, rw_, cf, it, ke, eps,
+                         Pf, visc, conv, divrms))
         if (i + 1) % every == 0:
             Uh = U.cpu().numpy() if dev else U
             Nh = Nprev.cpu().numpy() if dev else Nprev
