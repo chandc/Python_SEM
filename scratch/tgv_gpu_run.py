@@ -29,12 +29,65 @@ sys.path.insert(0, '.'); sys.path.insert(0, 'scratch')
 import numpy as np
 
 import lssem3d
+from lssem3d import device as DEV
 from lssem2d.mesh import build_channel
 from lssem2d.lgl import diff_matrix
 from lssem3d import (operator as OP, solver3d as S3, bc as BC, fourier as FR,
                      convect as CV, timestep as T)
 
 L = 2*np.pi
+
+
+class Ops:
+    """The handful of array calls where numpy, cupy and torch actually differ.
+
+    Everything else in this driver goes through lssem3d's own DEV shim or is
+    backend-agnostic already.  Kept deliberately small: the temptation is to
+    build a general abstraction layer, but only five calls need one.
+    """
+
+    def __init__(self, name):
+        self.name = name
+        if name == 'torch':
+            import torch
+            self.t = torch
+            self.dev = 'cuda' if torch.cuda.is_available() else 'cpu'
+        elif name == 'cupy':
+            import cupy
+            self.t = cupy
+        else:
+            self.t = np
+
+    def to_dev(self, a):
+        if self.name == 'torch':
+            return self.t.as_tensor(np.ascontiguousarray(a)).to(self.dev)
+        if self.name == 'cupy':
+            return self.t.asarray(a)
+        return a
+
+    def to_host(self, a):
+        if self.name == 'torch':
+            return a.detach().cpu().numpy()
+        if self.name == 'cupy':
+            return self.t.asnumpy(a)
+        return np.asarray(a)
+
+    def zeros_c(self, shape, like):
+        if self.name == 'torch':
+            return self.t.zeros(tuple(shape), dtype=self.t.complex128,
+                                device=like.device)
+        return self.t.zeros(tuple(shape), dtype=complex)
+
+    def cat(self, arrs, axis):
+        return (self.t.cat(arrs, dim=axis) if self.name == 'torch'
+                else self.t.concatenate(arrs, axis=axis))
+
+    def sync(self):
+        if self.name == 'torch' and self.dev == 'cuda':
+            self.t.cuda.synchronize()
+        elif self.name == 'cupy':
+            self.t.cuda.Stream.null.synchronize()
+
 
 CASES = {
     # The CORIA-CFD benchmark case (TGV_VALIDATION.md sec 9): Re = 1600,
@@ -52,7 +105,7 @@ CASES = {
 }
 
 
-def setup(cfg, xp):
+def setup(cfg, xp, ops):
     m = build_channel(L, L, cfg['ex'], cfg['ey'], cfg['N'], bcs=(0, 0, 0, 0))
     m.periodic_x = L; m.periodic_y = L; m.compute_global_indices()
     nz = cfg['nz']; nk = nz//2 + 1
@@ -62,10 +115,10 @@ def setup(cfg, xp):
     X = np.empty((m.nelem, n, n)); Y = np.empty_like(X)
     for e in range(m.nelem):
         X[e] = m.xnod[e][:, None]; Y[e] = m.ynod[e][None, :]
-    g = (lambda a: xp.asarray(a)) if xp is not np else (lambda a: a)
+    g = ops.to_dev
     return dict(m=m, D=diff_matrix(cfg['N']), N=cfg['N'], nz=nz, nk=nk,
                 nu=cfg['nu'], kz=FR.wavenumbers(nz, L), mask=mask, X=X, Y=Y,
-                zpl=(L/nz)*np.arange(nz), xp=xp, g=g,
+                zpl=(L/nz)*np.arange(nz), xp=xp, g=g, ops=ops,
                 Dg=g(diff_matrix(cfg['N'])), kzg=g(FR.wavenumbers(nz, L)),
                 fxg=g(m.facx), fyg=g(m.facy), wqg=g(m.wq), maskg=g(mask))
 
@@ -106,21 +159,25 @@ def stage(s, U, Nprev, k, dt, Minv, rw, tol, max_iter=60000,
     c = T.implicit_coeff(dt, k)
     Uc = OP.to_complex(U)
     Nk = -CV.convective(Uc, D, s['fxg'], s['fyg'], kz, nz)
-    if xp is np:
-        R0 = OP.apply_L0_complex(Uc, D, s['fxg'], s['fyg'], kz, nu, 0.0, 0.0)
-    else:
-        from lssem3d.kernels_cupy import _L0
-        R0 = _L0(Uc, D, s['fxg'], s['fyg'], kz, nu, 0.0, 0.0)
+    # UNWEIGHTED L0 rows, for the explicit viscous term.  Routed through the
+    # bound backend's apply_L with c = 0 and no weights, rather than
+    # OP.apply_L0_complex: that function uses the DEV shim for its derivatives
+    # but allocates its OUTPUT with numpy, so it cannot take tensors.  Going
+    # through apply_L also means each backend uses its own fast path -- the
+    # fused kernel on cupy, the compiled one on torch.
+    R0r = OP.apply_L(U, D, s['fxg'], s['fyg'], kz, nu, 0.0)
+    R0 = R0r[..., :OP.NROW, :] + 1j*R0r[..., OP.NROW:, :]
     Lk = -R0[..., 4:7, :]
-    fc = xp.zeros(Uc.shape[:-2] + (OP.NROW, Uc.shape[-1]), dtype=complex)
+    ops = s['ops']
+    fc = ops.zeros_c(tuple(Uc.shape[:-2]) + (OP.NROW, Uc.shape[-1]), Uc)
     for row, fld in ((4, OP.U_), (5, OP.V_), (6, OP.W_)):
         i = row - 4
         fc[..., row, :] = c*(Uc[..., fld, :] + dt*(
             T.GAMMA[k]*Nk[..., i, :] + T.ZETA[k]*Nprev[..., i, :]
             + T.ALPHA[k]*Lk[..., i, :]))
-    f = xp.concatenate([fc.real, fc.imag], axis=-2)
+    f = ops.cat([fc.real, fc.imag], -2)
     wq = s['wqg']
-    fw = xp.concatenate([rw, rw]).reshape((1, 1, 1, f.shape[-2], 1))
+    fw = ops.cat([rw, rw], 0).reshape((1, 1, 1, f.shape[-2], 1))
     r = OP.apply_LT(
         OP.apply_L(U, D, s['fxg'], s['fyg'], kz, nu, c, wq, 0.0, rw)
         - f*wq[..., None, None]*fw, D, s['fxg'], s['fyg'], kz, nu, c, 0.0)
@@ -147,9 +204,9 @@ def fingerprint(cfg):
     return '|'.join(f'{k}={cfg[k]}' for k in sorted(cfg))
 
 
-def save_checkpoint(outdir, U, t, step, dt, cfg, xp):
+def save_checkpoint(outdir, U, t, step, dt, cfg, ops):
     """Atomic, with one generation of history kept."""
-    Uh = U if xp is np else xp.asnumpy(U)
+    Uh = ops.to_host(U)
     tmp = os.path.join(outdir, 'chk_tmp.npz')
     latest = os.path.join(outdir, 'chk_latest.npz')
     prev = os.path.join(outdir, 'chk_prev.npz')
@@ -184,7 +241,11 @@ def main():
     ap.add_argument('--budget', type=float, default=1e9,
                     help='wall-clock seconds for THIS session; the run '
                          'checkpoints and exits cleanly before spending it')
-    ap.add_argument('--backend', default='cupy')
+    ap.add_argument('--backend', default='cupy',
+                    choices=('cupy', 'torch', 'numpy'))
+    ap.add_argument('--no-compile', action='store_true',
+                    help='torch backend: skip torch.compile (which is worth '
+                         '1.36x per CG iteration but costs ~20 s up front)')
     ap.add_argument('--chk-minutes', type=float, default=10.0)
     ap.add_argument('--check-every', type=int, default=None,
                     help='CG convergence-test interval; each test costs a '
@@ -198,25 +259,44 @@ def main():
     cfg = CASES[a.case]
     os.makedirs(a.outdir, exist_ok=True)
     lssem3d.set_backend(a.backend)
-    xp = np
-    if a.backend in ('cupy',):
-        import cupy as cp; xp = cp
+    ops = Ops(a.backend)
+    xp = ops.t
+    name = None
+    if a.backend == 'cupy':
+        cp = ops.t
         d = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
         name = d['name'].decode() if isinstance(d['name'], bytes) else d['name']
         print(f'GPU    {name}  (cc {d["major"]}.{d["minor"]}, '
               f'{d["totalGlobalMem"]/2**30:.0f} GiB)')
+    elif a.backend == 'torch':
+        if ops.dev == 'cpu':
+            print('GPU    none -- torch on CPU.  Correct, but slow; for API '
+                  'checks only.')
+        else:
+            name = ops.t.cuda.get_device_name(0)
+            print(f'GPU    {name}  (torch {ops.t.__version__})')
+            if not a.no_compile:
+                # Worth 12.85 -> 9.42 ms per CG iteration, past the
+                # hand-written CuPy path -- see CUPY_BACKEND.md.  Costs ~20 s
+                # of compile once per process, which a chained-session
+                # production run pays once per session.
+                from lssem3d import kernels_torch as KT
+                KT._apply_L = ops.t.compile(KT._apply_L)
+                KT._apply_LT = ops.t.compile(KT._apply_LT)
+                print('       torch.compile enabled (~20 s on first call)')
         # This code is FP64 and bandwidth-bound, so the card matters enormously
         # and Colab does not always give you the one you asked for.  A100/H100
         # run FP64 at 1/2 the FP32 rate; T4, L4 and the consumer parts run it
         # at 1/32 to 1/64, which alone is a 10-30x difference in step time.
-        if not any(t in name for t in ('A100', 'H100', 'H200', 'V100',
-                                       'GB10', 'GH200', 'B200')):
-            print(f'       *** WARNING: {name} has no fast FP64 path. ***\n'
-                  f'       Timings here are NOT representative and a production\n'
-                  f'       run will take many times longer.  Runtime > Change\n'
-                  f'       runtime type, and pick an A100.')
-    s = setup(cfg, xp)
-    chk = a.check_every if a.check_every is not None else (1 if xp is np else 10)
+    if name and not any(q in name for q in ('A100', 'H100', 'H200', 'V100',
+                                            'GB10', 'GH200', 'B200')):
+        print(f'       *** WARNING: {name} has no fast FP64 path. ***\n'
+              f'       Timings here are NOT representative and a production\n'
+              f'       run will take many times longer.  Runtime > Change\n'
+              f'       runtime type, and pick an A100.')
+    s = setup(cfg, xp, ops)
+    chk = a.check_every if a.check_every is not None else (
+        1 if a.backend == 'numpy' else 10)
 
     U0 = ic_tgv(s)
     Pph = FR.to_physical(OP.to_complex(U0), s['nz'])
@@ -242,7 +322,8 @@ def main():
         print(f'RESUME {a.case} at t={t:.4f} (step {step}/{nstep})')
         mode = 'a'
     Minv, rws = precond(s, dt)
-    Np_ = xp.zeros(OP.to_complex(U).shape[:-2] + (3, s['nk']), dtype=complex)
+    Np_ = s['ops'].zeros_c(tuple(OP.to_complex(U).shape[:-2]) + (3, s['nk']),
+                           OP.to_complex(U))
 
     dpath = os.path.join(a.outdir, 'diag.csv')
     if mode == 'w' or not os.path.exists(dpath):
@@ -256,7 +337,7 @@ def main():
         # Extrapolating a step time from a matvec benchmark alone -- without
         # ever measuring the iteration count -- is how a 46 h estimate turned
         # into 248 h.
-        sync = (lambda: xp.cuda.Stream.null.synchronize()) if xp is not np else (lambda: None)
+        sync = s['ops'].sync
         for k in range(T.NSTAGE):          # warm-up: JIT, pool growth, autotune
             U, Np_, _ = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'],
                                   check_every=chk)
@@ -315,7 +396,7 @@ def main():
             nfr += 1; next_snap += cfg['snap']
         now = time.perf_counter()
         if now - last_chk > a.chk_minutes*60:
-            save_checkpoint(a.outdir, U, t, step, dt, cfg, xp)
+            save_checkpoint(a.outdir, U, t, step, dt, cfg, s['ops'])
             last_chk = now
         if step % 10 == 0:
             rate = (now - wall0)/max(step - int(round(t_start/dt)), 1)
@@ -323,13 +404,13 @@ def main():
                   f'CG={tot} [{rate:.1f} s/step]', flush=True)
         # leave room to checkpoint before the session is cut off
         if now - wall0 > a.budget - 120:
-            save_checkpoint(a.outdir, U, t, step, dt, cfg, xp)
+            save_checkpoint(a.outdir, U, t, step, dt, cfg, s['ops'])
             left = (nstep - step)*(now - wall0)/max(step - int(round(t_start/dt)), 1)
             print(f'\nBUDGET REACHED at t={t:.4f} (step {step}/{nstep}). '
                   f'Checkpoint written.\nRun this cell again to continue; '
                   f'~{left/3600:.1f} h of compute remain.')
             return
-    save_checkpoint(a.outdir, U, t, step, dt, cfg, xp)
+    save_checkpoint(a.outdir, U, t, step, dt, cfg, s['ops'])
     print(f'\nDONE at t={t:.4f} ({step} steps). Checkpoint and {nfr} frames '
           f'in {a.outdir}')
 
@@ -339,10 +420,11 @@ def selftest(s, cfg, dt, a, chk=1):
     xp = s['xp']
     Minv, rws = precond(s, dt)
     U0 = s['g'](ic_tgv(s))
-    Np0 = xp.zeros(OP.to_complex(U0).shape[:-2] + (3, s['nk']), dtype=complex)
+    Np0 = s['ops'].zeros_c(tuple(OP.to_complex(U0).shape[:-2]) + (3, s['nk']),
+                           OP.to_complex(U0))
 
     def advance(U, n):
-        Np_ = xp.zeros_like(Np0)
+        Np_ = Np0*0
         for _ in range(n):
             for k in range(T.NSTAGE):
                 U, Np_, _ = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'],
@@ -350,11 +432,11 @@ def selftest(s, cfg, dt, a, chk=1):
         return U
     straight = advance(U0, 6)
     half = advance(U0, 3)
-    save_checkpoint(a.outdir, half, 3*dt, 3, dt, cfg, xp)
+    save_checkpoint(a.outdir, half, 3*dt, 3, dt, cfg, s['ops'])
     Uh, t, step, dt2 = load_checkpoint(a.outdir, cfg)
     restarted = advance(s['g'](Uh), 3)
-    d = float(xp.abs(straight - restarted).max())
-    scale = float(xp.abs(straight).max())
+    d = float(abs(straight - restarted).max())
+    scale = float(abs(straight).max())
     print(f'SELFTEST  6 steps straight vs 3+checkpoint+3:')
     print(f'  max|difference| = {d:.3e}  (relative {d/scale:.3e})')
     print(f'  {"PASS -- restart is exact" if d == 0.0 else "PASS (within solver tolerance)" if d/scale < 1e-10 else "FAIL"}')
