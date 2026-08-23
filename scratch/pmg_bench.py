@@ -35,6 +35,20 @@ Ns = [int(v) for v in (argv[0].split(',') if argv else ['8'])]
 ne = int(argv[1]) if len(argv) > 1 else 3
 nz = int(argv[2]) if len(argv) > 2 else 16
 
+if backend != 'numpy':
+    sys.exit(
+        f"PMG has no GPU path -- run this without --backend (numpy is the\n"
+        f"default).  _Level passes HOST mesh.facx / mesh.wq / D / kz / mask\n"
+        f"straight into normal_op, so a cupy kernel receives numpy arrays and\n"
+        f"raises 'Unsupported type numpy.ndarray'.  DirectCoarse is host-only\n"
+        f"too: numpy loops, a Cholesky, and a dense basis construction.\n\n"
+        f"This does not weaken the comparison -- CG ITERATION COUNTS do not\n"
+        f"depend on the backend.  It is, though, a practical argument against\n"
+        f"PMG independent of its convergence: the production solver is\n"
+        f"GPU-resident, and a host round trip inside the CG loop was measured\n"
+        f"at 21.9x the matvec (TORCH_VERIFY_PLAN.md V3).  A V-cycle per\n"
+        f"iteration would pay that every iteration.")
+
 import lssem3d; lssem3d.set_backend(backend)
 import tgv_gpu_run as TG
 from lssem3d import operator as OP, solver3d as S3, timestep as T, precond as PC
