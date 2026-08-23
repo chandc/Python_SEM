@@ -409,12 +409,22 @@ def jacobi_diagonal_analytic(shape, D, facx, facy, kz, nu, c, mesh=None,
 
 
 def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
-        tol=1e-10, max_iter=2000, x0=None, wq=None, kap=0.0, rw=None):
+        tol=1e-10, max_iter=2000, x0=None, wq=None, kap=0.0, rw=None,
+        check_every=1):
     """Preconditioned CG on A x = b, batched over modes.
 
     Returns (x, iters, resid) with resid the per-mode final residual norm.
     Convergence is per mode: a mode whose residual is already below tol
     contributes nothing further, and the loop exits when ALL modes are below.
+
+    check_every: how often to TEST convergence.  The test reads a boolean on
+    the host, which on a GPU backend forces a synchronisation -- the CPU
+    drains the queue, waits, reads one bit, and re-issues everything.  At
+    every iteration that stall can dominate the iteration itself, and it is
+    invisible to a matvec benchmark, which is how a 9 ms/iteration projection
+    became a measured 36 ms.  Testing every K costs at most K-1 extra
+    iterations out of the thousands a solve takes, and skips K-1 residual
+    reductions as well.  Default 1 keeps the CPU paths bit-identical.
     """
     x = DEV.zeros_like(b) if x0 is None else DEV.clone(x0)
     if mask is not None:
@@ -443,6 +453,18 @@ def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
                           rz/DEV.where(denom == 0, one, denom), 0.0*one)
         x = x + alpha*p
         r = r - alpha*Ap
+        # Only test on check iterations: both the reduction and the host
+        # sync it feeds are skipped in between.  Always test on the last one
+        # so max_iter still reports a meaningful residual.
+        if not (it % check_every == 0 or it == max_iter):
+            z = P(r)
+            rz_new = _dot(r, z, mw)
+            one = DEV.zeros_like(rz) + 1.0
+            beta = DEV.where(abs(rz) > 1e-300,
+                             rz_new/DEV.where(rz == 0, one, rz), 0.0*one)
+            p = z + beta*p
+            rz = rz_new
+            continue
         rn = DEV.sqrt(_dot(r, r, mw))
         if DEV.all_(rn < target):
             # TRUE-RESIDUAL SAFEGUARD, ported from lssem2d.pcg_solve.

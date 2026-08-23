@@ -98,7 +98,8 @@ def precond(s, dt):
     return out, rws
 
 
-def stage(s, U, Nprev, k, dt, Minv, rw, tol, max_iter=60000):
+def stage(s, U, Nprev, k, dt, Minv, rw, tol, max_iter=60000,
+          check_every=1):
     xp = s['xp']
     m, D, kz, mask, nu, nz = (s['m'], s['Dg'], s['kzg'], s['maskg'], s['nu'],
                               s['nz'])
@@ -125,7 +126,8 @@ def stage(s, U, Nprev, k, dt, Minv, rw, tol, max_iter=60000):
         - f*wq[..., None, None]*fw, D, s['fxg'], s['fyg'], kz, nu, c, 0.0)
     b = -S3.gs(m, r)*mask
     dU, it, _ = S3.pcg(b, D, s['fxg'], s['fyg'], kz, nu, c, mesh=m, mask=mask,
-                       M_inv=Minv[k], tol=tol, max_iter=max_iter, wq=wq, rw=rw)
+                       M_inv=Minv[k], tol=tol, max_iter=max_iter, wq=wq, rw=rw,
+                       check_every=check_every)
     return U + dU, Nk, it
 
 
@@ -184,6 +186,10 @@ def main():
                          'checkpoints and exits cleanly before spending it')
     ap.add_argument('--backend', default='cupy')
     ap.add_argument('--chk-minutes', type=float, default=10.0)
+    ap.add_argument('--check-every', type=int, default=None,
+                    help='CG convergence-test interval; each test costs a '
+                         'host sync, which on a GPU can cost more than the '
+                         'iteration.  Default: 1 on CPU, 10 on GPU.')
     ap.add_argument('--price', action='store_true',
                     help='time a few steps, print the projected total, exit')
     ap.add_argument('--selftest', action='store_true',
@@ -210,6 +216,7 @@ def main():
                   f'       run will take many times longer.  Runtime > Change\n'
                   f'       runtime type, and pick an A100.')
     s = setup(cfg, xp)
+    chk = a.check_every if a.check_every is not None else (1 if xp is np else 10)
 
     U0 = ic_tgv(s)
     Pph = FR.to_physical(OP.to_complex(U0), s['nz'])
@@ -220,7 +227,7 @@ def main():
     dof = U0.size
 
     if a.selftest:
-        return selftest(s, cfg, dt, a)
+        return selftest(s, cfg, dt, a, chk)
 
     resumed = load_checkpoint(a.outdir, cfg)
     if resumed is None:
@@ -251,17 +258,19 @@ def main():
         # into 248 h.
         sync = (lambda: xp.cuda.Stream.null.synchronize()) if xp is not np else (lambda: None)
         for k in range(T.NSTAGE):          # warm-up: JIT, pool growth, autotune
-            U, Np_, _ = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'])
+            U, Np_, _ = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'],
+                                  check_every=chk)
         sync()
         t0 = time.perf_counter(); its = []
         for _ in range(2):
             for k in range(T.NSTAGE):
                 tk = time.perf_counter()
-                U, Np_, it = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'])
+                U, Np_, it = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'],
+                                   check_every=chk)
                 sync(); its.append((k, it, time.perf_counter()-tk))
         per = (time.perf_counter()-t0)/2
         tot_it = sum(i for _, i, _ in its)/2
-        print(f'\nPRICE  {per:.1f} s/step  ->  {nstep*per/3600:.1f} h total '
+        print(f'\nPRICE  (check_every={chk})  {per:.1f} s/step  ->  {nstep*per/3600:.1f} h total '
               f'({nstep} steps)')
         print(f'       {tot_it:.0f} CG iterations/step, '
               f'{1e3*per/max(tot_it, 1):.2f} ms per iteration '
@@ -288,7 +297,8 @@ def main():
     while step < nstep:
         tot, capped = 0, False
         for k in range(T.NSTAGE):
-            U, Np_, it = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'])
+            U, Np_, it = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'],
+                                   check_every=chk)
             tot += it; capped |= (it >= 60000)
         step += 1; t += dt
         E, Om, mx = diagnostics(s, U)
@@ -324,7 +334,7 @@ def main():
           f'in {a.outdir}')
 
 
-def selftest(s, cfg, dt, a):
+def selftest(s, cfg, dt, a, chk=1):
     """A restart must reproduce an uninterrupted run -- prove it."""
     xp = s['xp']
     Minv, rws = precond(s, dt)
@@ -335,7 +345,8 @@ def selftest(s, cfg, dt, a):
         Np_ = xp.zeros_like(Np0)
         for _ in range(n):
             for k in range(T.NSTAGE):
-                U, Np_, _ = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'])
+                U, Np_, _ = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'],
+                                  check_every=chk)
         return U
     straight = advance(U0, 6)
     half = advance(U0, 3)
