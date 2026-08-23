@@ -643,11 +643,55 @@ dispatch-floor penalty that costs PMG its advantage here (the 2D study measured
 p-MG cutting iterations 9.9× for ~14 matvecs, a net 1.25×, and coarse levels do
 not get proportionally cheaper on a machine with a per-matvec host floor).
 
-The open question is not whether the conditioning justifies it but whether FDM
-*applies*: classical fast diagonalisation needs the operator to be a sum of
-tensor products, and the VVP least-squares operator couples all seven fields at
-each node. A field-block-diagonal FDM, leaving the coupling to CG, is the
-realistic form — and how much of the ideal it recovers is unmeasured.
+### FDM was built, and it does not work
+
+The open question was never whether the conditioning justifies it but whether
+FDM *applies*. It applies **exactly** — every field-diagonal block is a sum of
+tensor products to machine precision (`scratch/fdm_structure.py`), so fast
+diagonalisation inverts each one exactly. It still loses, measured on the A100
+with a working symmetry gate (`scratch/fdm_bench.py`):
+
+| N | 4 | 6 | 8 | 10 | 12 | 14 |
+|---|---|---|---|---|---|---|
+| Jacobi | 80 | 140 | 230 | 360 | 530 | 760 |
+| FDM | 170 | 270 | **2050** | **3250** | 1330 | 1960 |
+
+**Jacobi N^1.80, FDM N^2.19** — worse at every order by 2–9×, and a worse
+slope. Multiplicity-weighted (symmetric) Schwarz helps modestly and changes
+nothing structural.
+
+The erratic pattern is itself the diagnostic. A preconditioner capturing the
+right structure degrades smoothly; quality swinging 5× between adjacent orders
+means something essential is missing. FDM inverts each field's **spatial**
+operator exactly while dropping the field coupling — 37% of the operator by
+Frobenius norm — and the coupling between velocity, vorticity and pressure *is*
+the difficulty of the VVP system. Point-Jacobi's diagonal comes from the full
+assembled operator, so its magnitudes reflect the coupling even with no
+off-diagonal structure. **FDM is exact about the part that was never the
+problem and blind to the part that is.**
+
+**Worth keeping regardless of the negative result:**
+
+- Every field-diagonal block is separable to machine precision — reusable if
+  anything ever needs an exact element solve.
+- **Continuity.** CG's vectors live in discontinuous element storage but are
+  constrained to the continuous subspace, since `normal_op` ends with
+  gather-scatter. An element-local preconditioner maps continuous input to
+  **discontinuous** output, and the iterates then leave the subspace the
+  operator is defined on. Adding the gather-scatter — making it additive
+  Schwarz — took this from 40000 iterations to 170. It applies to *any*
+  element-local preconditioner built here.
+- **The legacy 1/c² momentum weighting is load-bearing**: it cancels the c²
+  from `c*u` and leaves a clean unit mass term, which is what makes the
+  momentum blocks separable at all.
+- Symmetry must be checked **in the space and inner product CG uses** —
+  continuous probes, multiplicity-weighted. Random probes under a plain sum
+  report ~1e-2 for an operator symmetric to 1e-17, and a gate that cries wolf
+  every run is worse than no gate.
+
+**If revisited, the evidence points the other way**: a 14×14 **nodal field
+block** — exact about the coupling, crude about space — is the opposite trade
+from FDM, and is the experiment the data argues for.
 
 ## Running long jobs: `scratch/tgv_gpu_run.py`
 
