@@ -58,18 +58,20 @@ _L0_ROWS = cp.ElementwiseKernel(
     'complex128 wx, complex128 wy, complex128 oxx, complex128 oxy, '
     'complex128 oyx, complex128 oyy, complex128 ozx, complex128 ozy, '
     'complex128 px, complex128 py, complex128 ik, '
-    'float64 fx, float64 fy, float64 nu, float64 c, float64 kap',
+    'float64 fx, float64 fy, float64 nu, float64 c, float64 kap, '
+    'float64 wq, float64 w0, float64 w1, float64 w2, float64 w3, '
+    'float64 w4, float64 w5, float64 w6, float64 w7',
     'complex128 r0, complex128 r1, complex128 r2, complex128 r3, '
     'complex128 r4, complex128 r5, complex128 r6, complex128 r7',
     """
-    r0 = kap*p + fx*ux + fy*vy + ik*w;
-    r1 = fy*wy - ik*v - ox;
-    r2 = ik*u - fx*wx - oy;
-    r3 = fx*vx - fy*uy - oz;
-    r4 = c*u + fx*px + nu*(fy*ozy - ik*oy);
-    r5 = c*v + fy*py + nu*(ik*ox - fx*ozx);
-    r6 = c*w + ik*p + nu*(fx*oyx - fy*oxy);
-    r7 = fx*oxx + fy*oyy + ik*oz;
+    r0 = (kap*p + fx*ux + fy*vy + ik*w)                * (wq*w0);
+    r1 = (fy*wy - ik*v - ox)                            * (wq*w1);
+    r2 = (ik*u - fx*wx - oy)                            * (wq*w2);
+    r3 = (fx*vx - fy*uy - oz)                           * (wq*w3);
+    r4 = (c*u + fx*px + nu*(fy*ozy - ik*oy))            * (wq*w4);
+    r5 = (c*v + fy*py + nu*(ik*ox - fx*ozx))            * (wq*w5);
+    r6 = (c*w + ik*p + nu*(fx*oyx - fy*oxy))            * (wq*w6);
+    r7 = (fx*oxx + fy*oyy + ik*oz)                      * (wq*w7);
     """,
     'lssem_L0_rows')
 
@@ -125,7 +127,7 @@ def _to_real(Uc):
     return cp.concatenate([Uc.real, Uc.imag], axis=-2)
 
 
-def _L0(U, D, facx, facy, kz, nu, c, kap=0.0):
+def _L0(U, D, facx, facy, kz, nu, c, kap=0.0, wq=None, rw=None):
     """8 complex residual rows from 7 complex fields -- mirrors apply_L0_complex."""
     # BATCHED DERIVATIVES.  ddx/ddy already carry arbitrary trailing axes and
     # the field axis is one of them -- so both derivatives of ALL SEVEN fields
@@ -156,6 +158,8 @@ def _L0(U, D, facx, facy, kz, nu, c, kap=0.0):
     _L0_ROWS(u, v, w, ox, oy, oz, p, ux, uy, vx, vy, wx, wy,
              oxx, oxy, oyx, oyy, ozx, ozy, px, py, ik,
              _bcast(facx), _bcast(facy), nu, c, kap,
+             1.0 if wq is None else wq[..., None],
+             *(( 1.0,)*NROW if rw is None else tuple(float(x) for x in rw)),
              R[..., 0, :], R[..., 1, :], R[..., 2, :], R[..., 3, :],
              R[..., 4, :], R[..., 5, :], R[..., 6, :], R[..., 7, :])
     return R
@@ -182,13 +186,26 @@ def _LT(R, D, facx, facy, kz, nu, c, kap=0.0):
 
 
 def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
-    """(..., 14, nmode) real -> (..., 16, nmode) real.  Weighted if wq given."""
-    R = _L0(_to_complex(Ur), D, facx, facy, kz, nu, c, kap)
-    if rw is not None:
-        R = R*cp.asarray(rw).reshape((1,)*(R.ndim - 2) + (len(rw), 1))
-    if wq is not None:
-        R = R*wq[..., None, None]
-    return _to_real(R)
+    """(..., 14, nmode) real -> (..., 16, nmode) real.  Weighted if wq given.
+
+    The row weights and quadrature weights are applied INSIDE the fused kernel
+    (as scalars when absent, so an unweighted call reads nothing extra).  Done
+    afterwards they were two more full passes over an 8-row complex array.
+    """
+    return _to_real(_L0(_to_complex(Ur), D, facx, facy, kz, nu, c, kap,
+                        wq=wq, rw=rw))
+
+
+def apply_LTL(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
+    """L^T W L in one call, staying complex in between.
+
+    normal_op calls apply_L then apply_LT back to back, and apply_L ends by
+    packing to split-real only for apply_LT to unpack it again immediately --
+    a whole real->complex->real round trip per matvec, ~0.9 ms of the 8.0.
+    Same arithmetic, two conversions instead of four.
+    """
+    return _to_real(_LT(_L0(_to_complex(Ur), D, facx, facy, kz, nu, c, kap,
+                            wq=wq, rw=rw), D, facx, facy, kz, nu, c, kap))
 
 
 def apply_LT(Rr, D, facx, facy, kz, nu, c, kap=0.0):

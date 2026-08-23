@@ -143,8 +143,15 @@ def normal_op(Ur, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None, kap=0
     """
     if mask is not None:
         Ur = Ur*mask
-    out = OP.apply_LT(OP.apply_L(Ur, D, facx, facy, kz, nu, c, wq, kap, rw),
-                      D, facx, facy, kz, nu, c, kap)
+    if DEV.is_cupy(Ur):
+        # One fused call instead of two: apply_L packs its result to split-real
+        # and apply_LT unpacks it again immediately, so calling them separately
+        # costs a real->complex->real round trip per matvec for nothing.
+        from .kernels_cupy import apply_LTL
+        out = apply_LTL(Ur, D, facx, facy, kz, nu, c, wq, kap, rw)
+    else:
+        out = OP.apply_LT(OP.apply_L(Ur, D, facx, facy, kz, nu, c, wq, kap, rw),
+                          D, facx, facy, kz, nu, c, kap)
     if mesh is not None:
         out = gs(mesh, out)
     return out*mask if mask is not None else out
