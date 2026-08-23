@@ -269,6 +269,34 @@ cores), this should put `normal_op` near **2 ms against ~1.85 ms of real GPU
 work** — i.e. the loop finally becomes GPU-bound, which is where host
 optimisation stops paying and hardware starts mattering again.
 
+### Measured on the A100: GPU-bound at last
+
+| | 0.53 M | 1.23 M | 3.43 M | **6.17 M** |
+|---|---|---|---|---|
+| first run | 11.64 | 11.50 | 11.58 | **11.45** |
+| after the sync + batching fixes | 4.10 | 4.00 | 3.99 | **4.01** |
+| **after fusion** | 2.40 | 2.32 | 2.32 | **2.93** |
+
+The last row is the result: after two rounds of identical timings across a
+12× (and in the profile, 1500×) range in work, **the largest case finally
+separates from the floor**. Host issue cost is ~2.32 ms; the GPU needs ~2.93 ms
+at 6.17 M dof. They have crossed over, so the loop is **GPU-bound** — which is
+the right place to stop optimising the host: the remaining time is genuine
+memory traffic, and a further 20% is all that overlap could buy.
+
+**3.9× end to end on the A100** (11.45 → 2.93 ms), and against the Mac's numba
+path (~25 ms per CG iteration) roughly **8×**:
+
+| | per CG iteration | 88³ Re = 800 | Re = 1600 @ 128³ (CORIA) |
+|---|---|---|---|
+| Mac + numba | ~25 ms | 50 h | 15 days |
+| **Colab A100** | **~3.2 ms** | **~6.4 h** | **~1.9 days** |
+
+That last column is the one that matters: the CORIA benchmark comparison
+(`TGV_VALIDATION.md` §9), shelved as a post-M6 undertaking at 15 days, is now
+a two-day run. **The bottleneck has moved from throughput to the missing
+checkpoint/restart driver**, which is what Colab's session limits require.
+
 ### One honest caveat on the batching fix
 
 Batching trades dispatches for **strided field views**. That is a clear win on
