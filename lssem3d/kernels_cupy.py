@@ -44,14 +44,20 @@ def _to_real(Uc):
 
 def _L0(U, D, facx, facy, kz, nu, c, kap=0.0):
     """8 complex residual rows from 7 complex fields -- mirrors apply_L0_complex."""
-    g = lambda f: (ddx(U[..., f, :], D, facx), ddy(U[..., f, :], D, facy))
-    ux, uy = g(U_)
-    vx, vy = g(V_)
-    wx, wy = g(W_)
-    oxx, oxy = g(OX_)
-    oyx, oyy = g(OY_)
-    ozx, ozy = g(OZ_)
-    px, py = g(P_)
+    # BATCHED DERIVATIVES.  ddx/ddy already carry arbitrary trailing axes and
+    # the field axis is one of them -- so both derivatives of ALL SEVEN fields
+    # are two einsum calls, not fourteen.  Identical arithmetic; 12 fewer
+    # cuBLAS dispatches per application, which is what the host pays for when
+    # a fast GPU sits behind a slow CPU (CUPY_BACKEND.md).
+    Ux = ddx(U, D, facx)
+    Uy = ddy(U, D, facy)
+    ux, uy = Ux[..., U_, :], Uy[..., U_, :]
+    vx, vy = Ux[..., V_, :], Uy[..., V_, :]
+    wx, wy = Ux[..., W_, :], Uy[..., W_, :]
+    oxx, oxy = Ux[..., OX_, :], Uy[..., OX_, :]
+    oyx, oyy = Ux[..., OY_, :], Uy[..., OY_, :]
+    ozx, ozy = Ux[..., OZ_, :], Uy[..., OZ_, :]
+    px, py = Ux[..., P_, :], Uy[..., P_, :]
     u, v, w = U[..., U_, :], U[..., V_, :], U[..., W_, :]
     ox, oy, oz = U[..., OX_, :], U[..., OY_, :], U[..., OZ_, :]
     p = U[..., P_, :]
@@ -71,19 +77,22 @@ def _L0(U, D, facx, facy, kz, nu, c, kap=0.0):
 
 def _LT(R, D, facx, facy, kz, nu, c, kap=0.0):
     """Adjoint -- mirrors apply_LT_complex, including the conjugated i*k."""
-    dxT = lambda f: ddxT(f, D, facx)
-    dyT = lambda f: ddyT(f, D, facy)
+    # Batched for the same reason as _L0: eight rows, two calls.
+    RxT = ddxT(R, D, facx)
+    RyT = ddyT(R, D, facy)
+    dxT = lambda i: RxT[..., i, :]
+    dyT = lambda i: RyT[..., i, :]
     mik = -1j*kz
     r0, r1, r2, r3, r4, r5, r6, r7 = (R[..., i, :] for i in range(NROW))
 
     C = cp.empty(R.shape[:-2] + (NVAR, R.shape[-1]), dtype=cp.complex128)
-    C[..., U_, :] = dxT(r0) + mik*r2 - dyT(r3) + c*r4
-    C[..., V_, :] = dyT(r0) - mik*r1 + dxT(r3) + c*r5
-    C[..., W_, :] = mik*r0 + dyT(r1) - dxT(r2) + c*r6
-    C[..., OX_, :] = -r1 + nu*mik*r5 - nu*dyT(r6) + dxT(r7)
-    C[..., OY_, :] = -r2 - nu*mik*r4 + nu*dxT(r6) + dyT(r7)
-    C[..., OZ_, :] = -r3 + nu*dyT(r4) - nu*dxT(r5) + mik*r7
-    C[..., P_, :] = dxT(r4) + dyT(r5) + mik*r6 + kap*r0
+    C[..., U_, :] = dxT(0) + mik*r2 - dyT(3) + c*r4
+    C[..., V_, :] = dyT(0) - mik*r1 + dxT(3) + c*r5
+    C[..., W_, :] = mik*r0 + dyT(1) - dxT(2) + c*r6
+    C[..., OX_, :] = -r1 + nu*mik*r5 - nu*dyT(6) + dxT(7)
+    C[..., OY_, :] = -r2 - nu*mik*r4 + nu*dxT(6) + dyT(7)
+    C[..., OZ_, :] = -r3 + nu*dyT(4) - nu*dxT(5) + mik*r7
+    C[..., P_, :] = dxT(4) + dyT(5) + mik*r6 + kap*r0
     return C
 
 

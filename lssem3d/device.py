@@ -224,10 +224,10 @@ def gs_cupy(mesh, U):
     reproducible run to run; parity is checked to a tolerance, not bitwise.
     """
     import cupyx
-    idx = _index_cupy(mesh)
+    idx, ng = _index_cupy(mesh)
     nel, n, _, nv, nk = U.shape
     flat = U.reshape(nel*n*n, nv*nk)
-    g = cupy.zeros((int(idx.max()) + 1, nv*nk), dtype=U.dtype)
+    g = cupy.zeros((ng, nv*nk), dtype=U.dtype)
     cupyx.scatter_add(g, idx, flat)
     return g[idx].reshape(U.shape)
 
@@ -236,10 +236,19 @@ _IDX_CP = weakref.WeakKeyDictionary()
 
 
 def _index_cupy(mesh):
+    """Cached (index, n_global).
+
+    `n_global` IS CACHED DELIBERATELY.  Computing it as `int(idx.max())` per
+    call -- the obvious way, and how this was first written -- costs a device
+    reduction AND a host synchronisation on every gather-scatter, i.e. once
+    per matvec.  Measured at dispatch-dominated size that made gather-scatter
+    49% of the whole per-matvec host cost.  The value is a property of the
+    mesh, so it is taken once from `mesh.gidx` on the host.
+    """
     hit = _IDX_CP.get(mesh)
     if hit is None:
-        hit = cupy.asarray(
-            np.ascontiguousarray(mesh.gidx.reshape(-1)).astype(np.int64))
+        flat = np.ascontiguousarray(mesh.gidx.reshape(-1)).astype(np.int64)
+        hit = (cupy.asarray(flat), int(flat.max()) + 1)
         _IDX_CP[mesh] = hit
     return hit
 
