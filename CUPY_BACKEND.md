@@ -420,21 +420,50 @@ one genuine library difference is the raw reduction, where CuPy is **13.7×**
 worse — and it disappears entirely once written as a GEMM: `_dot` is 0.69 vs
 0.68 ms. CuPy's weakness here is real but exactly one line of code wide.
 
-#### Net-net: which is faster?
+#### Net-net: which is faster?  torch — via `torch.compile`
 
-**As libraries, neither.** Every primitive above matches within noise. The one
-real difference — CuPy's raw reduction at 13.7× torch's — is removable in a
-single line, after which `_dot` is 0.69 vs 0.68 ms.
+**On raw primitives, neither.** Every primitive above matches within noise.
+The one real difference — CuPy's raw reduction at 13.7× torch's — is removable
+in a single line, after which `_dot` is 0.69 vs 0.68 ms.
 
-**As this repository stands today, the CuPy path is ~1.3× faster** (9.62 vs
-12.72 ms per CG iteration). That gap is **not** a library property: it is the
-metric folding, the LᵀL fusion and the in-kernel weights from Phase 6, which
-were applied to `kernels_cupy.py` and not to `kernels_torch.py`. The same
-savings are available on the torch path and would be expected to close it.
-Quoting 1.3× as "CuPy is faster" would be quoting my afternoon, not the
-libraries.
+**But `torch.compile` settles it, and not in CuPy's favour.**
+`scratch/torch_compile_experiment.py` wraps the inner `_apply_L`/`_apply_LT`
+in `torch.compile` — no other change to `kernels_torch.py`, a module that
+deliberately contains no fusion:
 
-So: **pick on ergonomics, not speed.**
+| | matvec | CG iteration |
+|---|---|---|
+| torch eager | 9.60 | 12.85 |
+| **torch compiled** | **6.07** | **9.42** |
+| CuPy, hand-written Phase 6 | 6.40 | 9.62 |
+
+**Inductor found everything Phase 6 found, and about 5% more** — in **20 s of
+compile time**, against roughly a day of hand-written `ElementwiseKernel`
+work. Correct to 2.26e-16 against eager. Complex128, which was the expected
+blocker, was not a problem at all.
+
+That inverts the prediction recorded here before the experiment ran (this
+document said compile failure was the likely outcome) and it makes most of
+Phase 6 redundant *on the torch path*. The honest conclusion:
+
+**Use torch with `torch.compile` for production.** 9.42 vs 9.62 ms is a small
+margin, but the effort ratio is not small, and it keeps improving with the
+compiler rather than with our maintenance. CuPy's advantage —
+`ElementwiseKernel` making hand-fusion easy — turns out to be an advantage at
+solving a problem torch does not have.
+
+Caveats worth keeping: compile time is per-process, so a chained-session run
+pays it once per session (negligible against 65 h); a shape change triggers
+recompilation, which is fine for fixed-size runs; and a compiler regression
+across versions is a real risk that a hand-written kernel does not carry.
+
+CuPy remains worth keeping as the **reference and parity backend** — it runs
+NumPy code unchanged via `__array_function__`, which is exactly what made the
+2.613e-16 parity check cheap to build.
+
+So: **pick torch for speed, and keep CuPy for parity.** The earlier advice in
+this document to "pick on ergonomics, not speed" was written before this
+experiment and is superseded.
 
 | | lever it gives you |
 |---|---|
@@ -606,11 +635,13 @@ predictions built on a matvec benchmark that was, the whole time, correct.
      version-dependent. (A 1.91× did appear in a tiny smoke case, which was a
      dispatch artifact — a good reminder that a micro-benchmark at the wrong
      size will confidently tell you the wrong thing.)
-4. **`torch.compile` on `kernels_torch.py`** — the Phase 6 wins (metric
-   folding, LᵀL fusion, in-kernel weights) were worth 12.04 → 9.62 ms on the
-   CuPy path and have no torch equivalent yet. Whether the compiler finds them
-   automatically is the open question that would settle the backend comparison
-   properly.
+4. ~~`torch.compile` on `kernels_torch.py`~~ — **done, and it wins**: 12.85 →
+   **9.42 ms** per iteration, past the hand-written CuPy path's 9.62, for 20 s
+   of compile time and no code change. See the verdict above. The follow-ups
+   are `mode="max-autotune"` (untried), and wiring `--backend torch` into
+   `scratch/tgv_gpu_run.py`, whose device handling currently understands only
+   numpy and cupy — that is the gap between this result and actually running
+   production on it.
 5. The split-real format. Dropping it and carrying complex through the whole
    operator would remove the remaining `to_complex`/`to_real` traffic, worth
    perhaps 1.15× — and would be the first change to genuinely threaten the
