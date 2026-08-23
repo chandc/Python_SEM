@@ -195,6 +195,20 @@ def main():
     xp = np
     if a.backend in ('cupy',):
         import cupy as cp; xp = cp
+        d = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
+        name = d['name'].decode() if isinstance(d['name'], bytes) else d['name']
+        print(f'GPU    {name}  (cc {d["major"]}.{d["minor"]}, '
+              f'{d["totalGlobalMem"]/2**30:.0f} GiB)')
+        # This code is FP64 and bandwidth-bound, so the card matters enormously
+        # and Colab does not always give you the one you asked for.  A100/H100
+        # run FP64 at 1/2 the FP32 rate; T4, L4 and the consumer parts run it
+        # at 1/32 to 1/64, which alone is a 10-30x difference in step time.
+        if not any(t in name for t in ('A100', 'H100', 'H200', 'V100',
+                                       'GB10', 'GH200', 'B200')):
+            print(f'       *** WARNING: {name} has no fast FP64 path. ***\n'
+                  f'       Timings here are NOT representative and a production\n'
+                  f'       run will take many times longer.  Runtime > Change\n'
+                  f'       runtime type, and pick an A100.')
     s = setup(cfg, xp)
 
     U0 = ic_tgv(s)
