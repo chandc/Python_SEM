@@ -691,7 +691,41 @@ problem and blind to the part that is.**
 
 **If revisited, the evidence points the other way**: a 14×14 **nodal field
 block** — exact about the coupling, crude about space — is the opposite trade
-from FDM, and is the experiment the data argues for.
+from FDM. Note that `3D_STATUS.md` §7K already records block-Jacobi as
+measured with *null effect*, and §7L already rejects fastdiag for the
+inter-field couplings — this session rediscovered that result rather than
+finding it. **Read §7K/§7L before touching preconditioning here.**
+
+### PMG re-audited with skeptical eyes — the implementation is sound
+
+Prompted by "should we consider 3-level PMG?" — which the code already
+supports (`orders=(8, 4, 2)`). Five things were checked and all pass:
+
+| checked | result |
+|---|---|
+| `np.linalg.pinv` truncating the coarse operator | **No** — κ 5e6–3.4e8, full rank every mode |
+| Chebyshev spectral bound λ_max | **Adequate** — converged 3.247 vs 20-iteration 2.984, ratio 1.088 inside the 1.3 safety factor |
+| Chebyshev4 recurrence | matches Lottes' 4th-kind form |
+| V-cycle structure | correct; restriction is the adjoint, multiplicity-weighted |
+| `DirectCoarse` | genuinely exact, built in the global continuous basis |
+
+**So PMG's pinned 7.4× is not a bug.** The reason is structural, and §7K.2 had
+it: **the slow modes are ROUGH.** Multigrid's premise is that slow modes are
+smooth and therefore coarse-representable. When they are rough, the coarse grid
+cannot touch them and the smoother is already doing all it can — its bound is
+verified adequate above. **Adding a third level makes cheaper the end that was
+never the bottleneck**, which is a stronger argument against it than the
+wall-clock one.
+
+It also explains why plain Jacobi + CG is hard to beat here: **CG's own
+polynomial adapts to the actual spectrum**, which is the right response to
+rough slow modes, and it costs one matvec.
+
+Three non-defect limitations, worth knowing before anyone invests:
+`DirectCoarse` setup is O(dof) gather-scatter calls (fine at 700 dofs/mode,
+unusable at production scale); there is **no GPU path** — `pinv`, the basis
+construction and the setup loops are host-only; and intermediate levels use
+rediscretised operators while the coarsest uses Galerkin.
 
 ## Running long jobs: `scratch/tgv_gpu_run.py`
 
