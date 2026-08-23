@@ -175,6 +175,82 @@ and a different device. Two ports that share no device code now agree with the
 reference; that is the evidence L1 asks for, and neither port alone provides
 it.
 
+## Phase 4: the dispatch problem, and why CUDA graphs are not the answer here
+
+### The symptom: a benchmark that does not scale
+
+On a Colab A100 (FP64 17.16 TFLOP/s, 1356 GB/s — a full card, not a MIG
+slice), `normal_op` measured **11.45 ms at every size from 0.53 M to 6.17 M
+dof**. A 12× range in work with no change in wall clock is not a performance
+result; it is a **dispatch-bound** loop. The host cannot issue the ~200
+Python-level array operations behind one matvec faster than the GPU retires
+them, so the A100 idles.
+
+Quantified: at 6.17 M dof the operator moves ≈2.5 GB (inferred from the GB10's
+22.39 ms at its measured 112 GB/s), which at 1356 GB/s is **~1.85 ms of real
+work** — so **~84% of the wall clock was the host talking.** No faster GPU
+fixes that.
+
+### CUDA graphs: implemented, and blocked by cuBLAS
+
+Capture is the textbook fix — record one CG iteration, replay it, and
+per-launch host cost largely vanishes. It is implemented in
+`lssem3d/cupy_graph.py`, including the two rules that make capture work
+(fixed buffers, warm the memory pool first) and a batched convergence test,
+since capture forbids the host synchronisation that a per-iteration residual
+check requires.
+
+It does not run:
+
+```
+NotImplementedError: calling cuBLAS API during stream capture is
+currently unsupported
+```
+
+The einsum contractions route through `gemmStridedBatchedEx`, so the matvec —
+the bulk of the launches — cannot be captured at all. **PyTorch can capture
+cuBLAS**, so graphs remain available on the torch port; that is a concrete
+advantage for it on dispatch-bound hosts, and worth knowing when choosing
+which backend runs production on Colab. The module is kept: it is correct and
+becomes useful the day CuPy lifts the restriction.
+
+### So the dispatch cost was attacked directly — 3.25×
+
+Profiled at a size where GPU work is negligible, so the wall clock *is* the
+host cost (`scratch/cupy_dispatch_profile.py`):
+
+| | before | after |
+|---|---|---|
+| `normal_op` total | 3.536 ms | **1.088 ms** |
+| ├ `apply_L` | 1.162 | 0.484 |
+| ├ `apply_LT` | 1.050 | 0.503 |
+| └ gather-scatter | **1.726** | **0.085** |
+
+Two causes, and the first was mine:
+
+1. **A host synchronisation per matvec.** `gs_cupy` computed the global-dof
+   count as `int(idx.max())` on every call — a device reduction *and* a
+   device→host sync, once per matvec, stalling the pipeline. It is a property
+   of the mesh, so it is now cached with the index. **1.726 → 0.085 ms**, and
+   this fix has no trade-off on any device.
+2. **Fourteen einsum calls where two suffice.** `_L0` took derivatives
+   field-by-field, but `ddx`/`ddy` already carry arbitrary trailing axes and
+   the field axis is one of them; `_LT` did the same for eight rows.
+   Identical arithmetic, **24 fewer cuBLAS dispatches** per matvec.
+
+Parity is unchanged at **2.613e−16**, and gates 1 and 3 still pass
+(σ = 9.3141300 / 9.3138373 at order 2.00; balance 6.65e−06).
+
+### One honest caveat on the second fix
+
+Batching trades dispatches for **strided field views**. That is a clear win on
+a fast GPU behind a slow host (Colab) and may be a *loss* on a bandwidth-bound
+device like the GB10, which is work-bound at production size and gains little
+from fewer launches. The Spark A/B that would settle it is **contaminated** —
+the GPU was at 95% running the parallel session's `minchan` job when it was
+taken — so it is deliberately not quoted here. If a clean re-measure shows a
+regression, the batching should become conditional rather than unconditional.
+
 ## Next
 
 1. **Deterministic mode** for CuPy, mirroring `DEV.deterministic()` on the
