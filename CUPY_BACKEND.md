@@ -44,10 +44,16 @@ normal_op parity  max rel err = 2.613e-16   (PASS)
 matvec  numpy(host)  32.0 ms   cupy(GB10)  2.3 ms   speedup 13.97x   (0.53 M dof)
 ```
 
-Suite: 166 passed, 36 skipped, 1 failed — and that failure
-(`test_deriv.py::test_trailing_axes_are_independent`) **reproduces on the
-unpatched baseline in the same container**, so it is an ARM/NumPy-version
-environment difference, not a regression from this work.
+Suite: **167 passed, 36 skipped**.
+
+`test_deriv.py::test_trailing_axes_are_independent` used to fail here, and was
+recorded as an ARM/NumPy environment difference. It was actually a **wrong
+test**: it asserted an *absolute* 1e-14 on derivative values of magnitude
+~1e2, i.e. a demand for 1e-16 relative — bit-exact agreement between a batched
+contraction and a per-slice one. That held only because the Mac's BLAS
+happened to associate the batched case identically; aarch64 associates it
+differently and missed by one ulp (1.4e-14 absolute, **1.3e-16 relative**).
+The property under test is real; the threshold was not, and is now relative.
 
 ## THE FP64 WARNING — read before quoting any speedup
 
@@ -414,9 +420,30 @@ one genuine library difference is the raw reduction, where CuPy is **13.7×**
 worse — and it disappears entirely once written as a GEMM: `_dot` is 0.69 vs
 0.68 ms. CuPy's weakness here is real but exactly one line of code wide.
 
-**Backend choice is therefore not a performance decision.** Pick on
-ergonomics: torch for ecosystem and `torch.compile`; CuPy for drop-in NumPy
-semantics and easy custom kernels.
+#### Net-net: which is faster?
+
+**As libraries, neither.** Every primitive above matches within noise. The one
+real difference — CuPy's raw reduction at 13.7× torch's — is removable in a
+single line, after which `_dot` is 0.69 vs 0.68 ms.
+
+**As this repository stands today, the CuPy path is ~1.3× faster** (9.62 vs
+12.72 ms per CG iteration). That gap is **not** a library property: it is the
+metric folding, the LᵀL fusion and the in-kernel weights from Phase 6, which
+were applied to `kernels_cupy.py` and not to `kernels_torch.py`. The same
+savings are available on the torch path and would be expected to close it.
+Quoting 1.3× as "CuPy is faster" would be quoting my afternoon, not the
+libraries.
+
+So: **pick on ergonomics, not speed.**
+
+| | lever it gives you |
+|---|---|
+| CuPy | `ElementwiseKernel` / `RawKernel` — writing a custom fused kernel is a few lines, which is what Phases 4b and 6 used. Drop-in NumPy semantics via `__array_function__`, so most code runs unchanged. |
+| torch | `torch.compile`, which could plausibly perform the Phase 6 fusions automatically — **untested here**, and the obvious next experiment for that port. Plus the whole ecosystem. |
+
+One caveat if you choose CuPy: **its reductions have a real weak spot.** A
+290,304:1 reduction to 65 outputs cost 17× its bandwidth bound, and nothing
+about the code looked wrong. Time your reductions rather than assuming.
 
 Two further results worth keeping:
 
@@ -563,9 +590,28 @@ predictions built on a matvec benchmark that was, the whole time, correct.
 1. **Deterministic mode** for CuPy, mirroring `DEV.deterministic()` on the
    torch path — a sort-based or sparse-matmul gather-scatter would restore
    bitwise reproducibility for parity work, at a cost only paid in testing.
-2. Benchmark on an **A100** (Colab), where FP64 is 46× the GB10's — that is
-   where a production number can honestly be quoted. The 1.6× whole-solve
-   figure above is GB10 FP64 against Grace-core NumPy and is *not* a
-   production number.
-3. Merge coordination with the torch/CUDA port: the shared-file surface is the
-   four small hunks listed above, all additive.
+2. ~~Benchmark on an A100~~ — **done**; see the phases above. The production
+   figure is a **9.62 ms CG iteration at 18.87 M dof**, and the Re = 1600 128³
+   case at **~65 h**. The 1.6× whole-solve figure earlier in this document is
+   GB10 FP64 against Grace-core NumPy and is *not* a production number.
+3. Merge coordination with the torch/CUDA port. Two findings belong to that
+   session rather than this one:
+   - **There is nothing to fix in `_dot` on the torch path.** The GEMM form
+     buys it 0.79 vs 0.78 ms — nothing. Torch's reductions already handle the
+     shape.
+   - **`kernels_torch.py`'s 4-D contraction merge does not reproduce.** It
+     documents ~1.9× at 88³ and warns against reverting without
+     re-benchmarking; at 18.87 M dof on torch 2.11 the 4-D and 5-D forms are
+     **1.01×** — identical — on *both* backends. That note may be stale or
+     version-dependent. (A 1.91× did appear in a tiny smoke case, which was a
+     dispatch artifact — a good reminder that a micro-benchmark at the wrong
+     size will confidently tell you the wrong thing.)
+4. **`torch.compile` on `kernels_torch.py`** — the Phase 6 wins (metric
+   folding, LᵀL fusion, in-kernel weights) were worth 12.04 → 9.62 ms on the
+   CuPy path and have no torch equivalent yet. Whether the compiler finds them
+   automatically is the open question that would settle the backend comparison
+   properly.
+5. The split-real format. Dropping it and carrying complex through the whole
+   operator would remove the remaining `to_complex`/`to_real` traffic, worth
+   perhaps 1.15× — and would be the first change to genuinely threaten the
+   2.613e-16 parity that has held throughout.
