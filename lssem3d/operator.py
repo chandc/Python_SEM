@@ -41,6 +41,8 @@ rather than Hermitian and the existing verified real-valued CG, Jacobi and
 adjoint machinery apply unchanged -- 3D_DEVELOPMENT_PLAN.md sec 1.2.  The
 split/join pair is trivial and is tested as a round trip.
 """
+import os
+
 import numpy as np
 from . import backend
 from .deriv import ddx as dUdx, ddy as dUdy, ddxT as DxT, ddyT as DyT
@@ -212,7 +214,27 @@ def apply_L_complex(U, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
 ROW7_WEIGHT = 1.0e-4
 
 
-def momentum_row_weights(c, w7=ROW7_WEIGHT):
+# Multipliers on the momentum and vorticity-definition rows, on top of the
+# legacy 1/c^2 scaling.  BOTH DEFAULT TO 1.0 = the current, validated
+# behaviour; the environment variables exist so the validation ladder can be
+# run against a candidate without editing code.
+#
+# Screening at 16x16 N=8 Nz=128 (scratch/precond_headroom.py) put stage-0 CG
+# iterations at 920 for the default and 290 for mom=10, vort=0.1 -- 3.2x, at
+# zero cost per iteration.  A plausible mechanism: 1/c^2 sets the momentum
+# MASS coefficient to 1, but the same division also suppresses the pressure
+# gradient and viscous terms in those rows, which carry no factor of c, so it
+# over-corrects; a multiplier back up partly compensates.
+#
+# The reason to believe it is conditioning rather than the constraints being
+# quietly discarded is that the trend REVERSES: mom x100 (370) is worse than
+# x10 (300), and vort x0.01 (740) worse than x0.1 (690).  Discarding
+# constraints would improve without bound.
+MOM_WEIGHT = float(os.environ.get('LSSEM_MOM_WEIGHT', 1.0))
+VORT_WEIGHT = float(os.environ.get('LSSEM_VORT_WEIGHT', 1.0))
+
+
+def momentum_row_weights(c, w7=ROW7_WEIGHT, w_mom=None, w_vort=None):
     """lssem2d's legacy scaling: momentum rows divided by c so their mass
     coefficient is 1, matching the constraint rows.  Squared, because the
     functional squares the residual.
@@ -221,7 +243,8 @@ def momentum_row_weights(c, w7=ROW7_WEIGHT):
     w7=1.0 to reproduce the original, un-weighted behaviour.
     """
     rw = np.ones(NROW)
-    rw[4:7] = 1.0/(c*c)
+    rw[1:4] = VORT_WEIGHT if w_vort is None else w_vort
+    rw[4:7] = (MOM_WEIGHT if w_mom is None else w_mom)/(c*c)
     rw[7] = w7
     return rw
 
