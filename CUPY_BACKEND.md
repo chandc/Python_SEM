@@ -241,7 +241,35 @@ Two causes, and the first was mine:
 Parity is unchanged at **2.613e−16**, and gates 1 and 3 still pass
 (σ = 9.3141300 / 9.3138373 at order 2.00; balance 6.65e−06).
 
-### One honest caveat on the second fix
+### Phase 4b: fusing the row assembly — 6.2× in total
+
+Cell 7b on the A100 settled where the rest sat: `normal_op` cost **3.825 ms at
+0.004 M dof and 3.789 ms at 6.17 M** — a *1500×* range in work, identical wall
+clock, so the GPU contribution was entirely invisible and 96% of the host cost
+was in `apply_L`/`apply_LT`. Those are 16 row formulas built from ~80 separate
+elementwise calls, at ~32 µs each on that vCPU.
+
+They are now **two `ElementwiseKernel` launches** — one computing all eight
+forward rows, one all seven adjoint fields. Identical algebra, issued once
+instead of forty times:
+
+| dispatch floor (Spark, tiny size) | |
+|---|---|
+| original | 3.536 ms |
+| + gather-scatter sync removed | 1.088 ms |
+| **+ fused row assembly** | **0.570 ms** |
+| | **6.2× total** |
+
+Per part: `apply_L` 1.162 → 0.244, `apply_LT` 1.050 → 0.220, gather-scatter
+1.726 → 0.085 ms. Parity is unchanged at **2.613e−16**, and gates 1 and 3
+still pass (σ = 9.3141300 / 9.3138373 at order 2.00, balance 6.65e−06).
+
+Scaled to the A100 host (~3.5× slower at issuing than the Spark's Grace
+cores), this should put `normal_op` near **2 ms against ~1.85 ms of real GPU
+work** — i.e. the loop finally becomes GPU-bound, which is where host
+optimisation stops paying and hardware starts mattering again.
+
+### One honest caveat on the batching fix
 
 Batching trades dispatches for **strided field views**. That is a clear win on
 a fast GPU behind a slow host (Colab) and may be a *loss* on a bandwidth-bound
