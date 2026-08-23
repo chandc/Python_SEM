@@ -117,8 +117,24 @@ def build(mesh, N, kz, nu, c, rw, mask, kap=0.0, floor=1e-300, like=None):
     # An absolute floor cannot do this job: blocks span ~1e-6 (pressure, which
     # carries 1/c^2) to ~10 (momentum), so one threshold is either useless or
     # destroys the pressure block.  Clamp each block against its own maximum.
-    dmax = d.max(axis=(1, 2), keepdims=True)
-    d = np.maximum(d, np.maximum(dmax, floor)*1e-12)
+    # Clamp each block to its own SMALLEST POSITIVE entry.  Clamping instead
+    # to a tiny fraction of the block MAXIMUM keeps the preconditioner SPD but
+    # is badly wrong: it sets the null mode to 1/(dmax*1e-12), so the
+    # preconditioner AMPLIFIES the constant-pressure mode by ~1e12.  Measured
+    # against the exact block inverse, the pressure block at kz = 0 came out
+    # 1.7e9 too large while every other block matched to 1e-12, and CG went to
+    # 40000 iterations against Jacobi's 80 -- worse than no preconditioner.
+    #
+    # Clamping to the smallest positive entry gives the null mode the mildest
+    # scale actually present in the block, which is the least it can be given
+    # without breaking positive definiteness.  This is the same idea as
+    # regularising a Stokes pressure block with a pressure mass matrix: the
+    # kz = 0 pressure block has no mass term at all (s = 0), which is precisely
+    # why it is singular.
+    pos = np.where(d > 0, d, np.inf)
+    dfloor = pos.min(axis=(1, 2), keepdims=True)
+    dfloor = np.where(np.isfinite(dfloor), dfloor, floor)
+    d = np.maximum(d, dfloor)
     dinv = 1.0/d
 
     Sd = DEV.to_device(S, like) if like is not None else S
