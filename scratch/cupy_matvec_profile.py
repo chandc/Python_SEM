@@ -69,5 +69,31 @@ print(f'\nPCG per-iteration extras (on top of one matvec)')
 p_ = cp.empty_like(U)
 _, v1 = t('axpy  x + a*p', lambda: U + 1.5*p_, 3)
 _, v2 = t('dot   (reduction)', lambda: float(cp.sum(U*p_)), 2)
-print(f'\n  matvec {mv:.1f} + ~4 axpy {4*v1:.1f} + 3 dot {3*v2:.1f} '
-      f'= {mv+4*v1+3*v2:.1f} ms   (measured iteration: 30.6 ms)')
+# The pieces above are PROXIES.  Time what the loop actually calls.
+print(f'\nwhat PCG actually calls')
+mw = S3.multiplicity_weight(m, tuple(U.shape))
+mw = cp.asarray(mw) if not isinstance(mw, cp.ndarray) else mw
+al = cp.zeros((1, 1, 1, 1, nk)) + 1.5
+_, d1 = t('_dot(a,b,mw)  REAL', lambda: S3._dot(U, p_, mw), 5)
+_, d2 = t('r - alpha*Ap  (alpha per-mode)', lambda: U - al*p_, 5)
+_, d3 = t('z = r*M_inv', lambda: U*mask, 3)
+
+# And the only number that cannot lie: difference two solves whose iteration
+# counts differ.  Everything per-iteration is in the difference; everything
+# per-solve cancels.  Four predictions have been wrong, so measure the whole.
+print(f'\nTRUE per-iteration cost, by differencing two solves')
+b_ = S3.gs(m, U)*mask
+def solve(n):
+    cp.cuda.Stream.null.synchronize(); t0 = time.perf_counter()
+    S3.pcg(b_, D, fx, fy, kz, nu, c, mesh=m, mask=mask, M_inv=None,
+           tol=1e-30, max_iter=n, wq=wq, rw=rw, check_every=10)
+    cp.cuda.Stream.null.synchronize(); return time.perf_counter()-t0
+solve(5)
+t20, t60 = solve(20), solve(60)
+per = (t60-t20)/40*1e3
+print(f'  20 iters {t20*1e3:8.1f} ms | 60 iters {t60*1e3:8.1f} ms')
+print(f'  -> {per:.2f} ms per iteration (production run measures 30.6)')
+print(f'  -> accounted for by components: matvec {mv:.1f} + 3 dot {3*d1:.1f} '
+      f'+ 3 vec {3*d2:.1f} = {mv+3*d1+3*d2:.1f} ms')
+print(f'  -> UNACCOUNTED: {per-(mv+3*d1+3*d2):.2f} ms '
+      f'({100*(per-(mv+3*d1+3*d2))/max(per,1e-9):.0f}%)')
