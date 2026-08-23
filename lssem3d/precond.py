@@ -157,12 +157,23 @@ def coarsen_mesh(m, pc):
 class _Level:
     """One polynomial order: mesh, operator, diagonal, transfer to the next."""
 
-    def __init__(self, mesh, nk, nz, nu, c, kz, kap, rw, pin_p):
+    def __init__(self, mesh, nk, nz, nu, c, kz, kap, rw, pin_p, mask=None):
         self.m, self.nk = mesh, nk
         n = mesh.N + 1
         self.shape = (mesh.nelem, n, n, OP.NVAR_R, nk)
         self.D = diff_matrix(mesh.N)
-        self.mask = BC.build_mask(mesh, nk, pin_p=pin_p, nz=nz)
+        # AN EXPLICIT MASK OVERRIDES pin_p, and the finest level MUST use the
+        # caller's own mask.  A preconditioner has to be defined on exactly the
+        # space the operator is: if it pins a dof the solve leaves free it
+        # returns zero there, M is singular on the space CG searches, and the
+        # V-cycle silently under-performs.  Measured on a 3x3 N=8 Nz=16 mesh,
+        # build_mask(pin_p=True) pinned 60 dofs the driver leaves free -- 32
+        # pressure real parts plus their imaginary partners, across every mode
+        # except k = 0 -- because pin_p pins pressure at EVERY mode while the
+        # physics needs it pinned only at k = 0 (for k != 0 the ik*p term in the
+        # z-momentum row already determines pressure uniquely).
+        self.mask = (np.array(mask, copy=True) if mask is not None
+                     else BC.build_mask(mesh, nk, pin_p=pin_p, nz=nz))
         self.A = lambda v: S3.normal_op(v, self.D, mesh.facx, mesh.facy, kz, nu,
                                         c, mesh, self.mask, mesh.wq, kap, rw)
         diag = S3.jacobi_diagonal_analytic(self.shape, self.D, mesh.facx,
@@ -171,6 +182,39 @@ class _Level:
         self.M_inv = S3.jacobi_inverse(diag, self.mask)
         mult = S3.gs(mesh, np.ones(self.shape))
         self.mw = 1.0/np.where(mult < 1e-10, 1.0, mult)
+
+
+def _factor_spd(A):
+    """Factorise an SPD matrix and return a solve callable.
+
+    Cholesky, not `np.linalg.pinv`.  The coarse operator is a Galerkin
+    projection of an SPD operator and is explicitly symmetrised, so a
+    pseudo-inverse is the wrong tool three ways: it costs a full SVD (roughly
+    10-30x a Cholesky), it stores a DENSE inverse where a triangular factor
+    needs half the memory, and its rcond silently truncates -- which would
+    discard exactly the near-null directions a coarse solve exists to resolve.
+    (Measured on a 3x3 p=2 mesh it truncated nothing, kappa being 5e6-3.4e8,
+    but that is luck rather than design.)
+
+    Falls back to a pseudo-inverse if the matrix is not positive definite,
+    which means the level is under-pinned -- worth knowing rather than hiding.
+    """
+    try:
+        from scipy.linalg import cho_factor, cho_solve
+        cf = cho_factor(A, lower=True, check_finite=False)
+        return lambda b: cho_solve(cf, b, check_finite=False)
+    except Exception:
+        try:
+            Lc = np.linalg.cholesky(A)
+            return lambda b: np.linalg.solve(
+                Lc.T, np.linalg.solve(Lc, b))
+        except np.linalg.LinAlgError:
+            import warnings
+            warnings.warn('coarse level is not positive definite -- falling '
+                          'back to a pseudo-inverse; the level is probably '
+                          'under-pinned', RuntimeWarning)
+            Ai = np.linalg.pinv(A)
+            return lambda b: Ai @ b
 
 
 class DirectCoarse:
@@ -198,7 +242,7 @@ class DirectCoarse:
         self.lev = level
         shape, m, mask = level.shape, level.m, level.mask
         nk = shape[-1]
-        self.B, self.lu = [], []
+        self.B, self.lu = [], []      # `lu` holds SOLVE CALLABLES, see _factor_spd
         for k in range(nk):
             cols, seen = [], set()
             for e in range(shape[0]):
@@ -225,18 +269,18 @@ class DirectCoarse:
                 Amat[:, a] = B.T @ (Av*mw)
             Amat = 0.5*(Amat + Amat.T)          # symmetrise against round-off
             self.B.append(B)
-            self.lu.append(np.linalg.pinv(Amat))
+            self.lu.append(_factor_spd(Amat))
         self.mw = level.mw.ravel()
 
     def __call__(self, r):
         shape = self.lev.shape
         z = np.zeros(shape)
         rf = r.ravel()
-        for k, (B, Ai) in enumerate(zip(self.B, self.lu)):
+        for k, (B, fac) in enumerate(zip(self.B, self.lu)):
             if B is None:
                 continue
             g = B.T @ (rf*self.mw)
-            z += (B @ (Ai @ g)).reshape(shape)
+            z += (B @ fac(g)).reshape(shape)
         return z*self.lev.mask
 
 
@@ -253,14 +297,26 @@ class PMG:
 
     def __init__(self, mesh, nk, nz, nu, c, kz, kap=0.0, rw=None,
                  orders=(8, 4, 2), deg=6, coarse_deg=10, pin_p=True,
-                 optimised=True, direct_coarse=True):
+                 optimised=True, direct_coarse=True, mask=None):
         assert len(orders) >= 2 and list(orders) == sorted(orders, reverse=True), \
             f'orders must be descending, got {orders}'
         assert orders[0] == mesh.N, f'finest order {orders[0]} != mesh.N {mesh.N}'
         self.levels, self.P, self.R = [], [], []
         meshes = [mesh] + [coarsen_mesh(mesh, p) for p in orders[1:]]
-        for mm in meshes:
-            self.levels.append(_Level(mm, nk, nz, nu, c, kz, kap, rw, pin_p))
+        for li, mm in enumerate(meshes):
+            if li == 0 and mask is not None:
+                lm = mask                     # the caller's own, exactly
+            elif mask is not None:
+                # Coarse levels: reproduce the caller's convention rather than
+                # pin_p's.  Pressure is pinned at k = 0 only; at k != 0 it is
+                # already determined, and pinning it there removes a dof the
+                # fine operator keeps.
+                lm = BC.build_mask(mm, nk, pin_p=False, nz=nz)
+                BC.pin_dof(mm, lm, OP.P_, 0)
+            else:
+                lm = None
+            self.levels.append(_Level(mm, nk, nz, nu, c, kz, kap, rw, pin_p,
+                                      mask=lm))
         for lf, lc in zip(orders[:-1], orders[1:]):
             P = p_interp(lc, lf)          # coarse -> fine, nodal interpolation
             self.P.append(P)
