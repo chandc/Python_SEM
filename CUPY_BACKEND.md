@@ -580,6 +580,75 @@ the GPU was at 95% running the parallel session's `minchan` job when it was
 taken — so it is deliberately not quoted here. If a clean re-measure shows a
 regression, the batching should become conditional rather than unconditional.
 
+## Preconditioning: what is and is not worth building
+
+Three avenues were measured rather than argued about. Two are closed; the
+third is open, but only above a certain polynomial order.
+
+**A better preconditioner at N = 8: no.** At 16×16 N=8 Nz=128 the current
+scalar-diagonal Jacobi takes 920 stage-0 iterations against ≥40000
+unpreconditioned — worth at least **43.5×**. It is already doing the heavy
+lifting at this order.
+
+**Row weights: no — the gain is bought with continuity.** `mom ×10, vort ×0.1`
+takes CG from 920 to 290 iterations, 3.2×, and passes the entire validation
+ladder with *bit-identical* σ and balance. It is still rejected: a direct
+divergence check (the L2 norm of row 0 of L0, which **is** div u) shows
+2.572e-06 → **1.473e-04, 57× worse**. Energy, enstrophy and the parameter-free
+balance are all blind to it. `ROW7_WEIGHT = 1e-4` is confirmed optimal and is
+worth **21×** at production scale (w7 = 1.0 costs 19430 iterations against 920).
+
+**Above N ≈ 12: yes, and this is the one that matters.** A single-N headroom
+measurement cannot see it — what counts is the *slope*. Point-Jacobi removes
+metric and element-size variation but does not touch the N-dependence of the
+spectral-element condition number; fast diagonalisation, element block-Jacobi
+and overlapping Schwarz exist precisely to give near-N-independent convergence.
+
+Sweeping N at **fixed dof** (mesh coarsened as N rises, total held within ±13%
+of ~1.5 M) isolates conditioning from size:
+
+| N | 4 | 6 | 8 | 10 | 12 | 14 | 16 |
+|---|---|---|---|---|---|---|---|
+| Jacobi its | 320 | 360 | 510 | 650 | 840 | 950 | **1260** |
+| Jacobi benefit vs none | 86.8× | 70.2× | 58.5× | 53.4× | 71.4× | 63.2× | **47.6×** |
+
+**Iterations scale as N^1.01 — 3.9× over N = 4 → 16, at constant dof.** (The
+fixed-*mesh* sweep gives N^1.80, but dof grew 11.6× over the same range, so
+roughly half that exponent was size.) The second row is the corroboration:
+Jacobi's *relative* benefit erodes as N rises, which is what a preconditioner
+that ignores N-dependence does.
+
+Assuming an ideal N-independent preconditioner holds iterations at the N = 4
+level and costs ~1 extra matvec per application:
+
+| N | ideal gain | net after cost |
+|---|---|---|
+| 8 | 1.6× | **0.80× — a loss** |
+| 10 | 2.0× | 1.02× |
+| 12 | 2.6× | 1.31× |
+| 16 | 3.9× | **1.97×** |
+
+**Crossover at N ≈ 10–12** — independently matching the project's existing
+observation that PMG excels above N ≈ 12. Both assumptions are optimistic, so
+the true crossover is likely N ≈ 12–14.
+
+So **FDM is not a speedup for current runs; it is what makes high-order runs
+affordable.** Since spectral accuracy is the entire reason to use LSSEM, that
+is an enabler rather than an optimisation — and it is a better argument for
+building it than any factor measurable at N = 8.
+
+On the GPU, FDM is also the right *shape*: batched small dense multiplies over
+elements and Fourier modes, no coarse level, and therefore none of the
+dispatch-floor penalty that costs PMG its advantage here (the 2D study measured
+p-MG cutting iterations 9.9× for ~14 matvecs, a net 1.25×, and coarse levels do
+not get proportionally cheaper on a machine with a per-matvec host floor).
+
+The open question is not whether the conditioning justifies it but whether FDM
+*applies*: classical fast diagonalisation needs the operator to be a sum of
+tensor products, and the VVP least-squares operator couples all seven fields at
+each node. A field-block-diagonal FDM, leaving the coupling to CG, is the
+realistic form — and how much of the ideal it recovers is unmeasured.
+
 ## Running long jobs: `scratch/tgv_gpu_run.py`
 
 Colab has no batch queue and every VM eventually dies, so a long run is a
