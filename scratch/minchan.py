@@ -110,12 +110,19 @@ def mean_profile(Y):
     return reichardt(np.maximum(d, 1e-12)*RE_TAU)
 
 
-def initial_state(s, amp_roll=0.7, amp_noise=0.3, seed=0):
+def initial_state(s, amp_roll=1.0, amp_noise=0.3, seed=0):
     """Turbulent mean profile + a 3-D finite-amplitude trip.
 
-    Amplitudes are in wall units (u_tau = 1).  Perturbations in a turbulent
-    channel are O(u_tau), so O(1) here is the physical scale, not a large
-    disturbance -- but it is far above anything that would decay linearly.
+    `amp_roll` IS THE PEAK |v'| IN WALL UNITS, not a streamfunction amplitude.
+    That distinction cost a CFL violation: the streamfunction gives
+    max|v'| = A*k_z with k_z = 2*pi/L_z = 5.88, so a "0.7" amplitude produced
+    v' = 4.1 u_tau -- about six times what developed channel turbulence carries
+    (v'_rms ~ 1 u_tau).  Measured on the first real state: |v| = 5.86 at y+ =
+    160, and since h_y is 4.7x finer than h_x the v/h_y term DOMINATES the CFL,
+    pushing it to 1.79 against the RKW3 limit of 1.732.
+
+    Normalising by k_z makes the knob mean what it says and puts the trip at the
+    physical scale, which is the right fix rather than shrinking dt.
     """
     m, N, nz, nk = s['m'], s['N'], s['nz'], s['nk']
     X, Y = s['X'][..., None], s['Y'][..., None]
@@ -128,9 +135,10 @@ def initial_state(s, amp_roll=0.7, amp_noise=0.3, seed=0):
     # Streamwise rolls -> streaks.  Divergence-free by construction from
     # psi = A sin^2(pi y/2) cos(kz z), so this adds no continuity residual.
     kzr = 2.0*np.pi/LZ
+    A = amp_roll/kzr                       # so that peak |v'| == amp_roll
     env = np.sin(np.pi*Y/(2.0*DELTA))**2
-    P[..., OP.V_, :] += -amp_roll*kzr*env*np.sin(kzr*Z)
-    P[..., OP.W_, :] += -amp_roll*(np.pi/(2.0*DELTA))*np.sin(np.pi*Y/DELTA)*np.cos(kzr*Z)
+    P[..., OP.V_, :] += -A*kzr*env*np.sin(kzr*Z)
+    P[..., OP.W_, :] += -A*(np.pi/(2.0*DELTA))*np.sin(np.pi*Y/DELTA)*np.cos(kzr*Z)
 
     # x-dependent noise.  WITHOUT THIS THE TRIP CANNOT WORK: the rolls above are
     # streamwise-independent, and by Squire's theorem such a disturbance decays.
@@ -315,15 +323,107 @@ def price(N=8, ex=6, ey=18, nz=32, dt=None):
     return s, U1, dt, t2
 
 
+def _atomic_savez(path, **kw):
+    """Write to a temp name, then rename.  Rename is atomic, so a crash mid-write
+    cannot corrupt the last good checkpoint -- and an rsync running against the
+    directory never sees a half-written file."""
+    tmp = path + '.tmp'
+    np.savez(tmp, **kw)
+    os.replace(tmp + '.npz' if not tmp.endswith('.npz') else tmp, path)
+
+
+def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
+        resume=None, N=8, ex=6, ey=18, nz=32):
+    """The production minimal-channel run.
+
+    OUTPUT ALL GOES TO `out`, which is a BIND MOUNT in the container -- anything
+    written elsewhere dies with `--rm` (GPU_PORT_PLAN.md sec 4).
+
+    THE RUN IS JUDGED ON u_tau.  The forcing prescribes u_tau = 1; if it decays
+    toward the laminar value the near-wall cycle has died.  That is not
+    necessarily a bug -- the minimal unit is intermittent by design (Jimenez &
+    Moin 1991) -- but it must be visible while it happens, not discovered
+    afterwards, so it is logged every step and warned on.
+    """
+    import json
+    os.makedirs(out, exist_ok=True)
+    name = backend_name or os.environ.get('LSSEM3D_BACKEND', 'numba')
+    backend.set_backend(name)
+
+    s = setup(N, ex, ey, nz)
+    dev = name in ('torch', 'cuda')
+    step0 = 0
+    if resume:
+        z = np.load(resume)
+        U, step0 = z['U'], int(z['step'])
+        Nprev = z['Nprev_re'] + 1j*z['Nprev_im']
+        print(f'resumed from {resume} at step {step0}', flush=True)
+    else:
+        U = initial_state(s)
+        Nprev = np.zeros(OP.to_complex(U).shape[:-2] + (3, s['nk']), dtype=complex)
+
+    Minv_host = _precond(s, dt)
+    if dev:
+        import torch
+        s_run, U = to_device(s, U)
+        Minv = [DEV.to_device(q, U) for q in Minv_host]
+        Nprev = torch.as_tensor(np.ascontiguousarray(Nprev), device=U.device)
+    else:
+        s_run, Minv = s, Minv_host
+
+    wu = wall_units(s, ex, ey)
+    cfg = dict(N=N, ex=ex, ey=ey, nz=nz, dt=dt, nstep=nstep, backend=name,
+               re_tau=RE_TAU, Lx=LX, Lz=LZ, fx=FX, tol=1e-6, **wu)
+    json.dump({k: float(v) if isinstance(v, (int, float, np.floating)) else v
+               for k, v in cfg.items()}, open(f'{out}/config.json', 'w'), indent=1)
+
+    log = open(f'{out}/run.log', 'a')
+    hdr = (f'# minimal channel Re_tau={RE_TAU:g}  {ex}x{ey} N={N} Nz={nz}  '
+           f'dt={dt:g}  backend={name}  Lx+={wu["Lx_plus"]:.0f} Lz+={wu["Lz_plus"]:.0f}')
+    print(hdr, flush=True); log.write(hdr + '\n'); log.flush()
+
+    hist, t0 = [], time.perf_counter()
+    for i in range(step0, nstep):
+        U, Nprev, it = advance(s_run, U, Nprev, dt, Minv)
+        if not bool(np.all(np.isfinite(U.cpu().numpy() if dev else U))):
+            log.write('BLEWUP\n'); log.close()
+            raise SystemExit('non-finite state -- aborting')
+        if (i + 1) % 10 == 0 or i == step0:
+            Uh = U.cpu().numpy() if dev else U
+            ut, ub, rw_ = u_tau(s, Uh), bulk(s, Uh), rms_w(s, Uh)
+            cf = cfl(s, Uh, dt)
+            line = (f't={(i+1)*dt:8.3f} u_tau={ut:.4f} U_b={ub:6.3f} '
+                    f"rms_w={rw_:.4f} CFL={cf:.2f} CG={it} [{time.perf_counter()-t0:.0f}s]")
+            if cf > 1.732:
+                line += '  ** CFL ABOVE THE RKW3 LIMIT **'
+            if ut < 0.5:
+                line += '  ** u_tau COLLAPSING -- possible relaminarisation **'
+            print(line, flush=True); log.write(line + '\n'); log.flush()
+            hist.append((( i+1)*dt, ut, ub, rw_, cf, it))
+        if (i + 1) % every == 0:
+            Uh = U.cpu().numpy() if dev else U
+            Nh = Nprev.cpu().numpy() if dev else Nprev
+            _atomic_savez(f'{out}/checkpoint_{i+1:07d}.npz', U=Uh, step=i+1,
+                          Nprev_re=Nh.real, Nprev_im=Nh.imag, t=(i+1)*dt)
+            _atomic_savez(f'{out}/diag.npz', hist=np.array(hist))
+    log.write(f'done, {nstep} steps, {time.perf_counter()-t0:.0f}s\n'); log.close()
+
+
 def main():
     what = sys.argv[1] if len(sys.argv) > 1 else 'check'
-    backend.set_backend(os.environ.get('LSSEM3D_BACKEND', 'numba'))
     if what == 'check':
-        check()
+        backend.set_backend(os.environ.get('LSSEM3D_BACKEND', 'numba')); check()
     elif what == 'price':
-        price()
+        backend.set_backend(os.environ.get('LSSEM3D_BACKEND', 'numba')); price()
+    elif what == 'run':
+        kw = {}
+        for a in sys.argv[2:]:
+            k, v = a.split('=')
+            kw[k] = v if k in ('out', 'resume', 'backend_name') else (
+                float(v) if '.' in v or 'e' in v.lower() else int(v))
+        run(**kw)
     else:
-        raise SystemExit('run mode not wired yet -- see GPU_PORT_PLAN.md Phase 4')
+        raise SystemExit(f'unknown mode {what!r}: check | price | run')
 
 
 if __name__ == '__main__':

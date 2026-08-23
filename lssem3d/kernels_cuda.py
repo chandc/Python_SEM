@@ -240,10 +240,23 @@ def module():
 
 
 def _c(a):
+    """Contiguous float64 tensor on the GPU, accepting NumPy too.
+
+    NumPy input goes through a host->device copy, which is the PARITY path and
+    NOT the performance path (TORCH_VERIFY V3: 21.9x penalty at 88^3).  It exists
+    so the validated physics rigs -- stokes3d, the cavity, Stage 5 -- can be run
+    against this backend unchanged, which is the only way to check the kernel
+    against a KNOWN ANSWER rather than against another implementation.
+    """
+    if not isinstance(a, torch.Tensor):
+        from .kernels_torch import device as _dev
+        a = torch.as_tensor(np.ascontiguousarray(a, dtype=np.float64),
+                            device=_dev())
     return a if a.is_contiguous() else a.contiguous()
 
 
 def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
+    was_np = not isinstance(Ur, torch.Tensor)
     U = _c(Ur)
     nk = U.shape[-1]
     dev, dt = U.device, U.dtype
@@ -251,14 +264,19 @@ def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
     wqt = _c(wq) if wq is not None else one(U.shape[0], U.shape[1], U.shape[2],
                                             dtype=dt, device=dev)
     rwt = _c(rw) if rw is not None else one(8, dtype=dt, device=dev)
-    kzt = kz if kz.numel() == nk else kz.expand(nk)
-    return module().apply_L(U, _c(D), _c(facx), _c(facy), _c(kzt).to(dt),
-                            float(nu), float(c), wqt, float(kap), rwt)
+    kzt = _c(kz)
+    kzt = kzt if kzt.numel() == nk else kzt.expand(nk)
+    out = module().apply_L(U, _c(D), _c(facx), _c(facy), kzt.to(dt),
+                           float(nu), float(c), wqt, float(kap), rwt)
+    return out.cpu().numpy() if was_np else out
 
 
 def apply_LT(Rr, D, facx, facy, kz, nu, c, kap=0.0):
+    was_np = not isinstance(Rr, torch.Tensor)
     R = _c(Rr)
     nk = R.shape[-1]
-    kzt = kz if kz.numel() == nk else kz.expand(nk)
-    return module().apply_LT(R, _c(D), _c(facx), _c(facy), _c(kzt).to(R.dtype),
-                             float(nu), float(c), float(kap))
+    kzt = _c(kz)
+    kzt = kzt if kzt.numel() == nk else kzt.expand(nk)
+    out = module().apply_LT(R, _c(D), _c(facx), _c(facy), kzt.to(R.dtype),
+                            float(nu), float(c), float(kap))
+    return out.cpu().numpy() if was_np else out
