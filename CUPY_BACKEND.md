@@ -297,6 +297,58 @@ That last column is the one that matters: the CORIA benchmark comparison
 a two-day run. **The bottleneck has moved from throughput to the missing
 checkpoint/restart driver**, which is what Colab's session limits require.
 
+### Phase 5: the inner product was two-thirds of the solve
+
+The Re = 1600 128³ case priced at **174 s/step — 248 h**, against a projected
+46 h. Four rounds of diagnosis, each wrong, before the measurement that
+settled it. Recorded in order, because the errors are the useful part:
+
+| checked | result |
+|---|---|
+| wrong GPU? | genuine A100-SXM4-40GB ❌ |
+| memory pressure? | 8.7 of 40 GiB ❌ |
+| bad conditioning? | 4850 its/step, `capped = 0`, only 1.3× the 88³ run ❌ |
+| CG's per-iteration host sync | real, but only 5.4 ms of 36 |
+| **the inner product** | **9.41 ms against a 0.56 ms bound — 17× off** ✅ |
+
+`_dot` keeps only the mode axis and sums the other four, so ~19 M inputs
+produce **65 outputs** — a 290,304:1 reduction. CuPy gives that roughly one
+block per output: 65 blocks on a **108-SM** A100, most of the card idle. At
+two calls per iteration it was **two thirds of the entire solve**:
+
+| | ms |
+|---|---|
+| matvec | 8.5 |
+| 2 × `_dot` | **18.8** |
+| vector ops | 1.7 |
+| sum | 29.0 |
+| *measured, by differencing solves at two iteration counts* | *29.68* |
+
+Written as `(1 × M) @ (M × nk)` it is a GEMM, and cuBLAS fills the card:
+**0.81 ms, 11.6×**. The control matters more than the fix — fusing the triple
+product into a `ReductionKernel`, removing **both** 144 MiB temporaries, gave
+10.17 ms, *no better*. So the cost was never memory traffic. It was the
+reduction's **shape**, which is invisible to every bandwidth calculation.
+
+Iteration **29.7 → 11.8 ms (2.5×)**; the case goes 212 → ~85 h. Verified:
+167 tests, parity 2.613e−16, and Stokes σ **bit-identical** to the pre-change
+run (9.3141300 / 9.3138373, order 2.00).
+
+**Two lessons worth more than the speedup.** First, `normal_op` measured 8.45 ms
+against a 8.9 ms prediction — the matvec was *exactly* right the whole time.
+Benchmarking it in isolation and assuming the rest of the iteration was
+negligible is what hid a 17× anomaly through four wrong projections. Second,
+the differencing measurement — run the solver at two iteration counts and
+subtract, so everything per-iteration survives and everything per-solve
+cancels — took two minutes to write and would have pointed straight here.
+**Instrument before predicting.**
+
+Still open: the derivative einsums measure 4.61 ms against a 0.96 ms bound
+(5× off, now 72% of what remains). And the shape problem is a property of the
+reduction, not of CuPy — **the torch path is likely paying it too**, on the
+same shared `_dot`. Left untouched deliberately; that port is another
+session's.
+
 ### One honest caveat on the batching fix
 
 Batching trades dispatches for **strided field views**. That is a clear win on

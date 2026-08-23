@@ -32,10 +32,46 @@ def _dot(a, b, w=None):
     product is not the one the assembled operator is symmetric in.
     """
     ab = a*b if w is None else a*b*w
+    if DEV.is_cupy(ab):
+        # This reduction keeps ONLY the mode axis, so ~19 M inputs produce ~65
+        # outputs (290,304:1).  CuPy gives such a reduction roughly one block
+        # per output -- 65 blocks on a 108-SM A100, most of the card idle --
+        # and it measured 9.41 ms against a 0.56 ms bandwidth bound, 17x off.
+        # At two calls per CG iteration that was TWO THIRDS of the entire
+        # solve (matvec 8.5 + 2 dots 18.8 + vector 1.7 = 29.0 ms, against
+        # 29.68 measured by differencing solves at two iteration counts).
+        #
+        # Written as (1 x M) @ (M x nk) it becomes a GEMM, and cuBLAS fills
+        # the card: 0.81 ms, 11.6x.  Fusing the triple product into a
+        # ReductionKernel to remove both temporaries gives 10.17 ms -- no
+        # better -- which is what identifies the reduction SHAPE, not the
+        # temporaries, as the cost.  Agreement with the old path is 3.9e-15
+        # relative, i.e. a different summation order at float64 rounding.
+        nk = ab.shape[-1]
+        M = ab.size//nk
+        return (_ones_row(M, ab) @ ab.reshape(M, nk)).reshape(1, 1, 1, 1, nk)
     # DEV.sum_over, not np.sum: on the GPU path `ab` is a torch tensor and this
     # runs inside the CG loop, where a single host round trip costs 21.9x the
     # matvec (TORCH_VERIFY_PLAN.md V3).
+    # NOTE for the torch path: the shape problem above is a property of the
+    # reduction, not of CuPy, so torch is likely paying it too.  Unmeasured
+    # here, and left alone deliberately -- see CUPY_BACKEND.md.
     return DEV.sum_over(ab, (0,) + tuple(SPATIAL))[None, None, None, None, :]
+
+
+_ONES_ROW = {}
+
+
+def _ones_row(M, like):
+    """Cached (1, M) row of ones for the GEMM form of _dot.
+
+    Cached because allocating and filling it per call would reintroduce the
+    traffic the GEMM form exists to avoid.
+    """
+    hit = _ONES_ROW.get(M)
+    if hit is None:
+        hit = _ONES_ROW[M] = DEV.xp(like).ones((1, M), dtype=like.dtype)
+    return hit
 
 
 def gs(mesh, U):
