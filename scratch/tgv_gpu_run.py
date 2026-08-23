@@ -229,16 +229,41 @@ def main():
             fh.write('t,E,Omega,balance,maxu,cg,capped\n')
 
     if a.price:
-        t0 = time.perf_counter()
-        for _ in range(3):
+        # A step's cost is (CG iterations) x (cost per matvec).  Report BOTH,
+        # because they have opposite remedies: too many iterations is a
+        # preconditioner problem, a slow matvec is a memory/bandwidth problem.
+        # Extrapolating a step time from a matvec benchmark alone -- without
+        # ever measuring the iteration count -- is how a 46 h estimate turned
+        # into 248 h.
+        sync = (lambda: xp.cuda.Stream.null.synchronize()) if xp is not np else (lambda: None)
+        for k in range(T.NSTAGE):          # warm-up: JIT, pool growth, autotune
+            U, Np_, _ = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'])
+        sync()
+        t0 = time.perf_counter(); its = []
+        for _ in range(2):
             for k in range(T.NSTAGE):
+                tk = time.perf_counter()
                 U, Np_, it = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'])
+                sync(); its.append((k, it, time.perf_counter()-tk))
+        per = (time.perf_counter()-t0)/2
+        tot_it = sum(i for _, i, _ in its)/2
+        print(f'\nPRICE  {per:.1f} s/step  ->  {nstep*per/3600:.1f} h total '
+              f'({nstep} steps)')
+        print(f'       {tot_it:.0f} CG iterations/step, '
+              f'{1e3*per/max(tot_it, 1):.2f} ms per iteration '
+              f'({dof/1e6:.2f} M dof)')
+        for k, it, el in its[:T.NSTAGE]:
+            print(f'         stage {k}: {it:6d} its  {el:7.2f} s  '
+                  f'{1e3*el/max(it, 1):6.2f} ms/it')
         if xp is not np:
-            xp.cuda.Stream.null.synchronize()
-        per = (time.perf_counter()-t0)/3
-        print(f'PRICE  {per:.1f} s/step  ->  {nstep*per/3600:.1f} h total '
-              f'({nstep} steps)  |  sessions at {a.budget/3600:.1f} h: '
-              f'{int(np.ceil(nstep*per/a.budget))}')
+            mp = xp.get_default_memory_pool()
+            free, total = xp.cuda.runtime.memGetInfo()
+            print(f'       GPU memory: pool {mp.used_bytes()/2**30:.1f} GiB used '
+                  f'/ {mp.total_bytes()/2**30:.1f} GiB reserved, '
+                  f'device {(total-free)/2**30:.1f} / {total/2**30:.1f} GiB')
+        if a.budget < 1e8:
+            print(f'       sessions at {a.budget/3600:.1f} h: '
+                  f'{int(np.ceil(nstep*per/a.budget))}')
         return
 
     E, Om, mx = diagnostics(s, U)
