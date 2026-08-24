@@ -82,7 +82,13 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
     w = s['wq3']
     r = w*(ck*(Uc + dt*(T.GAMMA[k]*Nk + T.ZETA[k]*Nprev)))
     r = r - (T.ALPHA[k]/T.BETA[k])*visc_weak(Uc, D, fx, fy, wq, kz, nu)
-    r = r - w*gradient(pc, D, fx, fy, kz)
+    # INCREMENTAL vs NON-INCREMENTAL.  The incremental form carries p forward
+    # and re-enters it here; the pressure-free form drops both, trading second
+    # order in pressure for the removal of that feedback loop.  If a growing
+    # mode is the incremental pressure feeding back through an inconsistent
+    # wall condition, it disappears when this term does.
+    if s.get('incremental', True):
+        r = r - w*gradient(pc, D, fx, fy, kz)
 
     # (b) velocity Helmholtz, weak form: (c_k + nu kz^2) M + nu K
     lam_u = ck + nu*(kz**2)
@@ -113,7 +119,10 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
 
     # (d) projection and (e) rotational pressure update
     Uc = uhat - (dt*T.BETA[k])*gradient(phi, D, fx, fy, kz)
-    pc = pc + phi - nu*div
+    if s.get('incremental', True):
+        pc = pc + phi - nu*div
+    else:
+        pc = phi - nu*div
     return Uc, pc, (it_u, res_u, it_p, res_p)
 
 
