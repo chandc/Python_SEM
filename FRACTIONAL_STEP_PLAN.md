@@ -30,11 +30,20 @@ fewer iterations. The retracted conclusion is kept in §3.1c because the way it
 failed is instructive.
 
 **Recommendation: the projection path is faster for both periodic and
-wall-bounded flow.** The remaining caveat is accuracy, not speed: the
-constants differ by ~10× at equal dt on the channel, so matching LSSEM's
-accuracy needs dt roughly 3.2× smaller. That eats into an ~18× advantage
-without erasing it — and it has **not** been measured on TGV, where only the
-order was checked.
+wall-bounded flow.** The remaining caveat is accuracy, not speed: on the
+channel, against the analytic σ, the constants differ by ~10× at equal dt, so
+matching LSSEM's accuracy needs dt roughly 3.2× smaller — eating into an ~18×
+advantage without erasing it.
+
+**On TGV the constants are still UNMEASURED**, and an attempt
+(`scratch/fs_constants.py`) failed its own control: temporal self-convergence
+reported the least-squares path at order ~0.97 where Gate 1 verifies 2.00, so
+none of its numbers can be trusted. Four variants were tried — reference 4×
+and 16× finer, error in energy and in the velocity field — and the failure
+survived all of them. The suspicion is too few steps at the coarse end (ten
+steps at dt = 0.02) measuring startup rather than accumulation. **Until a
+control reproduces 2.00 for the least-squares path, treat the ~18–21× speedups
+as equal-dt, not equal-accuracy.**
 
 ---
 
