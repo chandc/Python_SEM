@@ -76,6 +76,8 @@ def step():
 
 
 if price:
+    # profile where an iteration actually goes, before quoting a speedup
+    import lssem3d.helmholtz as _HH
     step(); sync()                       # warm: JIT, pool growth
     t0 = time.perf_counter(); its = 0
     for _ in range(2):

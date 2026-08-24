@@ -136,7 +136,7 @@ def fdm_preconditioner(mesh, N, lam, mu, mask, nfield, nk, like=None,
 
 
 def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
-          max_iter=4000):
+          max_iter=4000, check_every=None):
     """PCG for A x = b, per mode, in the multiplicity-weighted inner product.
 
     Not solver3d.pcg: that one is wired to normal_op.  The inner product must
@@ -147,7 +147,25 @@ def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
     xp = DEV.xp(b)
     mw = DEV.to_device(S3.multiplicity_weight(mesh, tuple(b.shape)), b)
     A = lambda v: apply(v, D, facx, facy, wq, lam, mu, mesh, mask)
-    dot = lambda a, c: xp.sum(a*c*mw, axis=(0, 1, 2, 3))
+    if check_every is None:
+        check_every = 1 if xp is np else 10
+
+    # THE INNER PRODUCT AS A GEMM.  This reduction keeps only the mode axis, so
+    # it produces nk outputs from the whole field -- the same starved shape that
+    # measured 17x off bandwidth on the least-squares path and turned out to be
+    # two thirds of that solve (CUPY_BACKEND.md Phase 5).  Written as
+    # (1 x M) @ (M x nk) cuBLAS fills the card instead of leaving most of it
+    # idle.  Kept on the reduction path for numpy, where it is not a problem.
+    nk_ = b.shape[-1]
+    M_ = b.size//nk_ if hasattr(b, 'size') else int(np.prod(b.shape[:-1]))
+    if DEV.is_cupy(b):
+        ones = S3._ones_row(M_, b)
+
+        def dot(a, c):
+            return (ones @ (a*c*mw).reshape(M_, nk_)).reshape(-1)
+    else:
+        def dot(a, c):
+            return xp.sum(a*c*mw, axis=(0, 1, 2, 3))
     x = DEV.zeros_like(b)
     r = b - A(x)
     z = M(r)
@@ -164,8 +182,13 @@ def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
                       0.0*one)
         x = x + al*p
         r = r - al*Ap
-        if bool(xp.all(xp.sqrt(dot(r, r)) < target)):
-            break
+        # TESTING CONVERGENCE COSTS A HOST SYNC: the CPU drains the queue,
+        # waits, reads one bit and re-issues.  Every iteration, that stall can
+        # dominate the iteration itself.  Testing every K costs at most K-1
+        # extra iterations out of hundreds, and skips K-1 reductions too.
+        if it % check_every == 0 or it == max_iter:
+            if bool(xp.all(xp.sqrt(dot(r, r)) < target)):
+                break
         z = M(r)
         rzn = dot(r, z)
         be = xp.where(abs(rz) > 1e-300, rzn/xp.where(rz == 0, one, rz), 0.0*one)

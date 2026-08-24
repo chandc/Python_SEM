@@ -25,6 +25,12 @@ NU, DT, TOL = 0.01, 0.01, 1e-10
 def run(backend, seed_shift=0):
     lssem3d.set_backend(backend)
     s = F2.build(N=N, ne=ne, nz=nz, nu=NU, tol=TOL, backend=backend)
+    # Match the CONVERGENCE TEST INTERVAL across backends.  With check_every
+    # defaulting to 1 on numpy and 10 on cupy the two stop at different
+    # iterations, so they differ at solver-tolerance level (3.8e-10 against a
+    # 1e-10 tolerance) -- a real difference, but between two different
+    # algorithms rather than between two backends running the same one.
+    s['check_every'] = 1
     Uc = F2.ic_tgv(s)
     xp = np
     if backend == 'cupy':

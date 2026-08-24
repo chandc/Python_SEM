@@ -113,7 +113,8 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
         bu = bu - HH.apply(ubc, D, fx, fy, wq, lam_u, nu, m, None)
     bu = bu*s['mask_u']
     uhat, it_u, res_u = HH.solve(bu, D, fx, fy, wq, lam_u, nu, m, s['mask_u'],
-                                 s['Mu'], tol=s['tol'])
+                                 s['Mu'], tol=s['tol'],
+                                 check_every=s.get('check_every'))
     if ubc is not None:
         uhat = uhat + ubc
     uhat = _join(uhat)
@@ -135,7 +136,8 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
         bp = bp.copy()
         bp[..., 0:1, 0:1] -= (num/s['null_norm'])*v
     phi, it_p, res_p = HH.solve(bp, D, fx, fy, wq, kz**2, 1.0, m, s['mask_p'],
-                                s['Mp'], tol=s['tol'])
+                                s['Mp'], tol=s['tol'],
+                                check_every=s.get('check_every'))
     phi = _join(phi)
 
     # (d) projection and (e) rotational pressure update
