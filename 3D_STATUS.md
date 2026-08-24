@@ -211,6 +211,29 @@ silently coerces: precision, device placement, contiguity, real-vs-complex.
 
 Caught by the user, not by the suite. That is the part worth remembering.
 
+### L16. A run can look healthy on every diagnostic you are logging
+
+`minchan_001` ran 14 hours with `u_τ`, `U_bulk`, `rms_w`, CFL and CG all
+evolving plausibly, and carried a **seven-order-of-magnitude** divergence
+defect the whole time. Nothing in the log could have shown it, because the
+quantity that would have was not in the log.
+
+Two things made the diagnosis possible, and both are worth building in advance
+rather than reaching for afterwards:
+
+* **A conservation law to check.** Energy and momentum budgets are
+  parameter-free — they either close or they do not, with nothing to tune.
+  The TGV runs had `−dE/dt = 2νΩ` from the start; this one shipped without an
+  equivalent, and that is the whole reason 14 hours were spent.
+* **A validated reference to compare against.** 1.1e−01 divergence is
+  meaningless alone — L5 says `div u` is never zero here. It only became
+  damning next to the Stokes case's 5e−09, measured with the same operator on a
+  problem with an analytic answer.
+
+Log the conserved quantities from step one, and keep a case with a known answer
+you can run at any time (§7M's Stokes gate, ~10 minutes). Neither is expensive;
+both are worthless if built only once something looks wrong.
+
 ### L5. Know your floor before calling something an error
 
 `div u` is never zero in a least-squares formulation — continuity is a weighted
@@ -2605,6 +2628,114 @@ ssh Spark 'docker run --rm --gpus all --ipc=host -e LEGATE_CONFIG="--gpus 1 --fb
 ```
 
 `scratch/cupynumeric/` holds the Dockerfile and benchmark.
+
+## 7P. The minimal-channel runs — a contaminated run that looked perfectly healthy
+
+Two runs launched, both retired. The findings are worth more than the compute.
+
+### 7P.1 `minchan_001` — 14 hours, and every logged diagnostic said "fine"
+
+`u_τ` flattening, `rms_w` growing 0.24 → 0.69, CG steady, CFL settling, no
+instability. On the diagnostics being logged, a healthy transitioning channel.
+
+It was carrying **relative divergence of 1.1e−01, constant over 900 steps.**
+
+That only surfaced because the energy budget was requested, and only became
+*interpretable* because a validated reference existed: the Stokes-decay case,
+which reproduces the analytic Chan rate to 8 significant figures, holds
+`div u / |∇u|` at **5e−09 and falling**. Seven orders of magnitude apart, with
+the same operator, same row weights, same solver.
+
+**Cause:** the trip added independent `randn` to `u, v, w`, which is not
+solenoidal. LSSEM penalises `div u` as a weighted **row**; it does not project
+the state onto the divergence-free manifold, so divergence placed in the
+*initial condition* is never removed. The solver cut it from 3.2e−01 to 1.1e−01
+and stalled.
+
+**Fix:** the noise is now the **curl of a random vector potential** —
+divergence-free by construction, as the rolls already were. 3.2e−01 → 1.0e−04 at
+`t = 0`, settling at ~1e−03, which the state approaches *from below* and is
+therefore the configuration's floor rather than a leftover.
+
+### 7P.2 Five wrong hypotheses on the way there
+
+Every one refuted by the next measurement, and each would have sent work astray:
+
+| hypothesis | verdict |
+|---|---|
+| "the body force is 18% too strong" | **wrong** — 0.992 measured from rest, where no diagnostic enters |
+| "`u_τ`'s averaging is biased" (`mean\|τ\|` vs `\|mean τ\|`, quadrature) | **wrong** — both formulations agree to 1e−4 |
+| "LSSEM does not conserve momentum" | **wrong** — closes to <1% |
+| "the stored `ω` inflates the enstrophy" | **wrong** — agrees with `∇×u` to 0.05% |
+| **"my budget omitted a term"** | **this one** |
+
+The omitted term was `∫(u·∇u)_x dV`, which I asserted vanishes. It does — **for an
+exactly divergence-free field**. §L5 of this very document says `div u` is never
+zero in a least-squares formulation. *I assumed precisely the thing my own
+lessons say is false.* (My surface term was also wrong by ~640×: `wq` is the 2-D
+weight `jac·w_i·w_j`, so summing it along a wall still carries `w_j`.)
+
+Silver lining: the non-zero `∫(u·∇u)` is a **direct measure of divergence error**
+and is now logged.
+
+### 7P.3 `minchan_002` — clean, and relaminarising
+
+Every budget closes (`dE/dt` = 47 measured against `P − ε` = 44), `div` pinned at
+7.8e−02 absolute (~7e−4 relative), CFL stable at 0.91, dissipation 60 against the
+contaminated run's 264. **The machinery is right.**
+
+But `rms_w` decays monotonically — 0.1354 → 0.1214 over `t = 0.55` — with `U_bulk`
+climbing toward the laminar value. Plane Poiseuille is **linearly stable** here,
+so a sub-threshold disturbance simply decays. Making the noise solenoidal also
+made it ~1.8× weaker, and that crossed the threshold.
+
+| amp_roll / noise | `rms_w` | peak `\|v\|` | CFL @1e−3 | rel div |
+|---|---|---|---|---|
+| 1.0 / 0.3 — decays | 0.135 | 1.05 | 0.89 | 3.2e−05 |
+| **2.0 / 1.0** | **0.277** | 2.16 | 1.10 | 8.6e−05 |
+| 3.0 / 1.5 | 0.415 | 3.24 | 1.30 | 1.1e−04 |
+
+Divergence stays ~1e−04 across the range: **strengthening the trip does not
+reintroduce the defect**, because the construction is solenoidal by design rather
+than by amplitude. The binding constraint is CFL headroom — `minchan_001` climbed
+1.85× (1.24 → 2.29) as it developed, so the start must leave room for a doubling.
+
+**Open:** whether amplitude is the whole story. The retired run grew at 0.243, but
+that trip also carried 11% divergence error whose spurious energy may have helped
+drive it — so 0.277 may still be marginal, and the curl-of-potential noise may
+lack the streamwise scales the streak instability needs.
+
+### 7P.4 `minchan_002` retired at t = 1.170 — the verdict, and the useful half
+
+Stopped deliberately after 16 h, one full eddy turnover, rather than spending the
+remaining ~11 days asymptoting to laminar Poiseuille.
+
+| t | `u_τ` | `U_b` | `rms_w` | ε |
+|---|---|---|---|---|
+| 0.001 | 0.998 | 15.451 | **0.1354** | 62.0 |
+| 0.400 | 0.834 | 15.561 | **0.1255** | 49.5 |
+| 0.800 | 0.780 | 15.719 | **0.1154** | 47.6 |
+| 1.170 | 0.757 | 15.884 | **0.1079** | 48.6 |
+
+`rms_w` **−20% monotonically, no inflection**; `U_bulk` climbing toward the
+laminar 60; `u_τ` falling away from 1. Sub-threshold disturbance, decaying.
+
+**Two lessons, and the second is the more useful one.**
+
+**A correct fix for one problem created another.** Making the trip solenoidal was
+right — §7P.1 is unambiguous — but it also made it 1.8× weaker (`rms_w`
+0.243 → 0.135) and that crossed the transition threshold. The fix was evaluated
+against the property it was designed to fix (divergence: 3.2e−01 → 1.0e−04) and
+not against the property it incidentally changed. **When a fix alters a field,
+re-check every quantity that field controls, not just the one that motivated it.**
+
+**The solver was faultless, and that is worth as much as the run would have been.**
+For 1170 steps: `div` held at 7.81e−02 to *three figures*, CFL 0.90–0.92 with no
+drift, `conv` shrinking, CG steady, budgets closing throughout. §7P.1's run
+drifted on every one of those while looking healthy on the diagnostics then being
+logged. **The instrumentation added after §7P.1 is now demonstrated to
+discriminate a sound run from a contaminated one** — which is exactly what L16
+asked for, and it cost 16 h rather than 12 days to establish.
 
 ## 9. Inventory
 
