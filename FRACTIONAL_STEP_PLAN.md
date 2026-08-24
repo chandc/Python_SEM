@@ -1,7 +1,35 @@
-# Fractional step as an alternative solve path — implementation plan
+# Fractional step as an alternative solve path
 
-Status: **plan only, nothing built.** Written 2026-08-23 in answer to "would
-the fractional step method run faster than VVP LSSEM?"
+Written 2026-08-23 as a plan; **Phases 0–2 are now built and passing, and
+Phase 3 is measured.** Updated 2026-08-24.
+
+---
+
+## RESULTS (measured — read this before the plan below)
+
+| | fractional step | VVP LSSEM | |
+|---|---|---|---|
+| **TGV Re = 800, 88³** (periodic) | **3.85 s/step** | 79.4 s/step | **20.6× faster** |
+| **minimal channel Re_τ = 180** (walls) | 39.76 s/step | ~17 s/step¹ | **~2× SLOWER** |
+| temporal order, periodic | 2.00 | 2.00 | equal |
+| temporal order, walls | **2.0**² | 2.00 | equal |
+| accuracy constant at equal dt, walls | 1.055e-4 | 1.045e-5 | **LSSEM ~10× better** |
+| energy–enstrophy balance (Gate 3) | 5.16e-05 | 6.65e-06 | LSSEM ~8× tighter |
+
+¹ scaled from a measured 35 days on the Mac by the measured 7.1× A100 factor;
+not measured directly. ² after the fix in §3.1b — it was ~1.6 before.
+
+**The advantage is flow-dependent, and that is the headline.** Large for
+periodic DNS, absent for wall-bounded flow. The iteration ratio tells the
+story: **4.1×** in the projection path's favour on TGV (3190 vs 780 CG/step),
+**1.19×** on the channel (14358 vs 12030) — essentially gone. Chaining the
+periodic figure onto the channel would have been wrong by ~40×.
+
+**Recommendation: use the projection path for periodic DNS (TGV, CORIA), keep
+LSSEM for the channel work** — and note the ~10× accuracy-constant gap, which
+means matching LSSEM's accuracy needs dt roughly 3.2× smaller, eating into but
+not erasing the periodic speedup. That constant has **not** been measured on
+TGV; only the order has. It should be, before 20.6× is quoted as like-for-like.
 
 ---
 
@@ -158,6 +186,37 @@ the classic $O(\Delta t)$ numerical boundary layer of thickness
 $\sim\sqrt{\nu\Delta t}$. The LS path has no analogue: it imposes velocity
 directly and never splits.
 
+### 3.1b RESOLVED, 2026-08-24: one projection per step, not per substage
+
+**Second order at walls is recovered.** Gate 1, channel, against σ = 9.3137399:
+
+| dt | 0.02 | 0.01 | 0.005 | 0.0025 |
+|---|---|---|---|---|
+| rel err | 1.049e-2 | 2.247e-3 | 5.273e-4 | **1.055e-4** |
+| pairwise order | | **2.22** | **2.09** | **2.32** |
+
+against 1.64, 1.48, 1.77 for the per-substage form.
+
+**The cause was structural, not a coding error.** The Kim–Moin correction
+
+$$\vec{u}^*\big|_\Gamma = \vec{u}^{n+1}\big|_\Gamma + \delta t\,\nabla\phi^{n-1}\big|_\Gamma$$
+
+is an extrapolation in time **over a uniform step**. Applied per RKW3 substage
+with $\beta_k\delta t$ — and the SMR weights $\beta = (0.2315, 0.2083,
+0.1667)$ sum to **0.606, not 1** — it is scaled to the wrong interval: right in
+form, wrong in magnitude. Landing at 1.6, *between* the reference's no-slip
+(slope 1) and corrected (slope 2) curves, was the tell.
+
+`project.step_kim_moin` follows Kim & Moin's own sequence: **four-stage RK for
+convection only → one Crank–Nicolson viscous solve → one projection.** This
+also settles the hypothesis raised in §3.1a and left unconfirmed there — that
+per-substage pressure treatment is ill-founded because the weights do not sum
+to a step. It was.
+
+**The cost:** this is no longer the SMR RKW3/CN scheme the LS path uses, so the
+two no longer share an integrator. `project.substage` (per-substage) is kept
+for periodic work, where it measures 2.00 and the question does not arise.
+
 ### 3.1a MEASURED, 2026-08-24: the two forms bracket the problem
 
 Both were built and run on Gate 1 (channel, no-slip, non-zero pressure):
@@ -301,7 +360,9 @@ any one is wrong. `convect.convective` was reused **unchanged**, as predicted �
 it reads only u, v, w at indices 0, 1, 2, exactly the fractional-step layout.
 Gate 2 (rotated $(x,z)$ order) not yet run.
 
-**Phase 3 — the A/B that settles the speed question.** TGV Re = 800 at $88^3$,
+**Phase 3 — MEASURED, see the results table at the top.** 20.6× on TGV,
+~2× slower on the minimal channel. Original text: **the A/B that settles the
+speed question.** TGV Re = 800 at $88^3$,
 against the LS run completing now. Same $\Delta t$, same grid, same tolerance.
 *Gate: energy and enstrophy histories agree to discretisation error, and
 report the measured s/step ratio.* This replaces the 30–100× estimate with a
