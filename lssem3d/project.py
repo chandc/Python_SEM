@@ -55,11 +55,17 @@ def gradient(pc, D, facx, facy, kz):
                            1j*kz*pc], axis=-2)
 
 
-def laplacian_rhs(Uc, D, facx, facy, kz, nu):
-    """nu*grad^2 u, strong form, for the explicit viscous term."""
-    return nu*(DV.ddx(DV.ddx(Uc, D, facx), D, facx)
-               + DV.ddy(DV.ddy(Uc, D, facy), D, facy)
-               - (kz**2)*Uc)
+def visc_weak(Uc, D, facx, facy, wq, kz, nu):
+    """nu*(K + kz^2 M) u -- the WEAK viscous operator, UNASSEMBLED.
+
+    This must be the SAME operator the implicit side inverts.  Crank-Nicolson
+    only cancels if the explicit and implicit halves are the same discrete
+    operator; using a strong-form nu*grad^2 (two pointwise differentiations)
+    against a weak implicit K leaves a residue that does NOT vanish with dt and
+    accumulates every step.  Measured: Gate 1 came out at order -2.08, the
+    error GROWING as dt shrank, which is the signature of exactly that.
+    """
+    return HH.apply(Uc, D, facx, facy, wq, nu*kz**2, nu, mesh=None, mask=None)
 
 
 def substage(s, Uc, pc, Nk, Nprev, k, dt):
@@ -69,15 +75,18 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
     nu, kz = s['nu'], s['kz']
     D, fx, fy, wq, m = s['D'], s['m'].facx, s['m'].facy, s['m'].wq, s['m']
 
-    # (a) explicit assembly
-    r = Uc + dt*(T.GAMMA[k]*Nk + T.ZETA[k]*Nprev
-                 + T.ALPHA[k]*laplacian_rhs(Uc, D, fx, fy, kz, nu))
-    r = r - (dt*T.BETA[k])*gradient(pc, D, fx, fy, kz)
+    # (a) explicit assembly, ENTIRELY IN WEAK FORM so the CN halves match.
+    #     Multiply the momentum equation by M throughout: the mass and
+    #     convective terms pick up wq, the viscous term is the same weak
+    #     operator the implicit side inverts, and alpha_k*c_k*dt = alpha_k/beta_k.
+    w = s['wq3']
+    r = w*(ck*(Uc + dt*(T.GAMMA[k]*Nk + T.ZETA[k]*Nprev)))
+    r = r - (T.ALPHA[k]/T.BETA[k])*visc_weak(Uc, D, fx, fy, wq, kz, nu)
+    r = r - w*gradient(pc, D, fx, fy, kz)
 
     # (b) velocity Helmholtz, weak form: (c_k + nu kz^2) M + nu K
     lam_u = ck + nu*(kz**2)
-    bu = s['wq3']*_split(ck*r)
-    bu = S3.gs(m, bu)*s['mask_u']
+    bu = S3.gs(m, _split(r))*s['mask_u']
     uhat, it_u = HH.solve(bu, D, fx, fy, wq, lam_u, nu, m, s['mask_u'],
                           s['Mu'], tol=s['tol'])
     uhat = _join(uhat)
