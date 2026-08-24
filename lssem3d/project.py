@@ -198,3 +198,84 @@ def wall_indicator(mesh, nk, nz, nfield_c):
     for k in real_mode_columns(nk, nz):
         ind[..., nfield_c:, k] = 0.0
     return ind
+
+
+# Jameson's four-stage RK, the convection integrator of the Kim-Moin scheme.
+JAMESON = (0.25, 1.0/3.0, 0.5, 1.0)
+
+
+def step_kim_moin(s, Uc, phi_prev, dt):
+    """One FULL step: RK convection -> one CN viscous solve -> one projection.
+
+    THE STRUCTURE IS THE POINT.  substage() above projects inside every RKW3
+    substage with beta_k*dt, and measures ~1.6 order at walls.  The Kim-Moin
+    correction it uses,
+
+        uhat|wall = u^{n+1}|wall + dt * grad(phi^{n-1})|wall,
+
+    is an extrapolation IN TIME OVER A UNIFORM STEP.  The SMR weights are
+    beta = (0.2315, 0.2083, 0.1667) and sum to 0.606, not 1, so applied per
+    substage the correction is scaled to the wrong interval -- right in form,
+    wrong in magnitude.  Kim & Moin apply it once per step, over the whole dt,
+    and report second order.
+
+    So this is the reference's own sequence:
+      1. Jameson's four-stage RK advances CONVECTION ONLY, no pressure;
+      2. ONE Crank-Nicolson viscous solve,
+             (2/dt) M u* + Avisc u*  =  (2/dt) M u^p - Avisc u^n,
+         with the Kim-Moin wall value on u*;
+      3. ONE projection, grad^2 phi = div(u*)/dt, u^{n+1} = u* - dt grad(phi).
+
+    Pressure-free: phi is an auxiliary variable, not the physical pressure, and
+    is carried only to supply the next step's wall value.  The incremental form
+    was measured UNSTABLE at walls (sigma 9.316 -> 9.944 over 40 steps).
+    """
+    from . import timestep as T
+    m, nu = s['m'], s['nu']
+    D, fx, fy, wq, kz = s['Dg'], s['fxg'], s['fyg'], s['wqg'], s['kzg']
+    xp = DEV.xp(Uc)
+
+    # 1. convection only, low-storage: each stage evaluates H at the previous
+    #    stage and adds to u^n
+    un = Uc
+    u = un
+    for a in JAMESON:
+        from . import convect as CV
+        H = -CV.convective(u, D, fx, fy, kz, s['nz'])
+        if s.get('force') is not None:
+            H = H + s['force']
+        u = un + (dt*a)*H
+    up = u
+
+    # 2. Crank-Nicolson viscous, ONE solve over the whole dt
+    lam = 2.0/dt + nu*(kz**2)
+    r = s['wq3']*((2.0/dt)*up) - visc_weak(un, D, fx, fy, wq, kz, nu)
+    bu = S3.gs(m, _split(r))
+    ubc = None
+    if s.get('wall_u') is not None and phi_prev is not None:
+        # Kim-Moin: uhat carries the slip the projection is about to remove,
+        # over the FULL step
+        ubc = _split(dt*gradient(phi_prev, D, fx, fy, kz))*s['wall_u']
+        bu = bu - HH.apply(ubc, D, fx, fy, wq, lam, nu, m, None)
+    bu = bu*s['mask_u']
+    ustar, it_u, res_u = HH.solve(bu, D, fx, fy, wq, lam, nu, m, s['mask_u'],
+                                  s['Mu'], tol=s['tol'],
+                                  check_every=s.get('check_every'))
+    if ubc is not None:
+        ustar = ustar + ubc
+    ustar = _join(ustar)
+
+    # 3. projection
+    div = divergence(ustar, D, fx, fy, kz)
+    bp = -S3.gs(m, s['wq1']*_split(div/dt))*s['mask_p']
+    v = s.get('null_kz0')
+    if v is not None:
+        num = float((bp[..., 0:1, 0:1]*v*s['mw1']).sum())
+        bp = bp.copy()
+        bp[..., 0:1, 0:1] -= (num/s['null_norm'])*v
+    phi, it_p, res_p = HH.solve(bp, D, fx, fy, wq, kz**2, 1.0, m, s['mask_p'],
+                                s['Mp'], tol=s['tol'],
+                                check_every=s.get('check_every'))
+    phi = _join(phi)
+    Uc = ustar - dt*gradient(phi, D, fx, fy, kz)
+    return Uc, phi, (it_u, res_u, it_p, res_p)
