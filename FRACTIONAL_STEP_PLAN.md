@@ -15,6 +15,7 @@ Phase 3 is measured.** Updated 2026-08-24.
 | temporal order, walls | **2.0**² | 2.00 | equal |
 | accuracy constant at equal dt, walls | 1.055e-4 | 1.045e-5 | **LSSEM ~10× better** |
 | energy–enstrophy balance (Gate 3) | 5.16e-05 | 6.65e-06 | LSSEM ~8× tighter |
+| **divergence** $\|\nabla\!\cdot u\|/\|\nabla u\|$ | **3.6e-04** | **4.1e-07** | **LSSEM ~1000× better** (§3.1d) |
 
 ¹ TGV rows on the Spark GB10. ² after the fix in §3.1b — it was ~1.6 before.
 ³ channel rows both on the Spark GB10, with the pressure preconditioner of
@@ -330,6 +331,49 @@ exactly as it is now (`bc.pin_dof`, every local copy of one global node).
 splitting error from the wall treatment.
 
 ---
+
+## 3.1d DIVERGENCE: LSSEM is ~1000× better, and this is structural
+
+The first measured dimension on which the least-squares path is decisively
+better, and it is a physically important one — pointwise mass conservation, not
+a derived diagnostic. TGV with convection, same mesh, same dt, same initial
+condition, $\|\nabla\!\cdot u\| / \|\nabla u\|_F$ (the ratio `3D_STATUS.md`
+§7P.1 uses):
+
+| step | fractional step | VVP LSSEM | ratio |
+|---|---|---|---|
+| 0 | 1.418e-07 | 1.418e-07 | 1.0× — same IC |
+| 1 | 1.746e-05 | **1.850e-08** | 944× |
+| 5 | 1.287e-04 | 4.231e-08 | **3041×** |
+| 20 | 3.584e-04 | 4.062e-07 | 882× |
+
+**LSSEM *improves* it** — 1.4e-07 → 1.9e-08 in one step, because `div u` is a
+penalised row of the functional and the solver drives it down. **The projection
+*introduces* it** — 1.4e-07 → 1.7e-05 in one step, settling near 3.6e-04.
+
+**Why, and it is by construction.** The projection gives
+
+$$\nabla\!\cdot u^{n+1} = \nabla\!\cdot\hat u \;-\; \Delta t\,\nabla\!\cdot\nabla\phi$$
+
+which vanishes **only if the discrete $\nabla\!\cdot\nabla$ equals the Laplacian
+the Poisson solve inverts.** Here the divergence is *strong* form
+(`ddx + ddy + i k_z`) and the Poisson operator is the *weak* stiffness matrix
+$K$. Different operators, so the cancellation is inexact. The field ends up
+divergence-free in the **weak** sense $K$ represents, while the pointwise
+divergence — which is what LSSEM penalises and what physically matters — sits
+at ~1e-4.
+
+**The fix**: build the pressure operator as the composition of the discrete
+divergence and gradient, $D\!\cdot\!G$, rather than $K$. Then the same
+operators appear on both sides and the cancellation is exact by construction.
+Contained — a different `apply` for the pressure solve only. **The cost** is
+that $D\!\cdot\!G$ has a wider stencil and is no longer the separable form FDM
+inverts exactly, so the preconditioner needs re-examining; p-multigrid would
+plausibly survive where the FDM element solve degrades. Untested.
+
+**So the trade, stated plainly: the projection path is ~20–40× faster and
+roughly 1000× worse on divergence.** Acceptable for TGV energy spectra;
+much less obviously so where local mass conservation matters.
 
 ## 3.2a WHICH SCHEME TO USE — decided by the boundary conditions
 
