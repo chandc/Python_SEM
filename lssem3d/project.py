@@ -72,8 +72,12 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
     """One RKW3/CN substage.  Returns (u^k, p^k, iterations)."""
     from . import timestep as T
     ck = T.implicit_coeff(dt, k)
-    nu, kz = s['nu'], s['kz']
-    D, fx, fy, wq, m = s['D'], s['m'].facx, s['m'].facy, s['m'].wq, s['m']
+    nu, m = s['nu'], s['m']
+    # DEVICE ARRAYS, not the mesh's host copies.  s['m'].facx and friends are
+    # numpy whatever the backend; pulling them here would hand host arrays to a
+    # cupy kernel, which fails with a bare "Unsupported type numpy.ndarray"
+    # from inside an ElementwiseKernel -- the same trap PMG falls into.
+    D, fx, fy, wq, kz = s['Dg'], s['fxg'], s['fyg'], s['wqg'], s['kzg']
 
     # (a) explicit assembly, ENTIRELY IN WEAK FORM so the CN halves match.
     #     Multiply the momentum equation by M throughout: the mass and
