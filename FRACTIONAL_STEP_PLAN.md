@@ -363,13 +363,30 @@ divergence-free in the **weak** sense $K$ represents, while the pointwise
 divergence — which is what LSSEM penalises and what physically matters — sits
 at ~1e-4.
 
-**The fix**: build the pressure operator as the composition of the discrete
-divergence and gradient, $D\!\cdot\!G$, rather than $K$. Then the same
-operators appear on both sides and the cancellation is exact by construction.
-Contained — a different `apply` for the pressure solve only. **The cost** is
-that $D\!\cdot\!G$ has a wider stencil and is no longer the separable form FDM
-inverts exactly, so the preconditioner needs re-examining; p-multigrid would
-plausibly survive where the FDM element solve degrades. Untested.
+**The obvious fix does not work, and the reason is structural.** Building the
+pressure operator as $D\!\cdot\!G$ — the same strong-form operators the
+projection uses — was implemented (`helmholtz.apply_dg`) and **fails**:
+symmetry 2.82e-02 on continuous probes, and CG blew the solution up on step one
+(divergence 5.9e-01, then collapse).
+
+The argument for it is right in 1-D on **one** element: LGL satisfies
+summation by parts, so $W\,\partial_{xx}$ is symmetric once the boundary terms
+cancel on a periodic seam. It fails multi-element because $\partial_x$ is
+applied twice **element-locally** and the intermediate gradient $G\phi$ is
+**discontinuous at element interfaces** — inherent to continuous Galerkin,
+where the field is continuous but its derivative is not. The interface terms
+SBP needs never cancel, and gather-scatter afterwards cannot recover them.
+
+A consistent strong-form $D\!\cdot\!G$ needs a discretisation whose
+intermediate gradient is single-valued — a DG formulation with numerical
+fluxes, or a mixed/staggered pressure space. Neither is a small change.
+
+**So the ~1000× gap is a property of the two formulations, not a bug in
+either.** The weak pair $G$ and $-G^\mathsf{T}$ *is* adjoint, and their
+composition is exactly the stiffness matrix $K$ already in use — so the
+projection is exact in the **weak** sense, and the residue sits in the
+**strong** (pointwise) divergence, which is precisely what LSSEM penalises as
+a row.
 
 **So the trade, stated plainly: the projection path is ~20–40× faster and
 roughly 1000× worse on divergence.** Acceptable for TGV energy spectra;

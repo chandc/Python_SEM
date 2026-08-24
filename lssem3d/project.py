@@ -68,6 +68,49 @@ def visc_weak(Uc, D, facx, facy, wq, kz, nu):
     return HH.apply(Uc, D, facx, facy, wq, nu*kz**2, nu, mesh=None, mask=None)
 
 
+def _solve_dg(b, D, fx, fy, wq, kz, mesh, mask, M, tol, check_every):
+    """PCG against the D.G operator.  Same recurrence as helmholtz.solve; only
+    the operator differs, so it is written out rather than parameterised."""
+    xp = DEV.xp(b)
+    mw = DEV.to_device(S3.multiplicity_weight(mesh, tuple(b.shape)), b)
+    A = lambda v: HH.apply_dg(v, D, fx, fy, wq, kz, mesh, mask)
+    if check_every is None:
+        check_every = 1 if xp is np else 10
+    nk_ = b.shape[-1]
+    M_ = b.size//nk_
+    if DEV.is_cupy(b):
+        ones = S3._ones_row(M_, b)
+        dot = lambda a, c: (ones @ (a*c*mw).reshape(M_, nk_)).reshape(-1)
+    else:
+        dot = lambda a, c: xp.sum(a*c*mw, axis=(0, 1, 2, 3))
+    x = DEV.zeros_like(b)
+    r = b - A(x)
+    z = M(r)
+    p = DEV.clone(z)
+    rz = dot(r, z)
+    bn = xp.sqrt(dot(b, b))
+    target = xp.maximum(tol*bn, 1e-300)
+    one = xp.ones_like(rz)
+    it = 0
+    for it in range(1, 4001):
+        Ap = A(p)
+        den = dot(p, Ap)
+        al = xp.where(abs(den) > 1e-300, rz/xp.where(den == 0, one, den),
+                      0.0*one)
+        x = x + al*p
+        r = r - al*Ap
+        if it % check_every == 0 or it == 4000:
+            if bool(xp.all(xp.sqrt(dot(r, r)) < target)):
+                break
+        z = M(r)
+        rzn = dot(r, z)
+        be = xp.where(abs(rz) > 1e-300, rzn/xp.where(rz == 0, one, rz), 0.0*one)
+        p = z + be*p
+        rz = rzn
+    rt = xp.sqrt(dot(b - A(x), b - A(x)))
+    return x, it, float(xp.max(rt/xp.maximum(bn, 1e-300)))
+
+
 def substage(s, Uc, pc, Nk, Nprev, k, dt):
     """One RKW3/CN substage.  Returns (u^k, p^k, iterations)."""
     from . import timestep as T
@@ -135,9 +178,16 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
         num = float((bp[..., 0:1, 0:1]*v*s['mw1']).sum())
         bp = bp.copy()
         bp[..., 0:1, 0:1] -= (num/s['null_norm'])*v
-    phi, it_p, res_p = HH.solve(bp, D, fx, fy, wq, kz**2, 1.0, m, s['mask_p'],
-                                s['Mp'], tol=s['tol'],
-                                check_every=s.get('check_every'))
+    # CONSISTENT PROJECTION when asked for: invert D.G, the same operators the
+    # update uses, so the divergence cancels exactly rather than only weakly.
+    if s.get('dg_pressure'):
+        phi, it_p, res_p = _solve_dg(bp, D, fx, fy, wq, kz, m, s['mask_p'],
+                                     s['Mp'], s['tol'],
+                                     s.get('check_every'))
+    else:
+        phi, it_p, res_p = HH.solve(bp, D, fx, fy, wq, kz**2, 1.0, m,
+                                    s['mask_p'], s['Mp'], tol=s['tol'],
+                                    check_every=s.get('check_every'))
     phi = _join(phi)
 
     # (d) projection and (e) rotational pressure update
@@ -284,9 +334,16 @@ def step_kim_moin(s, Uc, phi_prev, dt, pc=None):
         num = float((bp[..., 0:1, 0:1]*v*s['mw1']).sum())
         bp = bp.copy()
         bp[..., 0:1, 0:1] -= (num/s['null_norm'])*v
-    phi, it_p, res_p = HH.solve(bp, D, fx, fy, wq, kz**2, 1.0, m, s['mask_p'],
-                                s['Mp'], tol=s['tol'],
-                                check_every=s.get('check_every'))
+    # CONSISTENT PROJECTION when asked for: invert D.G, the same operators the
+    # update uses, so the divergence cancels exactly rather than only weakly.
+    if s.get('dg_pressure'):
+        phi, it_p, res_p = _solve_dg(bp, D, fx, fy, wq, kz, m, s['mask_p'],
+                                     s['Mp'], s['tol'],
+                                     s.get('check_every'))
+    else:
+        phi, it_p, res_p = HH.solve(bp, D, fx, fy, wq, kz**2, 1.0, m,
+                                    s['mask_p'], s['Mp'], tol=s['tol'],
+                                    check_every=s.get('check_every'))
     phi = _join(phi)
     Uc = ustar - dt*gradient(phi, D, fx, fy, kz)
     if pc is not None:

@@ -45,23 +45,40 @@ def divnorm(Uc, D, fx, fy, kz, wq):
     return np.sqrt(dn/max(g2, 1e-300))
 
 
-# ---- fractional step
-s = F2.build(N=N, ne=NE, nz=NZ, nu=NU, tol=TOL)
-Uc = F2.ic_tgv(s)
-pc = np.zeros((s['m'].nelem, N+1, N+1, 1, s['nk']), dtype=complex)
-Np_ = np.zeros((s['m'].nelem, N+1, N+1, 3, s['nk']), dtype=complex)
-pre = [HH.fdm_preconditioner(s['m'], N, T.implicit_coeff(DT, k)+NU*(s['kz']**2),
-                             NU, s['mask_u'], 6, s['nk'])
-       for k in range(T.NSTAGE)]
-D, fx, fy, kz, wq = s['D'], s['m'].facx, s['m'].facy, s['kz'], s['m'].wq
-fs = [divnorm(Uc, D, fx, fy, kz, wq)]
-for i in range(NSTEP):
+# ---- is the D.G operator symmetric?  CG needs it, and LGL summation-by-parts
+# only gives it on a periodic seam.
+_s = F2.build(N=N, ne=NE, nz=NZ, nu=NU, tol=TOL)
+_m, _D = _s['m'], _s['D']
+_mk, _mw = _s['mask_p'], S3.multiplicity_weight(_s['m'], _s['mask_p'].shape)
+_rng = np.random.default_rng(0)
+_x = S3.gs(_m, _rng.standard_normal(_mk.shape))*_mk
+_y = S3.gs(_m, _rng.standard_normal(_mk.shape))*_mk
+_A = lambda v: HH.apply_dg(v, _D, _m.facx, _m.facy, _m.wq, _s['kz'], _m, _mk)
+_num = abs(np.sum(_x*_A(_y)*_mw) - np.sum(_y*_A(_x)*_mw))
+print(f'D.G symmetry (continuous probes): '
+      f'{_num/abs(np.sum(_x*_A(_x)*_mw)):.2e}')
+print(f'D.G positive:  x^T A x = {np.sum(_x*_A(_x)*_mw):.4e}\n')
+
+# ---- fractional step, both pressure operators
+for dg in (False, True):
+  s = F2.build(N=N, ne=NE, nz=NZ, nu=NU, tol=TOL)
+  s['dg_pressure'] = dg
+  Uc = F2.ic_tgv(s)
+  pc = np.zeros((s['m'].nelem, N+1, N+1, 1, s['nk']), dtype=complex)
+  Np_ = np.zeros((s['m'].nelem, N+1, N+1, 3, s['nk']), dtype=complex)
+  pre = [HH.fdm_preconditioner(s['m'], N, T.implicit_coeff(DT, k)+NU*(s['kz']**2),
+                               NU, s['mask_u'], 6, s['nk'])
+         for k in range(T.NSTAGE)]
+  D, fx, fy, kz, wq = s['D'], s['m'].facx, s['m'].facy, s['kz'], s['m'].wq
+  fs = [divnorm(Uc, D, fx, fy, kz, wq)]
+  for i in range(NSTEP):
     for k in range(T.NSTAGE):
         s['Mu'] = pre[k]
         Nk = -CV.convective(Uc, D, fx, fy, kz, NZ)
         Uc, pc, _ = PJ.substage(s, Uc, pc, Nk, Np_, k, DT)
         Np_ = Nk
     fs.append(divnorm(Uc, D, fx, fy, kz, wq))
+  globals()['fs_dg' if dg else 'fs_wk'] = fs
 
 # ---- VVP least squares
 ops = TG.Ops('numpy')
@@ -79,7 +96,7 @@ for i in range(NSTEP):
     ls.append(divnorm(vel(U), D, fx, fy, kz, wq))
 
 print(f'TGV, {NE}x{NE} N={N} Nz={NZ}, dt={DT}, tol={TOL:.0e}\n')
-print(f'{"step":>5} {"fractional step":>17} {"VVP LSSEM":>13}   ratio')
+print(f'{"step":>5} {"FS weak K":>12} {"FS D.G":>12} {"VVP LSSEM":>12}')
 for i in (0, 1, 5, 10, NSTEP):
-    print(f'{i:>5} {fs[i]:>17.3e} {ls[i]:>13.3e}   {fs[i]/max(ls[i],1e-300):>7.1f}x')
+    print(f'{i:>5} {fs_wk[i]:>12.3e} {fs_dg[i]:>12.3e} {ls[i]:>12.3e}')
 print(f'\n  ||div u|| / ||grad u||_F, the ratio 3D_STATUS.md sec 7P.1 uses.')

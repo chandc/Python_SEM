@@ -251,3 +251,53 @@ def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
     rt = xp.sqrt(dot(b - A(x), b - A(x)))
     rel = float(xp.max(rt/xp.maximum(bn, 1e-300)))
     return x, it, rel
+
+
+def apply_dg(U, D, facx, facy, wq, kz, mesh=None, mask=None):
+    """-M (d_xx + d_yy - kz^2): the CONSISTENT projection operator, D composed
+    with G using the SAME strong-form derivatives the projection itself uses.
+
+    WHY, and it is the whole point.  The projection sets
+    u^{n+1} = uhat - dt*G phi with (D.G) phi = D uhat / dt, so
+
+        D u^{n+1} = D uhat - dt (D.G) phi
+
+    cancels EXACTLY -- but only if the operator inverted is D composed with G.
+    `apply` inverts the WEAK stiffness matrix K instead, which is G^T G for the
+    WEAK gradient/divergence pair, not for the strong one.  Measured: the
+    projection then leaves ||div u||/||grad u|| at 3.6e-04 where LSSEM holds
+    4.1e-07 (FRACTIONAL_STEP_PLAN.md sec 3.1d).
+
+    IT DOES NOT WORK IN CONTINUOUS-GALERKIN SEM.  Measured symmetry on
+    continuous probes: 2.82e-02, and CG blew the solution up on step one
+    (divergence 5.9e-01, then collapse).  Kept as a record of why.
+
+    The argument that it should work is right in 1-D on ONE element: LGL
+    satisfies summation by parts, (W d_x)^T = -W d_x plus boundary terms, so
+    W d_xx is symmetric once those cancel on a periodic seam.  It fails
+    multi-element because this applies d_x TWICE ELEMENT-LOCALLY, and the
+    intermediate gradient is DISCONTINUOUS at element interfaces -- which is
+    inherent to continuous Galerkin, where only the field is continuous, not
+    its derivative.  The interface terms SBP needs therefore do not cancel, and
+    gather-scattering afterwards does not recover them.
+
+    A consistent strong-form D.G needs a discretisation where the intermediate
+    gradient is single-valued: a DG formulation with numerical fluxes, or a
+    mixed/staggered pressure space.  Neither is a small change here.
+
+    WHAT THIS LEAVES: the weak pair G and -G^T IS adjoint, and their
+    composition is exactly the stiffness matrix K that `apply` already uses.
+    So the projection is exact in the WEAK sense and the ~1e-4 residue is in
+    the STRONG (pointwise) divergence -- which is what LSSEM penalises directly
+    and why it holds 4.1e-07 there.  The gap is a property of the two
+    formulations, not a bug in either.
+    """
+    if mask is not None:
+        U = U*mask
+    lap = (DV.ddx(DV.ddx(U, D, facx), D, facx)
+           + DV.ddy(DV.ddy(U, D, facy), D, facy)
+           - (kz**2)*U)
+    out = -wq[..., None, None]*lap
+    if mesh is not None:
+        out = S3.gs(mesh, out)
+    return out*mask if mask is not None else out
