@@ -2705,6 +2705,38 @@ that trip also carried 11% divergence error whose spurious energy may have helpe
 drive it — so 0.277 may still be marginal, and the curl-of-potential noise may
 lack the streamwise scales the streak instability needs.
 
+### 7P.4 `minchan_002` retired at t = 1.170 — the verdict, and the useful half
+
+Stopped deliberately after 16 h, one full eddy turnover, rather than spending the
+remaining ~11 days asymptoting to laminar Poiseuille.
+
+| t | `u_τ` | `U_b` | `rms_w` | ε |
+|---|---|---|---|---|
+| 0.001 | 0.998 | 15.451 | **0.1354** | 62.0 |
+| 0.400 | 0.834 | 15.561 | **0.1255** | 49.5 |
+| 0.800 | 0.780 | 15.719 | **0.1154** | 47.6 |
+| 1.170 | 0.757 | 15.884 | **0.1079** | 48.6 |
+
+`rms_w` **−20% monotonically, no inflection**; `U_bulk` climbing toward the
+laminar 60; `u_τ` falling away from 1. Sub-threshold disturbance, decaying.
+
+**Two lessons, and the second is the more useful one.**
+
+**A correct fix for one problem created another.** Making the trip solenoidal was
+right — §7P.1 is unambiguous — but it also made it 1.8× weaker (`rms_w`
+0.243 → 0.135) and that crossed the transition threshold. The fix was evaluated
+against the property it was designed to fix (divergence: 3.2e−01 → 1.0e−04) and
+not against the property it incidentally changed. **When a fix alters a field,
+re-check every quantity that field controls, not just the one that motivated it.**
+
+**The solver was faultless, and that is worth as much as the run would have been.**
+For 1170 steps: `div` held at 7.81e−02 to *three figures*, CFL 0.90–0.92 with no
+drift, `conv` shrinking, CG steady, budgets closing throughout. §7P.1's run
+drifted on every one of those while looking healthy on the diagnostics then being
+logged. **The instrumentation added after §7P.1 is now demonstrated to
+discriminate a sound run from a contaminated one** — which is exactly what L16
+asked for, and it cost 16 h rather than 12 days to establish.
+
 ## 9. Inventory
 
 ### Modules (`lssem3d/`)
