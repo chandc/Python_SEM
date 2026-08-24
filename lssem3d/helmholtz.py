@@ -153,7 +153,8 @@ def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
     z = M(r)
     p = DEV.clone(z)
     rz = dot(r, z)
-    target = xp.maximum(tol*xp.sqrt(dot(b, b)), 1e-300)
+    bn = xp.sqrt(dot(b, b))
+    target = xp.maximum(tol*bn, 1e-300)
     one = xp.ones_like(rz)
     it = 0
     for it in range(1, max_iter + 1):
@@ -170,4 +171,9 @@ def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
         be = xp.where(abs(rz) > 1e-300, rzn/xp.where(rz == 0, one, rz), 0.0*one)
         p = z + be*p
         rz = rzn
-    return x, it
+    # TRUE residual, not the recursive one -- over thousands of iterations the
+    # recursion drifts from b - A x, and CG then declares victory on a number
+    # that no longer describes the iterate.
+    rt = xp.sqrt(dot(b - A(x), b - A(x)))
+    rel = float(xp.max(rt/xp.maximum(bn, 1e-300)))
+    return x, it, rel

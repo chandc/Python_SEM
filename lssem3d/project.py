@@ -87,21 +87,34 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
     # (b) velocity Helmholtz, weak form: (c_k + nu kz^2) M + nu K
     lam_u = ck + nu*(kz**2)
     bu = S3.gs(m, _split(r))*s['mask_u']
-    uhat, it_u = HH.solve(bu, D, fx, fy, wq, lam_u, nu, m, s['mask_u'],
-                          s['Mu'], tol=s['tol'])
+    uhat, it_u, res_u = HH.solve(bu, D, fx, fy, wq, lam_u, nu, m, s['mask_u'],
+                                 s['Mu'], tol=s['tol'])
     uhat = _join(uhat)
 
     # (c) pressure Poisson: kz^2 M + K, natural (Neumann) walls, pinned at kz=0
     div = divergence(uhat, D, fx, fy, kz)
     bp = -S3.gs(m, s['wq1']*_split(ck*div))*s['mask_p']
-    phi, it_p = HH.solve(bp, D, fx, fy, wq, kz**2, 1.0, m, s['mask_p'],
-                         s['Mp'], tol=s['tol'])
+    # COMPATIBILITY AT kz = 0.  That mode has all-Neumann walls and periodic x,
+    # so its operator is singular with the constant in its null space, and
+    # A x = b is solvable only if <1, b> = 0.  Analytically it is -- the
+    # integral of div(uhat) is the flux through a closed boundary where
+    # uhat = 0 -- but discretely it is not, and PINNING a dof does not fix an
+    # incompatible right-hand side: it returns the least-squares answer to an
+    # inconsistent system, with the defect dumped near the pinned node and
+    # accumulated into p every substage.  Project it out instead.
+    v = s['null_kz0']
+    if v is not None:
+        num = float((bp[..., 0:1, 0:1]*v*s['mw1']).sum())
+        bp = bp.copy()
+        bp[..., 0:1, 0:1] -= (num/s['null_norm'])*v
+    phi, it_p, res_p = HH.solve(bp, D, fx, fy, wq, kz**2, 1.0, m, s['mask_p'],
+                                s['Mp'], tol=s['tol'])
     phi = _join(phi)
 
     # (d) projection and (e) rotational pressure update
     Uc = uhat - (dt*T.BETA[k])*gradient(phi, D, fx, fy, kz)
     pc = pc + phi - nu*div
-    return Uc, pc, it_u + it_p
+    return Uc, pc, (it_u, res_u, it_p, res_p)
 
 
 def build_masks(mesh, nk, nz, nfield_c, wall=False):

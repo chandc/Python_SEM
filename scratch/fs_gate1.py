@@ -44,6 +44,11 @@ def build(N=8, nz=8, tol=1e-12):
              lz=sd['lz'], mask_u=mask_u, mask_p=mask_p, tol=tol,
              wq3=m.wq[..., None, None], wq1=m.wq[..., None, None])
     s['Mp'] = HH.fdm_preconditioner(m, N, sd['kz']**2, 1.0, mask_p, 2, nk)
+    # the kz = 0 null vector: the constant, restricted to unpinned dofs
+    v = np.ones(mask_p[..., 0:1, 0:1].shape)*mask_p[..., 0:1, 0:1]
+    s['mw1'] = S3.multiplicity_weight(m, mask_p.shape)[..., 0:1, 0:1]
+    s['null_kz0'] = v
+    s['null_norm'] = float((v*v*s['mw1']).sum())
     return s, sd
 
 
@@ -73,24 +78,37 @@ for dt in (0.01, 0.005, 0.0025):
     Z = np.zeros_like(Uc)
     nstep = int(round(0.05/dt))
     ts, Es = [0.0], [energy(s, Uc)]
-    dv, pm = [], []
+    dv, pm, info = [], [], []
     for i in range(nstep):
         for k in range(T.NSTAGE):
             precond_u(s, dt, k)
-            Uc, pc, _ = PJ.substage(s, Uc, pc, Z, Z, k, dt)
+            Uc, pc, inf = PJ.substage(s, Uc, pc, Z, Z, k, dt)
+            info.append(inf)
         ts.append((i+1)*dt); Es.append(energy(s, Uc))
         dv.append(float(np.abs(PJ.divergence(Uc, s['D'], s['m'].facx,
                                              s['m'].facy, s['kz'])).max()))
         pm.append(float(np.abs(pc).max()))
+    iu = [q[0] for q in info]; ru = [q[1] for q in info]
+    ip = [q[2] for q in info]; rp = [q[3] for q in info]
+    cap = sum(1 for q in iu + ip if q >= 4000)
     print(f'      |div u| {dv[0]:.2e} -> {dv[-1]:.2e}    '
-          f'max|p| {pm[0]:.2e} -> {pm[-1]:.2e}    '
-          f'E {Es[0]:.4e} -> {Es[-1]:.4e}')
+          f'max|p| {pm[0]:.2e} -> {pm[-1]:.2e}    E {Es[-1]:.5e}')
+    print(f'      velocity CG: iters {min(iu)}-{max(iu)}  worst true resid '
+          f'{max(ru):.2e}')
+    print(f'      pressure CG: iters {min(ip)}-{max(ip)}  worst true resid '
+          f'{max(rp):.2e}   {"*** SOLVES HIT THE CAP: " + str(cap) + " ***" if cap else ""}')
     ts, Es = np.array(ts), np.array(Es)
     k0 = len(ts)//2
     sig = -0.5*np.polyfit(ts[k0:], np.log(Es[k0:]/Es[0]), 1)[0]
     rel = abs(sig - SD.SIGMA_2D)/SD.SIGMA_2D
     rows.append((dt, sig, rel))
     print(f'   dt = {dt:<8g} sigma = {sig:.7f}   rel err {rel:.3e}', flush=True)
+    # INSTANTANEOUS decay rate per step -- a fit over 3-11 points cannot tell a
+    # startup transient from a wrong rate, and the two have opposite meanings.
+    inst = -0.5*np.diff(np.log(Es))/dt
+    idx = list(range(0, len(inst), max(1, len(inst)//6))) + [len(inst)-1]
+    print('      sigma(t):  ' + '  '.join(
+        f't={ts[j+1]:.3f}:{inst[j]:.4f}' for j in sorted(set(idx))))
 order = np.log2(rows[0][2]/rows[-1][2])/2
 ok = rows[-1][2] < 2e-5 and order > 1.7
 print(f'\n   convergence order in dt = {order:.2f} (expect ~2)   '

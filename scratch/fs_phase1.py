@@ -48,6 +48,10 @@ def make(N, ex, ey, nz, nu, wall=False, tol=1e-11):
     s = dict(m=m, D=diff_matrix(N), N=N, nz=nz, nk=nk, nu=nu, kz=kz,
              X=X, Y=Y, mask_u=mask_u, mask_p=mask_p, tol=tol,
              wq3=m.wq[..., None, None], wq1=m.wq[..., None, None])
+    v = np.ones(mask_p[..., 0:1, 0:1].shape)*mask_p[..., 0:1, 0:1]
+    s['mw1'] = S3.multiplicity_weight(m, mask_p.shape)[..., 0:1, 0:1]
+    s['null_kz0'] = v
+    s['null_norm'] = float((v*v*s['mw1']).sum())
     s['Mu'] = HH.fdm_preconditioner(m, N, 0.0, nu, mask_u, 6, nk)  # rebuilt per dt
     s['Mp'] = HH.fdm_preconditioner(m, N, kz**2, 1.0, mask_p, 2, nk)
     return s
