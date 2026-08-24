@@ -166,7 +166,10 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
     the stage is solving for.  Convection is explicit, so the system is linear
     and each sub-iteration is one solve, warm-started from the last.
     """
-    m, D, kz, mask, nu, nz = s['m'], s['D'], s['kz'], s['mask'], s['nu'], s['nz']
+    m, nu, nz = s['m'], s['nu'], s['nz']
+    _d = _device_arrays(s, U)
+    D, kz, mask = _d['D'], _d['kz'], _d['mask']
+    facx, facy = _d['facx'], _d['facy']
     c = T.implicit_coeff(dt, k)
     # Row weights arrive as NumPy from momentum_row_weights.  Multiplying a CUDA
     # tensor by a host array raises rather than promoting, so move them once here
@@ -174,9 +177,9 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
     if rw is not None:
         rw = DEV.to_device(rw, U)
     Uc = OP.to_complex(U)
-    Nk = -CV.convective(Uc, D, m.facx, m.facy, kz, nz)
+    Nk = -CV.convective(Uc, D, facx, facy, kz, nz)
     Nk[..., 0, 0] += s['fx']*nz                    # body force, mode 0, physical
-    R0 = OP.apply_L0_complex(Uc, D, m.facx, m.facy, kz, nu, 0.0, kap)
+    R0 = OP.apply_L0_complex(Uc, D, facx, facy, kz, nu, 0.0, kap)
     Lk = -R0[..., 4:7, :]
 
     # momentum rows: fixed for the whole stage
@@ -187,7 +190,7 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
             T.GAMMA[k]*Nk[..., i, :] + T.ZETA[k]*Nprev[..., i, :]
             + T.ALPHA[k]*Lk[..., i, :]))
 
-    wq = DEV.to_device(m.wq, U)          # device-resident driver: keep the
+    wq = _d['wq']                        # device-resident driver: keep the
     wqR = wq[..., None, None]            # quadrature weights where the state is
     p_prev = Uc[..., OP.P_, :]          # sub-iterate 0: previous time level
     Uit, its, nit = U, 0, 0
@@ -202,16 +205,18 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
         # f must carry the SAME row weighting as the operator, or the defect
         # correction solves a different problem than apply_L represents.
         r = OP.apply_LT(
-            OP.apply_L(Uit, D, m.facx, m.facy, kz, nu, c, wq, kap, rw)
+            OP.apply_L(Uit, D, facx, facy, kz, nu, c, wq, kap, rw)
             - f*wqR*_fw(rw, f.shape[-2]),
-            D, m.facx, m.facy, kz, nu, c, kap)
+            D, facx, facy, kz, nu, c, kap)
         b = -S3.gs(m, r)*mask
         # On a device the thread pool is meaningless (and PAR would slice
         # tensors across workers); go straight to the serial solver, which is
         # already device-resident.
-        solve = S3.pcg if DEV.is_tensor(b) else (
+        # is_tensor alone misses cupy, which would then be handed to the
+        # thread-parallel numpy solver and slice device arrays across workers
+        solve = S3.pcg if (DEV.is_tensor(b) or DEV.is_cupy(b)) else (
             lambda *a, **kw: PAR.pcg(*a, workers=workers, **kw))
-        dU, it, _ = solve(b, D, m.facx, m.facy, kz, nu, c, mesh=m, mask=mask,
+        dU, it, _ = solve(b, D, facx, facy, kz, nu, c, mesh=m, mask=mask,
                           M_inv=None if Minv is None else Minv[k], tol=tol,
                           max_iter=max_iter, wq=wq, kap=kap, rw=rw, x0=x0)
         if warm is not None:
@@ -228,7 +233,33 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
     return Uit, Nk, its
 
 
-def make_precond(s, dt, kap, rowweight=False):
+def _device_arrays(s, like):
+    """Mesh-derived arrays, moved to wherever `like` lives, cached.
+
+    channel3d already moved `wq`, which was enough for the torch path because
+    that backend converts host arrays internally.  CuPy does not: an
+    ElementwiseKernel handed a numpy array raises a bare "Unsupported type
+    numpy.ndarray" from deep inside the kernel launch, with nothing pointing at
+    the caller.  D, facx, facy, kz and mask all reach the operator, so all of
+    them have to move.
+
+    Cached on `s` because `mask` is full-size -- transferring it every stage
+    would be a real cost against a solve that is otherwise device-resident.
+    """
+    tag = ('cupy' if DEV.is_cupy(like) else
+           'torch' if DEV.is_tensor(like) else 'host')
+    got = s.get('_dev')
+    if got is not None and got['tag'] == tag:
+        return got
+    to = lambda a: DEV.to_device(a, like)
+    got = dict(tag=tag, D=to(s['D']), facx=to(s['m'].facx),
+               facy=to(s['m'].facy), kz=to(s['kz']), mask=to(s['mask']),
+               wq=to(s['m'].wq))
+    s['_dev'] = got
+    return got
+
+
+def make_precond(s, dt, kap, rowweight=False, like=None):
     shape = (s['m'].nelem, s['N']+1, s['N']+1, OP.NVAR_R, s['nk'])
     out = []
     for k in range(T.NSTAGE):
@@ -240,7 +271,10 @@ def make_precond(s, dt, kap, rowweight=False):
         # jacobi_inverse, not 1/max(d, 1e-30): the clamp puts 1e30 on every
         # PRESCRIBED dof (diagonal exactly 0) and survives only because the
         # masked residual happens to be exactly zero.
-        out.append(S3.jacobi_inverse(d, s['mask']))
+        inv = S3.jacobi_inverse(d, s['mask'])
+        # the preconditioner meets the residual inside pcg, so it must live
+        # where the state does
+        out.append(inv if like is None else DEV.to_device(inv, like))
     return out
 
 

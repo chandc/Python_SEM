@@ -313,11 +313,23 @@ def to_device(s, U):
     mutating the shared mesh would silently couple them.
     """
     import copy
-    import torch
-    from lssem3d import kernels_torch as KT
-    dev = KT.device()
-    t = lambda a: torch.as_tensor(np.ascontiguousarray(a, dtype=np.float64),
-                                  device=dev)
+    # BACKEND-AGNOSTIC.  This was written against torch and imported it
+    # directly, so a cupy run failed at `import torch` with no torch installed
+    # -- the backend was selected, the state was never moved, and the operator
+    # met NumPy.  Both accelerated backends move arrays the same way.
+    name = backend.get_backend()
+    if name == 'cupy':
+        import cupy as cp
+        t = lambda a: cp.asarray(np.ascontiguousarray(a, dtype=np.float64))
+    elif name == 'torch':
+        import torch
+        from lssem3d import kernels_torch as KT
+        dev = KT.device()
+        t = lambda a: torch.as_tensor(
+            np.ascontiguousarray(a, dtype=np.float64), device=dev)
+    else:
+        raise ValueError(f'to_device called with backend {name!r}; '
+                         'only cupy and torch have devices')
     m2 = copy.copy(s['m'])
     m2.facx, m2.facy = t(s['m'].facx), t(s['m'].facy)
     m2.wq = t(s['m'].wq)
@@ -389,8 +401,23 @@ def price(N=8, ex=6, ey=18, nz=32, dt=None):
     if dt is None:
         dt = 2.0e-3
     print('\n  cfl(dt=%g) = %.3f   (RKW3 limit sqrt(3) = 1.732)' % (dt, cfl(s, U, dt)))
-    Minv = _precond(s, dt)
-    Nprev = np.zeros(OP.to_complex(U).shape[:-2] + (3, s['nk']), dtype=complex)
+    # MOVE THE PROBLEM TO THE DEVICE, exactly as run() does.  price() did not,
+    # so with LSSEM3D_BACKEND=cupy the operator dispatched to the CuPy kernels
+    # while the state was still NumPy -- "Unsupported type numpy.ndarray" from
+    # inside an ElementwiseKernel.  On the torch path it merely crossed the bus
+    # on every call, which is the 8x slowdown to_device was written to stop.
+    s_host = s
+    if backend.get_backend() in ('torch', 'cupy'):
+        s, U = to_device(s, U)
+        print('  state moved to device (%s)' % backend.get_backend())
+    Minv = _precond(s_host, dt, like=U)
+    # allocate the convective history WHERE THE STATE IS.  np.zeros here left
+    # a host array meeting a device Nk in the RK combination, one line deeper
+    # than the operator -- the same "Unsupported type numpy.ndarray", with the
+    # traceback pointing at arithmetic rather than at the allocation.
+    _xp = DEV.xp(U)
+    Nprev = _xp.zeros(tuple(OP.to_complex(U).shape[:-2]) + (3, s['nk']),
+                      dtype=complex)
     t0 = time.perf_counter(); U1, Nprev, it = advance(s, U, Nprev, dt, Minv)
     t1 = time.perf_counter() - t0
     t0 = time.perf_counter(); U1, Nprev, it = advance(s, U1, Nprev, dt, Minv)
