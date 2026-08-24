@@ -158,6 +158,50 @@ the classic $O(\Delta t)$ numerical boundary layer of thickness
 $\sim\sqrt{\nu\Delta t}$. The LS path has no analogue: it imposes velocity
 directly and never splits.
 
+### 3.1a MEASURED, 2026-08-24: the two forms bracket the problem
+
+Both were built and run on Gate 1 (channel, no-slip, non-zero pressure):
+
+| form | stability | order |
+|---|---|---|
+| incremental rotational | **unstable** — σ runs 9.316 → 9.944 over 40 steps | 2 in principle |
+| pressure-free | **perfectly stable** — σ(t) flat, identical at every step count | **0.95–0.97, first** |
+
+The instability was confirmed rather than inferred: running the same case with
+the increment dropped removes it completely and reproducibly. The feedback loop
+is `p^k = p^{k-1} + φ − ν∇·û` re-entering the next substage through
+`−β_kΔt∇p`, which amplifies any inconsistency in the pressure boundary
+condition.
+
+**This makes the consistent condition necessary, and it is a SCHEME CHANGE, not
+a boundary term.** ∂p/∂n = −ν n·(∇×ω) applies to the *full* pressure. In the
+incremental form, if $p^{k-1}$ already satisfies it then φ's own condition is
+nearly homogeneous — which is what we have and what is unstable. Adding a
+boundary integral for φ re-imposes what is already there.
+
+The resolution is **consistent splitting** (Guermond–Shen velocity-correction):
+stop forming an increment and solve for the FULL pressure each substage,
+
+$$\nabla^2 p^{k} = \nabla\cdot\big(\mathbf{N}^{k} + \nu\nabla^2\mathbf{u}^{k}\big),
+\qquad \frac{\partial p^{k}}{\partial n}\bigg|_\Gamma = -\nu\,\mathbf{n}\cdot(\nabla\times\boldsymbol\omega)\bigg|_\Gamma$$
+
+with the Neumann data entering as a boundary integral $\oint g\,v\,\mathrm{d}s$
+on the right-hand side of the weak form. Three pieces of work, none large:
+wall-edge quadrature (edge nodes, 1-D weights, the edge Jacobian $1/f_x$ or
+$1/f_y$), evaluation of $\mathbf{n}\cdot(\nabla\times\boldsymbol\omega)$ —
+cheap here because $\boldsymbol\omega$ is already a primary variable next door
+in the VVP formulation — and restructuring `project.substage` to solve for $p$
+rather than for an increment.
+
+One hypothesis raised and **not** confirmed: that applying an incremental scheme
+per RK substage is ill-founded because the SMR weights sum to
+$\beta_0+\beta_1+\beta_2 = 0.606$ rather than 1. It motivated testing the
+pressure-free form (which Kim–Moin–Moser lineage codes use for RKW3), and the
+first-order result there is consistent with standard theory for that form and
+settles nothing about the substage argument. Separating it needs the
+incremental form on a single-stage integrator, where the weights are trivially
+consistent.
+
 ### 3.2 Three handles, in order of preference
 
 1. **Rotational form** (§1.2e). Reduces the pressure error to
