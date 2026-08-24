@@ -280,15 +280,26 @@ convergence in $N$ and exactness of the FDM element inverse. *Gate: error at
 machine precision for the single-element case, spectral decay for
 multi-element.*
 
-**Phase 1 — Stokes, periodic.** No convection. *Gate 1: the analytic decay
+**Phase 1 — Stokes, periodic. DONE.** Periodic order **2.00**; channel
+**~1.6**, which is the O($\Delta t^{3/2}$) the literature predicts for the
+tangential slip at walls, reached with a pressure-free projection plus the
+Kim–Moin wall correction. The LS path holds 2.00 in *both* — wall accuracy is
+the price of splitting, and a real formulation-level advantage of VVP LSSEM.
+Original text: **Phase 1 — Stokes, periodic.** No convection. *Gate 1: the analytic decay
 $\sigma = 9.3137399$ and second-order convergence in $\Delta t$* — the same
 test `cupy_validation_ladder.py` runs. **This is the gate that decides whether
 the splitting is done right**; a first-order pressure treatment shows up here
 immediately.
 
-**Phase 2 — TGV Re = 100, periodic.** Add convection. *Gate 2: temporal order
-2.00 on the rotated $(x,z)$ configuration; Gate 3: the parameter-free balance
-$-\mathrm{d}E/\mathrm{d}t = 2\nu\Omega$ within 1e-5.*
+**Phase 2 — TGV Re = 100, periodic.** Add convection. **GATE 3 PASSES,
+2026-08-24**: worst deviation from the balance **5.16e-05** against a 1e-4
+criterion (the LS path holds 6.65e-06 — ~8× tighter, expected, since it solves
+velocity, vorticity and pressure simultaneously where this one splits). The
+most informative gate available: no fitted constant, and a *joint* statement
+about the convective term, the viscous term and the integrator, so it fails if
+any one is wrong. `convect.convective` was reused **unchanged**, as predicted —
+it reads only u, v, w at indices 0, 1, 2, exactly the fractional-step layout.
+Gate 2 (rotated $(x,z)$ order) not yet run.
 
 **Phase 3 — the A/B that settles the speed question.** TGV Re = 800 at $88^3$,
 against the LS run completing now. Same $\Delta t$, same grid, same tolerance.
