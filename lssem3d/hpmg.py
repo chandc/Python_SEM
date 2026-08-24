@@ -138,6 +138,26 @@ class HelmholtzPMG:
         return z + self.sm[i](r - self.lv[i].A(z))
 
     def __call__(self, r):
+        """HOST-RESIDENT -- this is the port that is still missing.
+
+        The V-cycle runs in NumPy and the residual crosses the bus each way,
+        every CG iteration.  Measured on the Re_tau = 180 channel:
+
+            GPU matvec       0.71 ms
+            PMG V-cycle    194.98 ms      275x the matvec
+
+        On the Spark that is tolerable: unified memory makes the 2.3 MiB round
+        trip nearly free and the Grace cores are quick.  On a DISCRETE GPU it is
+        worse on both counts -- PCIe transfers, and Colab's vCPU measured 3.4x
+        slower than the Spark at issuing work.  So the A100 estimates that
+        scaled the whole solve by the GPU ratio are NOT reliable for this
+        preconditioner; the pressure solve would not scale at all.
+
+        Everything here can move: HH.apply is already device-capable, the
+        transfer operators are einsums, and the coarse solve is a small dense
+        solve per mode.  _Lvl just has to build its operator from device
+        arrays, exactly as project.substage now does.
+        """
         host = DEV.to_host(r) if hasattr(DEV, 'to_host') else r
         if not isinstance(host, np.ndarray):
             host = host.get() if hasattr(host, 'get') else np.asarray(host)
