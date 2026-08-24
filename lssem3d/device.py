@@ -38,14 +38,36 @@ try:
 except Exception:                       # torch is optional; NumPy path unaffected
     torch = None
 
+try:
+    import cupy                         # optional, exactly like torch
+except Exception:
+    cupy = None
+
 
 def is_tensor(a):
     return torch is not None and isinstance(a, torch.Tensor)
 
 
+def is_cupy(a):
+    """CuPy arrays are a SECOND device namespace, independent of torch.
+
+    They are NumPy-compatible enough that every *computational* helper below
+    already works on them through NEP-18: `np.einsum` on a CuPy array
+    dispatches to `cupy.einsum` with no code change.  What does NOT dispatch is
+    array CREATION -- `np.zeros` makes a host array whatever `like` is -- so
+    the creation helpers ask `xp(like)` instead of hard-coding `np`.  That one
+    change is essentially the whole CuPy seam; see CUPY_BACKEND.md.
+    """
+    return cupy is not None and isinstance(a, cupy.ndarray)
+
+
 def xp(a):
     """The array namespace `a` belongs to."""
-    return torch if is_tensor(a) else np
+    if is_tensor(a):
+        return torch
+    if is_cupy(a):
+        return cupy
+    return np
 
 
 def deterministic(on=True):
@@ -117,14 +139,14 @@ def zeros_complex(shape, like):
     if is_tensor(like):
         return torch.zeros(tuple(shape), dtype=torch.complex128,
                            device=like.device)
-    return np.zeros(tuple(shape), dtype=complex)
+    return xp(like).zeros(tuple(shape), dtype=complex)
 
 
 def empty_complex(shape, like):
     if is_tensor(like):
         return torch.empty(tuple(shape), dtype=torch.complex128,
                            device=like.device)
-    return np.empty(tuple(shape), dtype=complex)
+    return xp(like).empty(tuple(shape), dtype=complex)
 
 
 def cat(parts, axis):
@@ -210,8 +232,48 @@ def gs_torch(mesh, U):
     return g[idx].reshape(U.shape)
 
 
+def gs_cupy(mesh, U):
+    """Q^T Q on a CuPy array: segmented sum, then broadcast back.
+
+    Same algebra as `gs_torch` -- Q is a pure gather, so Q^T Q is a scatter-add
+    then a fancy-index -- with `cupyx.scatter_add` in place of `index_add_`.
+    Like the torch path this uses atomics, so summation order is not
+    reproducible run to run; parity is checked to a tolerance, not bitwise.
+    """
+    import cupyx
+    idx, ng = _index_cupy(mesh)
+    nel, n, _, nv, nk = U.shape
+    flat = U.reshape(nel*n*n, nv*nk)
+    g = cupy.zeros((ng, nv*nk), dtype=U.dtype)
+    cupyx.scatter_add(g, idx, flat)
+    return g[idx].reshape(U.shape)
+
+
+_IDX_CP = weakref.WeakKeyDictionary()
+
+
+def _index_cupy(mesh):
+    """Cached (index, n_global).
+
+    `n_global` IS CACHED DELIBERATELY.  Computing it as `int(idx.max())` per
+    call -- the obvious way, and how this was first written -- costs a device
+    reduction AND a host synchronisation on every gather-scatter, i.e. once
+    per matvec.  Measured at dispatch-dominated size that made gather-scatter
+    49% of the whole per-matvec host cost.  The value is a property of the
+    mesh, so it is taken once from `mesh.gidx` on the host.
+    """
+    hit = _IDX_CP.get(mesh)
+    if hit is None:
+        flat = np.ascontiguousarray(mesh.gidx.reshape(-1)).astype(np.int64)
+        hit = (cupy.asarray(flat), int(flat.max()) + 1)
+        _IDX_CP[mesh] = hit
+    return hit
+
+
 def to_device(a, like):
     """Move `a` to the device/dtype of `like`, leaving NumPy alone if `like` is."""
+    if is_cupy(like):
+        return a if is_cupy(a) else cupy.asarray(a)
     if not is_tensor(like):
         return a
     if is_tensor(a):

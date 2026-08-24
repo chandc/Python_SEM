@@ -36,10 +36,18 @@ def test_trailing_axes_are_independent():
     m, D = _geom()
     U = np.random.default_rng(1).standard_normal((m.nelem, N+1, N+1, 4, 6))
     got = DV.ddx(U, D, m.facx)
+    # RELATIVE, not absolute.  A batched contraction and a per-slice one are
+    # the same arithmetic in a different order, so they agree to rounding --
+    # not to the bit.  The derivatives here have magnitude ~1e2, so an
+    # absolute 1e-14 is really a demand for ~1e-16 relative, i.e. exact
+    # agreement, which held only because the Mac's BLAS happened to associate
+    # the batched case identically.  aarch64 associates it differently and
+    # missed by one ulp (1.4e-14 absolute, 1.3e-16 relative).
+    scale = np.abs(got).max()
     for v in range(4):
         for k in range(6):
             one = DV.ddx(U[..., v, k], D, m.facx)
-            assert np.abs(got[..., v, k] - one).max() < 1e-14
+            assert np.abs(got[..., v, k] - one).max() < 1e-13*scale
 
 
 def test_adjointness():

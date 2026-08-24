@@ -1,0 +1,281 @@
+# Fractional step as an alternative solve path — implementation plan
+
+Status: **plan only, nothing built.** Written 2026-08-23 in answer to "would
+the fractional step method run faster than VVP LSSEM?"
+
+---
+
+## 0. The case, in this project's own numbers
+
+VVP LSSEM solves the normal equations of a first-order system, and that costs
+**4750 CG iterations per step** at $16\times16$, $N=8$, $N_z=128$ (48 s/step on
+an A100). Four things compound:
+
+| | LSSEM | fractional step |
+|---|---|---|
+| conditioning | $\kappa(L^\mathsf{T}L)=\kappa(L)^2$ | $\kappa$ of a Helmholtz / Poisson |
+| unknowns | 14 real fields | 8 real fields |
+| matvec | $L^\mathsf{T}WL$ — two operator applications | one, of a simpler operator |
+| **multigrid** | **fails — slow modes are rough (§7K.2)** | **works — Poisson's slow modes are smooth** |
+
+The last row is decisive and is measured, not assumed: PMG on the LS operator
+gives $7.4\times$ fewer iterations for $\approx18$ matvecs of cost, a net loss,
+because the modes it cannot reach are the rough ones. Poisson is the operator
+multigrid was invented for.
+
+**Estimated speedup 30–100×.** That is operator-count reasoning, not a
+measurement — the point of Phase 3 below is to replace it with one. An external
+sanity check: Nek5000, a projection-type SEM code with multigrid pressure, runs
+TGV at this resolution in roughly a second per step.
+
+---
+
+## 1. Equations
+
+Incompressible Navier–Stokes, with $\mathbf{N}(\mathbf{u}) = -(\mathbf{u}\cdot\nabla)\mathbf{u}$:
+
+$$\frac{\partial \mathbf{u}}{\partial t} = \mathbf{N}(\mathbf{u}) - \nabla p + \nu\nabla^2\mathbf{u},
+\qquad \nabla\cdot\mathbf{u} = 0 .$$
+
+### 1.1 The time scheme is kept EXACTLY as it is
+
+`lssem3d/timestep.py` implements Spalart–Moser–Rogers RKW3/CN, three substages
+$k=0,1,2$:
+
+$$\mathbf{U}^{k} = \mathbf{U}^{k-1} + \Delta t\Big[\underbrace{\gamma_k\mathbf{N}^{k-1} + \zeta_k\mathbf{N}^{k-2}}_{\text{explicit convection}} + \underbrace{\alpha_k\mathbf{L}^{k-1} + \beta_k\mathbf{L}^{k}}_{\text{Crank–Nicolson viscous}}\Big]$$
+
+with $\mathbf{L} = \nu\nabla^2\mathbf{u}$ and
+
+$$\gamma = \left(\tfrac{8}{15},\ \tfrac{5}{12},\ \tfrac{3}{4}\right),\quad
+\zeta = \left(0,\ -\tfrac{17}{60},\ -\tfrac{5}{12}\right),\quad
+\alpha+\beta = \gamma+\zeta,\quad
+\tfrac{1}{\beta} = (4.32,\ 4.80,\ 6.00).$$
+
+**Yes, RK3/CN carries over unchanged**, and this is the scheme's home ground:
+SMR was designed for projection-based channel DNS. The projection is applied
+*per substage*, and the implicit coefficient is the same one the LS path uses,
+
+$$c_k \;=\; \frac{1}{\beta_k\,\Delta t}\;=\;\texttt{timestep.implicit\_coeff(dt, k)},$$
+
+so the two paths can be run at identical $\Delta t$ and compared directly.
+$\zeta_0 = 0$ still holds, so **checkpoint/restart stays exact** — the property
+`scratch/tgv_gpu_run.py` relies on.
+
+### 1.2 The four substeps (incremental, rotational form)
+
+Per substage $k$, writing $\hat{\mathbf{u}}$ for the intermediate velocity and
+$\phi$ for the pressure correction:
+
+**(a) Explicit assembly.**
+
+$$\mathbf{r} \;=\; \mathbf{u}^{k-1} + \Delta t\Big[\gamma_k\mathbf{N}^{k-1} + \zeta_k\mathbf{N}^{k-2} + \alpha_k\nu\nabla^2\mathbf{u}^{k-1}\Big] \;-\; \beta_k\Delta t\,\nabla p^{k-1}$$
+
+**(b) Velocity Helmholtz** — three scalar solves (or one batched over
+components):
+
+$$\big(c_k I - \nu\nabla^2\big)\,\hat{\mathbf{u}} \;=\; c_k\,\mathbf{r}$$
+
+**(c) Pressure Poisson** — one scalar solve:
+
+$$\nabla^2\phi \;=\; c_k\,\nabla\cdot\hat{\mathbf{u}}$$
+
+**(d) Projection.**
+
+$$\mathbf{u}^{k} \;=\; \hat{\mathbf{u}} \;-\; \beta_k\Delta t\,\nabla\phi$$
+
+**(e) Pressure update, rotational form.**
+
+$$p^{k} \;=\; p^{k-1} + \phi \;-\; \nu\,\nabla\cdot\hat{\mathbf{u}}$$
+
+The $-\nu\nabla\cdot\hat{\mathbf{u}}$ term is what makes this *rotational*
+(Timmermans; Guermond & Shen). Without it the scheme is only $O(\Delta t)$ in
+pressure and suffers a numerical boundary layer; with it, $O(\Delta t^2)$ in
+velocity and pressure. **It is not optional** — it is the difference between
+matching the LS path's verified order 2 and not.
+
+### 1.3 Fourier reduction — every solve becomes a 2-D scalar Helmholtz
+
+With $\partial_z \to \mathrm{i}k_z$ and $\nabla^2 \to \nabla^2_{xy} - k_z^2$,
+each mode decouples exactly as it does now:
+
+$$\Big[\big(c_k + \nu k_z^2\big)I - \nu\nabla^2_{xy}\Big]\hat{u}_{k_z} = c_k\,r_{k_z}
+\qquad\text{(velocity, 3 components)}$$
+
+$$\Big[\nabla^2_{xy} - k_z^2\Big]\phi_{k_z} = c_k\big(\nabla\cdot\hat{\mathbf{u}}\big)_{k_z}
+\qquad\text{(pressure)}$$
+
+**Four scalar 2-D Helmholtz problems per mode per substage**, against the LS
+path's one coupled 14-field system.
+
+---
+
+## 2. Why FDM finally pays here — the key reuse
+
+`lssem3d/fdm.py` was built today and **failed** for the VVP operator: it
+inverts each field block exactly but drops the inter-field coupling, 37% of the
+operator by Frobenius norm, and lost to plain Jacobi at every order.
+
+**Those solves have no inter-field coupling at all.** Each is a scalar
+Helmholtz $(\lambda I - \nabla^2_{xy})\psi = f$, which on a tensor-product
+element is exactly
+
+$$\lambda\,M\otimes M \;+\; \tfrac{f_x}{f_y}K\otimes M \;+\; \tfrac{f_y}{f_x}M\otimes K$$
+
+— the separable form fast diagonalisation was designed for, with **nothing
+dropped**. Solve $K s = \lambda M s$ once per order, and the element inverse is
+transform → divide → transform back at $O(N^4)$ instead of $O(N^6)$.
+
+So the FDM module is directly reusable, the negative result does not carry
+over, and the same is true of p-multigrid: **the coarse-grid premise holds for
+Poisson**, whose slow modes are smooth, where §7K measured them rough for the
+LS operator.
+
+| $\lambda$ | conditioning | expected CG iterations |
+|---|---|---|
+| velocity: $c_k + \nu k_z^2 \approx 1100$ | strongly mass-dominated | **~5–15** |
+| pressure, $k_z \neq 0$: shift $k_z^2 > 0$ | Helmholtz, benign | **~10–30** |
+| pressure, $k_z = 0$: pure Poisson | **singular** (constant null space) | **~20–60** |
+
+Only **one mode out of 65** is singular, against the LS path where the pressure
+block is singular at $k_z=0$ *and* the whole system is squared.
+
+---
+
+## 3. Wall boundary conditions — the hard part, stated honestly
+
+This is where projection methods are delicate and where the LS formulation is
+genuinely stronger.
+
+### 3.1 The difficulty
+
+Imposing no-slip on the intermediate velocity, $\hat{\mathbf{u}}|_{\Gamma}=0$,
+and homogeneous Neumann on the correction, $\partial\phi/\partial n|_\Gamma = 0$,
+gives a correct **normal** velocity but leaves a **tangential slip**
+
+$$\mathbf{u}^{k}\!\cdot\mathbf{t}\Big|_{\Gamma} \;=\; -\beta_k\Delta t\,\frac{\partial\phi}{\partial t}\Big|_{\Gamma} \;\neq\; 0,$$
+
+the classic $O(\Delta t)$ numerical boundary layer of thickness
+$\sim\sqrt{\nu\Delta t}$. The LS path has no analogue: it imposes velocity
+directly and never splits.
+
+### 3.2 Three handles, in order of preference
+
+1. **Rotational form** (§1.2e). Reduces the pressure error to
+   $O(\Delta t^2)$ and the slip to $O(\Delta t^{3/2})$ in $L^2$. Free — it is
+   one extra term.
+2. **Consistent pressure Neumann condition**, from the normal momentum
+   equation at the wall:
+   $$\frac{\partial p}{\partial n}\Big|_{\Gamma} = -\nu\,\mathbf{n}\cdot(\nabla\times\boldsymbol\omega)\Big|_{\Gamma}$$
+   This removes the boundary layer rather than shrinking it, at the cost of
+   evaluating $\nabla\times\boldsymbol\omega$ on the wall. **The VVP path
+   already carries $\boldsymbol\omega$ as a primary variable**, so this term is
+   cheaper to form here than in a primitive-variable code.
+3. **Verify, do not assume.** Gate 1 below is the same Stokes-decay test the LS
+   path passes at order 2.00. If the splitting has broken the order, that gate
+   says so in one run.
+
+### 3.3 Periodic cases need none of this
+
+TGV and the CORIA benchmark are triply periodic: no walls, no slip error, and
+the only boundary subtlety is the $k_z=0$ pressure null space, which is pinned
+exactly as it is now (`bc.pin_dof`, every local copy of one global node).
+**That is why the first three phases below are periodic** — they isolate the
+splitting error from the wall treatment.
+
+---
+
+## 4. Linear solver
+
+**Per mode, per field: CG with an FDM element-block preconditioner.**
+
+- Reuse `lssem3d/fdm.py` for the element solve — now exact, since there is no
+  field coupling to drop.
+- Reuse `solver3d.pcg` unchanged, including `check_every` (worth 2.5×) and the
+  GEMM inner product (worth 11.6×). Both are field-count agnostic.
+- The $k_z=0$ pressure Poisson is the only singular solve: pin one global dof,
+  and check the compatibility condition $\int_\Omega \nabla\cdot\hat{\mathbf{u}} = 0$,
+  which holds automatically when the velocity BCs are consistent — and is a
+  useful assertion when they are not.
+- **p-multigrid becomes worth reconsidering** for the $k_z=0$ Poisson
+  specifically. §7K's closure was measured on the LS operator; the reasoning
+  that closed it (rough slow modes) does not apply here. The existing `PMG`
+  class works as-is once handed the right operator — with the mask fix from
+  today, and after a port to the device, since it is currently host-only.
+
+---
+
+## 5. What is reused, what is new
+
+**Reused unchanged** — the majority:
+
+`mesh`, `gather_scatter`, `lgl`, `deriv`, `fourier` (FFT, dealiasing),
+`convect` (the convective term, identical), `timestep` (RKW3/CN coefficients),
+`bc.pin_dof`, `solver3d.pcg`, `fdm`, the CuPy/torch kernels for derivatives,
+and `scratch/tgv_gpu_run.py`'s checkpoint/restart driver — whose exactness
+argument ($\zeta_0=0$) survives unchanged.
+
+**New** — four modules, none large:
+
+| module | contents |
+|---|---|
+| `helmholtz.py` | $(\lambda I - \nabla^2_{xy})$ operator, its Jacobi diagonal, FDM factors |
+| `project.py` | the five substeps of §1.2 |
+| `bc_fs.py` | intermediate-velocity BCs, the Neumann/consistent pressure condition |
+| `scratch/fs_run.py` | driver, mirroring `tgv_gpu_run.py` so the two are A/B-comparable |
+
+---
+
+## 6. Phases and gates
+
+Each gate is one the LS path already passes, so the two are directly
+comparable — that is the point.
+
+**Phase 0 — the scalar Helmholtz solver.** Manufactured solution
+$\psi = \sin x\cos y\,\mathrm{e}^{\mathrm{i}k_z z}$; verify spectral
+convergence in $N$ and exactness of the FDM element inverse. *Gate: error at
+machine precision for the single-element case, spectral decay for
+multi-element.*
+
+**Phase 1 — Stokes, periodic.** No convection. *Gate 1: the analytic decay
+$\sigma = 9.3137399$ and second-order convergence in $\Delta t$* — the same
+test `cupy_validation_ladder.py` runs. **This is the gate that decides whether
+the splitting is done right**; a first-order pressure treatment shows up here
+immediately.
+
+**Phase 2 — TGV Re = 100, periodic.** Add convection. *Gate 2: temporal order
+2.00 on the rotated $(x,z)$ configuration; Gate 3: the parameter-free balance
+$-\mathrm{d}E/\mathrm{d}t = 2\nu\Omega$ within 1e-5.*
+
+**Phase 3 — the A/B that settles the speed question.** TGV Re = 800 at $88^3$,
+against the LS run completing now. Same $\Delta t$, same grid, same tolerance.
+*Gate: energy and enstrophy histories agree to discretisation error, and
+report the measured s/step ratio.* This replaces the 30–100× estimate with a
+number.
+
+**Phase 4 — walls.** Lid-driven cavity against Ghia (the LS path reaches 0.45%
+RMS at $8\times8$, order 12) and channel flow. *Gate: no slip error visible
+above discretisation error; second-order convergence retained.* Only here does
+§3 matter.
+
+**Phase 5 — production.** Re = 1600 at $128^3$ against CORIA. If Phase 3
+delivers even $20\times$, this becomes a **2–3 hour run** rather than 69 h, and
+the resolution question ($k_{\max}\eta \approx 0.76$) can be answered by simply
+running $192^3$ instead of arguing about it.
+
+---
+
+## 7. Risks
+
+| risk | handle |
+|---|---|
+| splitting error destroys order 2 | rotational form; Gate 1 catches it in one run |
+| wall slip layer | consistent Neumann BC, cheap here because $\boldsymbol\omega$ is available |
+| $k_z=0$ Poisson singular | pin one dof (existing `bc.pin_dof`); assert compatibility |
+| outflow BCs | **unsolved, and a genuine regression risk.** `DONG_OBC_RESULTS.md` shows the LS/Dong exit reproducing long-domain results where P+Z cannot. Projection methods have their own outflow pathologies. **Do not migrate the 2-D outflow work.** |
+| two solvers to maintain | keep fractional step for periodic DNS, LSSEM where its properties are the point |
+
+**The honest framing: these are different tools, not one replacing the other.**
+For periodic DNS the LS properties — SPD system, no inf–sup constraint,
+equal-order interpolation, vorticity as a primary variable — buy nothing, and
+the squared condition number is pure cost. For truncated domains with outflow,
+they are the whole reason the method was chosen.

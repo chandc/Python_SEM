@@ -32,10 +32,50 @@ def _dot(a, b, w=None):
     product is not the one the assembled operator is symmetric in.
     """
     ab = a*b if w is None else a*b*w
+    if DEV.is_cupy(ab):
+        # This reduction keeps ONLY the mode axis, so ~19 M inputs produce ~65
+        # outputs (290,304:1).  CuPy gives such a reduction roughly one block
+        # per output -- 65 blocks on a 108-SM A100, most of the card idle --
+        # and it measured 9.41 ms against a 0.56 ms bandwidth bound, 17x off.
+        # At two calls per CG iteration that was TWO THIRDS of the entire
+        # solve (matvec 8.5 + 2 dots 18.8 + vector 1.7 = 29.0 ms, against
+        # 29.68 measured by differencing solves at two iteration counts).
+        #
+        # Written as (1 x M) @ (M x nk) it becomes a GEMM, and cuBLAS fills
+        # the card: 0.81 ms, 11.6x.  Fusing the triple product into a
+        # ReductionKernel to remove both temporaries gives 10.17 ms -- no
+        # better -- which is what identifies the reduction SHAPE, not the
+        # temporaries, as the cost.  Agreement with the old path is 3.9e-15
+        # relative, i.e. a different summation order at float64 rounding.
+        nk = ab.shape[-1]
+        M = ab.size//nk
+        return (_ones_row(M, ab) @ ab.reshape(M, nk)).reshape(1, 1, 1, 1, nk)
     # DEV.sum_over, not np.sum: on the GPU path `ab` is a torch tensor and this
     # runs inside the CG loop, where a single host round trip costs 21.9x the
     # matvec (TORCH_VERIFY_PLAN.md V3).
     return DEV.sum_over(ab, (0,) + tuple(SPATIAL))[None, None, None, None, :]
+
+
+_ONES_ROW = {}
+
+
+def _ones_row(M, like):
+    """Cached (1, M) row of ones for the GEMM form of _dot.
+
+    Cached because allocating and filling it per call would reintroduce the
+    traffic the GEMM form exists to avoid.
+    """
+    # Keyed on device and dtype as well as M: a tensor cache keyed on size
+    # alone would hand a CPU row to a CUDA matmul, or fp32 to an fp64 one.
+    key = (M, str(getattr(like, 'device', 'cupy')), str(like.dtype))
+    hit = _ONES_ROW.get(key)
+    if hit is None:
+        if DEV.is_tensor(like):
+            hit = DEV.xp(like).ones((1, M), dtype=like.dtype, device=like.device)
+        else:
+            hit = DEV.xp(like).ones((1, M), dtype=like.dtype)
+        _ONES_ROW[key] = hit
+    return hit
 
 
 def gs(mesh, U):
@@ -48,6 +88,8 @@ def gs(mesh, U):
     """
     if DEV.is_tensor(U):
         return DEV.gs_torch(mesh, U)          # index_add_, no scipy, stays on GPU
+    if DEV.is_cupy(U):
+        return DEV.gs_cupy(mesh, U)           # scatter_add, stays on GPU
     nel, n, _, nv, nk = U.shape
     return gather_scatter(mesh, U.reshape(nel, n, n, nv*nk)).reshape(U.shape)
 
@@ -101,8 +143,15 @@ def normal_op(Ur, D, facx, facy, kz, nu, c, mesh=None, mask=None, wq=None, kap=0
     """
     if mask is not None:
         Ur = Ur*mask
-    out = OP.apply_LT(OP.apply_L(Ur, D, facx, facy, kz, nu, c, wq, kap, rw),
-                      D, facx, facy, kz, nu, c, kap)
+    if DEV.is_cupy(Ur):
+        # One fused call instead of two: apply_L packs its result to split-real
+        # and apply_LT unpacks it again immediately, so calling them separately
+        # costs a real->complex->real round trip per matvec for nothing.
+        from .kernels_cupy import apply_LTL
+        out = apply_LTL(Ur, D, facx, facy, kz, nu, c, wq, kap, rw)
+    else:
+        out = OP.apply_LT(OP.apply_L(Ur, D, facx, facy, kz, nu, c, wq, kap, rw),
+                          D, facx, facy, kz, nu, c, kap)
     if mesh is not None:
         out = gs(mesh, out)
     return out*mask if mask is not None else out
@@ -407,12 +456,22 @@ def jacobi_diagonal_analytic(shape, D, facx, facy, kz, nu, c, mesh=None,
 
 
 def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
-        tol=1e-10, max_iter=2000, x0=None, wq=None, kap=0.0, rw=None):
+        tol=1e-10, max_iter=2000, x0=None, wq=None, kap=0.0, rw=None,
+        check_every=1):
     """Preconditioned CG on A x = b, batched over modes.
 
     Returns (x, iters, resid) with resid the per-mode final residual norm.
     Convergence is per mode: a mode whose residual is already below tol
     contributes nothing further, and the loop exits when ALL modes are below.
+
+    check_every: how often to TEST convergence.  The test reads a boolean on
+    the host, which on a GPU backend forces a synchronisation -- the CPU
+    drains the queue, waits, reads one bit, and re-issues everything.  At
+    every iteration that stall can dominate the iteration itself, and it is
+    invisible to a matvec benchmark, which is how a 9 ms/iteration projection
+    became a measured 36 ms.  Testing every K costs at most K-1 extra
+    iterations out of the thousands a solve takes, and skips K-1 residual
+    reductions as well.  Default 1 keeps the CPU paths bit-identical.
     """
     x = DEV.zeros_like(b) if x0 is None else DEV.clone(x0)
     if mask is not None:
@@ -441,6 +500,18 @@ def pcg(b, D, facx, facy, kz, nu, c, mesh=None, mask=None, M_inv=None,
                           rz/DEV.where(denom == 0, one, denom), 0.0*one)
         x = x + alpha*p
         r = r - alpha*Ap
+        # Only test on check iterations: both the reduction and the host
+        # sync it feeds are skipped in between.  Always test on the last one
+        # so max_iter still reports a meaningful residual.
+        if not (it % check_every == 0 or it == max_iter):
+            z = P(r)
+            rz_new = _dot(r, z, mw)
+            one = DEV.zeros_like(rz) + 1.0
+            beta = DEV.where(abs(rz) > 1e-300,
+                             rz_new/DEV.where(rz == 0, one, rz), 0.0*one)
+            p = z + beta*p
+            rz = rz_new
+            continue
         rn = DEV.sqrt(_dot(r, r, mw))
         if DEV.all_(rn < target):
             # TRUE-RESIDUAL SAFEGUARD, ported from lssem2d.pcg_solve.
