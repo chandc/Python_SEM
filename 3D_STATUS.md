@@ -1742,6 +1742,60 @@ the least-squares functional benefits from it."* **Refuted.** At weight 1 it
 costs 10× in solve time and buys a `div ω` improvement of 5× at a level nine
 orders below the signal.
 
+### 7J.2 `ROW7_WEIGHT` at PRODUCTION mesh size — and the fix is worth far more than §7J measured
+
+§7J fixed `w7 = 1e-4` from a dense spectrum at **2×2 elements**, `N ≤ 10`,
+`k_z = 0`, and §7J.1 validated it on a 3×3-element channel where it was worth
+**5.4×**. The minimal channel is **6×18 elements, N=8, Nz=32, 2.08 M dof** —
+50× the elements — and nothing had checked the parameter there. The full spectrum
+is not computable at that size (97 k global dofs), so the observable is what
+actually costs money: CG iterations on the real defect-correction RHS of a real
+step.
+
+| `w7` | CG/step | wall | vs `w7 = 1` |
+|---|---|---|---|
+| 1e+00 | 169260 | 1189.0 s | 1.00× |
+| 1e−02 | 72901 | 439.7 s | 2.32× |
+| 1e−03 | 20112 | 125.0 s | 8.42× |
+| **1e−04** (production) | **11590** | **58.7 s** | **14.60×** |
+| 1e−05 | 10949 | 51.4 s | 15.46× |
+| 1e−06 | 10875 | 53.5 s | 15.56× |
+
+**The row-7 down-weighting is worth 14.6× at production scale, not 5.4×.** The
+documented figure was measured on a 3×3-element rig and *understates the fix by
+2.7×* — it is the single largest change this solver has had, and it grows with
+mesh size exactly as the §7J condition-number table said it grows with `N`.
+
+**But as a remaining lever it is exhausted.** The curve has plateaued by 1e−5:
+going there buys **~6%**, and 1e−6 adds nothing beyond it. **Recommendation: keep
+1e−4.** Six percent does not justify re-validating M2, Stage 5 and the Stokes
+rate against a changed operator — and lowering `w7` further enforces
+`div ω = 0` less, which §7J checked (rms nine orders below `|ω|`) at 1e−4 and
+*not* below it.
+
+### 7J.3 Warm-starting the defect correction — measured, and it does nothing
+
+`pcg` has always accepted `x0`; no caller ever passed one, so every stage solved
+from zero ~15000 times per run. It changes only the starting point, not the
+convergence target, so it could not trade accuracy for speed.
+
+| step | cold | warm | saved |
+|---|---|---|---|
+| 1 | 11590 | 11590 | 0.0% |
+| 2 | 14263 | 14654 | **−2.7%** |
+| 3 | 14533 | 14157 | 2.6% |
+| 4 | 14628 | 14139 | 3.3% |
+| **total** | **55014** | **54540** | **0.9%** |
+
+**0.9%, and step 2 was worse.** The reason is structural: in a *defect
+correction* `dU` is already small and `x = 0` is close to the answer, so a stale
+`dU` pointing in a different error direction buys nothing. The `warm=` option is
+kept, opt-in and defaulting to off, so the negative result stays reproducible.
+
+**Net for §7J.2 + §7J.3: the two cheap attacks on the iteration count are spent,
+for ~6% and ~1%.** What remains — deflation of the near-null cluster, or a real
+multilevel preconditioner — is days of work, not hours.
+
 ### 7J.1 Milestone re-validation — and the asymmetry that makes it convincing
 
 The operator changed, so **M2 and M5 had to be re-established rather than

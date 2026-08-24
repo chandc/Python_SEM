@@ -219,6 +219,60 @@ def _kz(kz, nk, dev):
     return _t(np.broadcast_to(np.asarray(kz, dtype=float), (nk,)), dev)
 
 
+# torch.compile fuses the elementwise row assembly that follows the einsums --
+# the same lever kernels_cuda.py exploits by hand, but automatic and one line.
+#
+# MEASURED ON GB10, contended: 1.39x / 1.25x / 1.29x at 48^3 / minimal channel /
+# 88^3, correct to 2.2e-16.  Independently measured at 1.36x on an A100 (full-rate
+# FP64) -- the result carrying across a 4.4x difference in FP64 throttling says
+# the win is launch/elementwise overhead, not arithmetic.
+#
+# It does NOT displace kernels_cuda: the hand-fused kernel is still 4.4-4.7x
+# ahead of compiled.  This makes the `torch` backend better for hosts where the
+# CUDA extension cannot be built.
+#
+# Off via LSSEM3D_TORCH_COMPILE=0.  First call pays compilation; shapes are fixed
+# through a run, so dynamic=False avoids recompiling on every distinct nk.
+# FALLBACK MUST HAPPEN AT CALL TIME.  torch.compile is LAZY -- it returns a
+# wrapper and compiles on first invocation -- so guarding only the wrap catches
+# nothing.  Measured: on this macOS host inductor's CPU backend cannot link
+# libc++.1.dylib, and 34 tests failed with InductorError from inside the call.
+#
+# AND YES, THIS FALLS BACK SILENTLY, which backend.py deliberately refuses to do.
+# The cases differ: `set_backend('numba')` is a user's explicit request for a
+# particular IMPLEMENTATION, and quietly substituting another turns a missing
+# dependency into a mysterious slowdown.  torch.compile is an internal
+# optimisation with identical semantics -- eager and compiled agree to 2.2e-16 --
+# so falling back costs speed on a broken toolchain instead of failing outright.
+_COMPILED = {}
+_COMPILE_OK = True
+
+
+def _maybe_compile(fn):
+    global _COMPILE_OK
+    if not _COMPILE_OK or os.environ.get('LSSEM3D_TORCH_COMPILE', '1') in (
+            '0', 'false', 'False'):
+        return fn
+    c = _COMPILED.get(fn)
+    if c is None:
+        try:
+            c = _COMPILED[fn] = torch.compile(fn, dynamic=False)
+        except Exception:
+            _COMPILE_OK = False
+            return fn
+
+    def guarded(*a, **k):
+        global _COMPILE_OK
+        if not _COMPILE_OK:
+            return fn(*a, **k)
+        try:
+            return c(*a, **k)
+        except Exception:
+            _COMPILE_OK = False         # one failure disables it for the process
+            return fn(*a, **k)
+    return guarded
+
+
 # ------------------------------------------------------------------ facades
 
 def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
@@ -238,7 +292,7 @@ def apply_L(Ur, D, facx, facy, kz, nu, c, wq=None, kap=0.0, rw=None):
     dev = device() if was_np else Ur.device
     U = _t(Ur, dev)
     nk = U.shape[-1]
-    R = _apply_L(U, _t(D, dev), _t(facx, dev), _t(facy, dev), _kz(kz, nk, dev),
+    R = _maybe_compile(_apply_L)(U, _t(D, dev), _t(facx, dev), _t(facy, dev), _kz(kz, nk, dev),
                  float(nu), float(c),
                  None if wq is None else _t(wq, dev), float(kap),
                  None if rw is None else _t(rw, dev))
@@ -251,6 +305,6 @@ def apply_LT(Rr, D, facx, facy, kz, nu, c, kap=0.0):
     dev = device() if was_np else Rr.device
     R = _t(Rr, dev)
     nk = R.shape[-1]
-    C = _apply_LT(R, _t(D, dev), _t(facx, dev), _t(facy, dev), _kz(kz, nk, dev),
+    C = _maybe_compile(_apply_LT)(R, _t(D, dev), _t(facx, dev), _t(facy, dev), _kz(kz, nk, dev),
                   float(nu), float(c), float(kap))
     return C.cpu().numpy() if was_np else C
