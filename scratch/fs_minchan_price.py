@@ -61,8 +61,22 @@ s = dict(m=m, D=D, N=N, nz=NZ, nk=nk, nu=NU, kz=kz, lz=LZ, tol=TOL,
          mw1=g(mw1), null_kz0=g(v), null_norm=float((v*v*mw1).sum()),
          wall_u=g(PJ.wall_indicator(m, nk, NZ, 3)), ubc=None, backend=backend,
          check_every=None)
-s['Mp'] = HH.fdm_preconditioner(m, N, kz**2, 1.0, s['mask_p'], 2, nk,
-                                like=s['mask_p'])
+# PRESSURE PRECONDITIONER: p-multigrid, not one-level FDM.  On this operator
+# FDM is no better than a plain diagonal and both grow like sqrt(elements)
+# (254 -> 734 as elements go 8 -> 72), because the slow modes are global.  A
+# V-cycle is FLAT at 9 iterations across that whole range.
+use_pmg = '--fdm' not in sys.argv
+if use_pmg:
+    from lssem3d import hpmg
+    t0 = time.perf_counter()
+    s['Mp'] = hpmg.HelmholtzPMG(m, N, kz**2, 1.0, 1, nk, NZ, wall=False,
+                                pin_kz0=True, deg=6)
+    print(f'pressure preconditioner: p-multigrid  '
+          f'(setup {time.perf_counter()-t0:.1f}s, amortised over the run)')
+else:
+    s['Mp'] = HH.fdm_preconditioner(m, N, kz**2, 1.0, s['mask_p'], 2, nk,
+                                    like=s['mask_p'])
+    print('pressure preconditioner: one-level FDM')
 
 # laminar Poiseuille start, u = u_tau^2/(2 nu) * y(2-y) scaled to Re_tau
 yy = np.empty((m.nelem, n, n))
