@@ -83,11 +83,13 @@ class _Direct:
         from .precond import _factor_spd
         shape, m, mask = lvl.shape, lvl.m, lvl.mask_h
         nk = shape[-1]
-        self.B, self.fac, self.lvl = [], [], lvl
-        self.mw = np.asarray(S3.multiplicity_weight(m, shape)).ravel()
-        self.Dh, self.fxh, self.fyh = diff_matrix(lvl.p), m.facx, m.facy
-        self.wqh, self.lam, self.mu = m.wq, lvl.lam, lvl.mu
-        self.mwd = lvl.mw.reshape(-1)
+        nsp = int(np.prod(shape[:-1]))
+        self.lvl, self.shape, self.nk, self.nsp = lvl, shape, nk, nsp
+        Dh, wqh = diff_matrix(lvl.p), m.wq
+        mwh = np.asarray(S3.multiplicity_weight(m, shape))
+        Ah = lambda v: HH.apply(v, Dh, m.facx, m.facy, wqh, lvl.lam, lvl.mu,
+                                m, mask)
+        Bs, Ais = [], []
         for k in range(nk):
             cols, seen = [], set()
             for e in range(shape[0]):
@@ -99,38 +101,47 @@ class _Direct:
                             oh = np.zeros(shape)
                             oh[e, i, j, f, k] = 1.0
                             g = S3.gs(m, oh)
-                            key = tuple(np.flatnonzero(np.abs(g.ravel()) > .5))
+                            key = tuple(np.flatnonzero(
+                                np.abs(g[..., k].ravel()) > .5))
                             if not key or key in seen:
                                 continue
                             seen.add(key)
-                            cols.append(g)
+                            # RESTRICT TO THIS MODE'S SLICE.  The basis vector
+                            # is a full-array one-hot, but only mode k is
+                            # non-zero -- carrying the whole array made every
+                            # matmul touch nk times more data than it needed.
+                            cols.append(g[..., k].ravel())
             if not cols:
-                self.B.append(None); self.fac.append(None); continue
-            B = np.stack([c.ravel() for c in cols], axis=1)
+                Bs.append(None); Ais.append(None); continue
+            B = np.stack(cols, axis=1)                     # (nsp, ncol)
             A = np.empty((B.shape[1], B.shape[1]))
-            Ah = lambda v: HH.apply(v, self.Dh, self.fxh, self.fyh, self.wqh,
-                                    self.lam, self.mu, m, mask)
             for a in range(B.shape[1]):
-                A[:, a] = B.T @ (Ah(B[:, a].reshape(shape)).ravel()*self.mw)
-            # store the explicit INVERSE, not a factorisation callable: a
-            # triangular solve is host-only, a dense matmul is not, and the
-            # coarse level is small enough that n^2 costs little.  Built from a
-            # Cholesky, so the cost is the factorisation's, not an SVD's.
+                full = np.zeros(shape)
+                full[..., k] = B[:, a].reshape(shape[:-1])
+                A[:, a] = B.T @ (Ah(full)[..., k].ravel()
+                                 * mwh[..., k].ravel())
             fac = _factor_spd(0.5*(A + A.T))
             Ai = np.stack([fac(e) for e in np.eye(B.shape[1])], axis=1)
-            to = (lambda a: a) if like is None else (
-                lambda a: DEV.to_device(a, like))
-            self.B.append(to(B))
-            self.fac.append(to(0.5*(Ai + Ai.T)))
-
-    def __call__(self, r):
-        z = DEV.zeros_like(r)
-        rf = (r*self.lvl.mw).reshape(-1)
-        for B, Ai in zip(self.B, self.fac):
+            Bs.append(B); Ais.append(0.5*(Ai + Ai.T))
+        # BATCH ACROSS MODES: pad to a common width with ZERO columns and a
+        # ZERO inverse block, which contribute nothing, so all nk solves become
+        # three batched matmuls instead of 3*nk small ones.
+        w = max((B.shape[1] for B in Bs if B is not None), default=0)
+        Bb = np.zeros((nk, nsp, w))
+        Ab = np.zeros((nk, w, w))
+        for k, (B, Ai) in enumerate(zip(Bs, Ais)):
             if B is None:
                 continue
-            z = z + (B @ (Ai @ (B.T @ rf))).reshape(self.lvl.shape)
-        return z*self.lvl.mask
+            Bb[k, :, :B.shape[1]] = B
+            Ab[k, :Ai.shape[0], :Ai.shape[1]] = Ai
+        to = (lambda a: a) if like is None else (lambda a: DEV.to_device(a, like))
+        self.Bb, self.Ab = to(Bb), to(Ab)
+
+    def __call__(self, r):
+        # (nsp, nk) -> (nk, nsp, 1), three batched matmuls, back again
+        x = (r*self.lvl.mw).reshape(self.nsp, self.nk).T[:, :, None]
+        y = self.Bb @ (self.Ab @ (self.Bb.transpose(0, 2, 1) @ x))
+        return y[:, :, 0].T.reshape(self.shape)*self.lvl.mask
 
 
 class HelmholtzPMG:
