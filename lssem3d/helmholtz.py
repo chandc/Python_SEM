@@ -133,3 +133,41 @@ def fdm_preconditioner(mesh, N, lam, mu, mask, nfield, nk, like=None,
         return g*mask if mask is not None else g
 
     return M
+
+
+def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
+          max_iter=4000):
+    """PCG for A x = b, per mode, in the multiplicity-weighted inner product.
+
+    Not solver3d.pcg: that one is wired to normal_op.  The inner product must
+    carry 1/multiplicity so a node stored once per owning element counts once
+    -- omitting it silently mis-weights every interface node and breaks the
+    symmetry CG needs.
+    """
+    xp = DEV.xp(b)
+    mw = DEV.to_device(S3.multiplicity_weight(mesh, tuple(b.shape)), b)
+    A = lambda v: apply(v, D, facx, facy, wq, lam, mu, mesh, mask)
+    dot = lambda a, c: xp.sum(a*c*mw, axis=(0, 1, 2, 3))
+    x = DEV.zeros_like(b)
+    r = b - A(x)
+    z = M(r)
+    p = DEV.clone(z)
+    rz = dot(r, z)
+    target = xp.maximum(tol*xp.sqrt(dot(b, b)), 1e-300)
+    one = xp.ones_like(rz)
+    it = 0
+    for it in range(1, max_iter + 1):
+        Ap = A(p)
+        den = dot(p, Ap)
+        al = xp.where(abs(den) > 1e-300, rz/xp.where(den == 0, one, den),
+                      0.0*one)
+        x = x + al*p
+        r = r - al*Ap
+        if bool(xp.all(xp.sqrt(dot(r, r)) < target)):
+            break
+        z = M(r)
+        rzn = dot(r, z)
+        be = xp.where(abs(rz) > 1e-300, rzn/xp.where(rz == 0, one, rz), 0.0*one)
+        p = z + be*p
+        rz = rzn
+    return x, it
