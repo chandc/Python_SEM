@@ -28,25 +28,33 @@ The first-order PDE system required for the Least-Squares functional incorporate
 
 ## 2. Fourier Decoupling to 2.5D
 
-We assume the domain is periodic in the $z$-direction. We expand all 7 variables into 1D Fourier series. For example, $u(x,y,z) = \sum \hat{u}(x,y,k_z) e^{i k_z z}$, where $k_z$ is the discrete wavenumber.
+We assume the domain is periodic in the $z$-direction. We expand all 7 variables into 1D Fourier series. For example, $u(x,y,z) = \sum \hat{u}(x,y,k_z) e^{\mathrm{i} k_z z}$, where $k_z$ is the discrete wavenumber.
 
-The spatial derivative $\frac{\partial}{\partial z}$ becomes a scalar multiplication by $i k_z$. Substituting this into our physical equations yields a complex-valued, coupled 8-equation system **for each individual wavenumber $k_z$**:
+The spatial derivative $\frac{\partial}{\partial z}$ becomes a scalar multiplication by $\mathrm{i} k_z$. Substituting this into our physical equations yields a complex-valued, coupled 8-equation system **for each individual wavenumber $k_z$**:
 
 **1. Continuity:**
-$$ \hat{R}_c = \partial_x \hat{u} + \partial_y \hat{v} + i k_z \hat{w} $$
+$$ \hat{R}_c = \partial_x \hat{u} + \partial_y \hat{v} + \mathrm{i} k_z \hat{w} $$
 
 **2. Vorticity Definition (3 components):**
-$$ \hat{R}_{\omega x} = \partial_y \hat{w} - i k_z \hat{v} - \hat{\omega}_x $$
-$$ \hat{R}_{\omega y} = i k_z \hat{u} - \partial_x \hat{w} - \hat{\omega}_y $$
-$$ \hat{R}_{\omega z} = \partial_x \hat{v} - \partial_y \hat{u} - \hat{\omega}_z $$
+$$
+\begin{aligned}
+\hat{R}_{\omega x} &= \partial_y \hat{w} - \mathrm{i} k_z \hat{v} - \hat{\omega}_x \\
+\hat{R}_{\omega y} &= \mathrm{i} k_z \hat{u} - \partial_x \hat{w} - \hat{\omega}_y \\
+\hat{R}_{\omega z} &= \partial_x \hat{v} - \partial_y \hat{u} - \hat{\omega}_z
+\end{aligned}
+$$
 
 **3. Momentum (3 components, with $c = \frac{1}{\beta_k \Delta t}$):**
-$$ \hat{R}_{mx} = c \hat{u} + \partial_x \hat{p} + \nu (\partial_y \hat{\omega}_z - i k_z \hat{\omega}_y) - \hat{f}_x $$
-$$ \hat{R}_{my} = c \hat{v} + \partial_y \hat{p} + \nu (i k_z \hat{\omega}_x - \partial_x \hat{\omega}_z) - \hat{f}_y $$
-$$ \hat{R}_{mz} = c \hat{w} + i k_z \hat{p} + \nu (\partial_x \hat{\omega}_y - \partial_y \hat{\omega}_x) - \hat{f}_z $$
+$$
+\begin{aligned}
+\hat{R}_{mx} &= c \hat{u} + \partial_x \hat{p} + \nu (\partial_y \hat{\omega}_z - \mathrm{i} k_z \hat{\omega}_y) - \hat{f}_x \\
+\hat{R}_{my} &= c \hat{v} + \partial_y \hat{p} + \nu (\mathrm{i} k_z \hat{\omega}_x - \partial_x \hat{\omega}_z) - \hat{f}_y \\
+\hat{R}_{mz} &= c \hat{w} + \mathrm{i} k_z \hat{p} + \nu (\partial_x \hat{\omega}_y - \partial_y \hat{\omega}_x) - \hat{f}_z
+\end{aligned}
+$$
 
 **4. Vorticity Divergence:**
-$$ \hat{R}_{d\omega} = \partial_x \hat{\omega}_x + \partial_y \hat{\omega}_y + i k_z \hat{\omega}_z $$
+$$ \hat{R}_{d\omega} = \partial_x \hat{\omega}_x + \partial_y \hat{\omega}_y + \mathrm{i} k_z \hat{\omega}_z $$
 
 ---
 
@@ -54,11 +62,13 @@ $$ \hat{R}_{d\omega} = \partial_x \hat{\omega}_x + \partial_y \hat{\omega}_y + i
 
 For a specific mode $k_z$, the Least-Squares functional $J_{k_z}$ is the sum of the $L^2$-norms of the complex residuals over the 2D spatial domain $\Omega$:
 
-$$ J_{k_z}(\hat{\mathbf{U}}) = \frac{1}{2} \int_\Omega \left( |\hat{R}_c|^2 + |\hat{R}_{\omega x}|^2 + \dots + |\hat{R}_{mz}|^2 + |\hat{R}_{d\omega}|^2 \right) d\Omega $$
+$$
+J_{k_z}(\hat{\mathbf{U}}) = \frac{1}{2} \int_\Omega \left( |\hat{R}_c|^2 + |\hat{R}_{\omega x}|^2 + \dots + |\hat{R}_{mz}|^2 + |\hat{R}_{d\omega}|^2 \right) d\Omega
+$$
 
 Taking the variation with respect to the complex conjugate of the state vector $\delta \hat{\mathbf{U}}^*$ yields the normal equations $\mathcal{L}^* \mathcal{L} \hat{\mathbf{U}} = \mathcal{L}^* \hat{\mathbf{F}}$. 
 
-Because of the complex coefficients, the resulting system matrix is **Hermitian** (rather than purely symmetric real). When evaluating the adjoint operator $\mathcal{L}^*$, the $z$-derivatives naturally flip sign because $(i k_z)^* = -i k_z$.
+Because of the complex coefficients, the resulting system matrix is **Hermitian** (rather than purely symmetric real). When evaluating the adjoint operator $\mathcal{L}^*$, the $z$-derivatives naturally flip sign because $(\mathrm{i} k_z)^* = -\mathrm{i} k_z$.
 
 ---
 
@@ -92,7 +102,9 @@ The Fourier decoupling of §2 only survives if convection is **explicit** — a 
 
 For stage $k = 1,2,3$:
 
-$$ \hat{\mathbf{U}}^{k} = \hat{\mathbf{U}}^{k-1} + \Delta t\left[\underbrace{\gamma_k \hat{\mathbf{N}}^{k-1} + \zeta_k \hat{\mathbf{N}}^{k-2}}_{\text{explicit: RK3}} + \underbrace{\alpha_k \hat{\mathcal{L}}^{k-1} + \beta_k \hat{\mathcal{L}}^{k}}_{\text{implicit: Crank–Nicolson}}\right] $$
+$$
+\hat{\mathbf{U}}^{k} = \hat{\mathbf{U}}^{k-1} + \Delta t\left[\underbrace{\gamma_k \hat{\mathbf{N}}^{k-1} + \zeta_k \hat{\mathbf{N}}^{k-2}}_{\text{explicit: RK3}} + \underbrace{\alpha_k \hat{\mathcal{L}}^{k-1} + \beta_k \hat{\mathcal{L}}^{k}}_{\text{implicit: Crank–Nicolson}}\right]
+$$
 
 | $k$ | $\gamma_k$ | $\zeta_k$ | $\alpha_k$ | $\beta_k$ | $1/\beta_k$ |
 |---|---|---|---|---|---|
@@ -137,3 +149,47 @@ for k in range(NSTAGE):
 ```
 
 `solve_modes` must stay batched across $k_z$: a Python loop over modes inside a stage multiplies away the entire benefit of the decoupling, three times per step.
+
+---
+
+## 6. Boundary Conditions in Fourier Space
+
+In 3D, the physical boundary conditions must be correctly mapped to the Fourier coefficients. The domain boundaries exist only in the $x-y$ plane, as the $z$-direction is periodic.
+
+### 6.1 Solid Walls (No-Slip)
+On a solid wall in physical space: $u = v = w = 0$.
+In Fourier space, this implies that for **every wavenumber $k_z$**:
+$$ \hat{u} = \hat{v} = \hat{w} = 0 $$
+
+For the vorticity variables, just like in 2D, we do not enforce explicit Dirichlet conditions at the wall. The Least-Squares functional naturally enforces the definition $\boldsymbol{\omega} = \nabla \times \mathbf{u}$.
+
+### 6.2 Inflow
+If a steady inflow profile $U_{in}(x,y,z)$ is prescribed, you must take its 1D Fourier transform in $z$. 
+For a $z$-independent inflow (e.g. 2D Poiseuille flow extruded into 3D), the Fourier transform is a delta function at the zero-mode:
+$$ \hat{u}(k_z = 0) = U_{in}(x,y) $$
+$$ \hat{u}(k_z \neq 0) = 0 $$
+$$ \hat{v} = \hat{w} = 0 $$
+
+### 6.3 Outflow (Convective)
+For the outflow boundary, the 2D VVP convective outflow condition $\frac{\partial \mathbf{u}}{\partial t} + U_c \frac{\partial \mathbf{u}}{\partial n} = 0$ must be enforced on each mode. Since this equation is linear, it transforms directly:
+$$ \frac{\partial \hat{\mathbf{u}}}{\partial t} + U_c \frac{\partial \hat{\mathbf{u}}}{\partial n} = 0 $$
+
+---
+
+## 7. Performance & Complexity Analysis
+
+### 7.1 Computational Cost
+- **2D Base:** A 2D solve has $O(N_e p^2)$ unknowns and takes $I_{2D}$ iterations.
+- **3D Extension:** We solve $N_z/2 + 1$ decoupled systems. Because each solve is a 2D problem with complex arithmetic, the cost per iteration is roughly $2\times$ the real 2D cost.
+- **FFT Cost:** The 1D FFTs scale as $O(N_e p^2 N_z \log N_z)$, which is negligible compared to the sparse CG solver.
+- **Overall:** The total cost per time-step scales linearly as $O(N_z \cdot N_e p^2 \cdot I_{3D})$, representing massive savings over a fully coupled 3D sparse matrix inversion, which scales poorly due to fill-in.
+
+### 7.2 Memory Footprint
+By processing the non-linear term explicitly and keeping the stages decoupled, we never assemble a full 3D operator. The state vectors take $7 \times N_e \times p^2 \times (N_z/2 + 1)$ complex scalars. Only 2 time-level registers are needed for the RKW3 scheme.
+
+## Summary
+
+The LSSEM VVP Fourier method elegantly sidesteps the curse of dimensionality. By treating the $z$-direction pseudo-spectrally:
+1. The 3D pressure-velocity-vorticity coupling is reduced to a set of parallel 2D problems.
+2. We retain the exact $C^0$ continuity and boundary condition flexibility of the 2D finite-element mesh in the cross-section.
+3. The method is matrix-free and highly amenable to GPU acceleration (MLX/PyTorch/CuPy) due to the batched tensor contractions.
