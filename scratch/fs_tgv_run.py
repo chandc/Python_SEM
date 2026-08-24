@@ -66,19 +66,36 @@ print(f'pressure: device p-multigrid (setup {time.perf_counter()-t0:.1f}s)')
 # VELOCITY: one CN solve per step at lam = 2/dt, so ONE preconditioner, not
 # three -- step_kim_moin does a single projection per step rather than one per
 # RKW3 substage.
-s['Mu'] = HH.fdm_preconditioner(s['m'], N, 2.0/dt + NU*(s['kz']**2), NU,
-                                s['mask_u'], 6, s['nk'], like=s['mask_u'])
-s['force'] = None
-phi_state = [None]
+# VELOCITY: per-substage RKW3/CN, so one preconditioner per stage at c_k.
+#
+# SCHEME CHOICE IS NOT FREE, and the two options have OPPOSITE strengths,
+# measured on this case:
+#     periodic, energy balance   substage 1.0003 flat | kim_moin 1.2296, O(dt)
+#     walls, temporal order      substage ~1.6        | kim_moin ~2.2
+# RKW3/CN interleaves viscous damping into every substage, which the balance
+# rewards; Kim-Moin's single CN solve per step is a coarser convection/
+# diffusion split.  But only Kim-Moin's correction is consistent at a wall,
+# because it extrapolates over a whole step.  TGV is periodic, so: substage.
+pre = [HH.fdm_preconditioner(s['m'], N,
+                             T.implicit_coeff(dt, k) + NU*(s['kz']**2),
+                             NU, s['mask_u'], 6, s['nk'], like=s['mask_u'])
+       for k in range(T.NSTAGE)]
+pc = xp.zeros((s['m'].nelem, N+1, N+1, 1, s['nk']), dtype=complex)
+Nprev = xp.zeros((s['m'].nelem, N+1, N+1, 3, s['nk']), dtype=complex)
 sync = (lambda: xp.cuda.Stream.null.synchronize()) if backend == 'cupy' \
     else (lambda: None)
 
 
 def step():
-    """One Kim-Moin step: RK convection -> one CN viscous -> one projection."""
-    global Uc
-    Uc, phi_state[0], inf = PJ.step_kim_moin(s, Uc, phi_state[0], dt)
-    return inf[0] + inf[2]
+    global Uc, pc, Nprev
+    tot = 0
+    for k in range(T.NSTAGE):
+        s['Mu'] = pre[k]
+        Nk = -CV.convective(Uc, s['Dg'], s['fxg'], s['fyg'], s['kzg'], NZ)
+        Uc, pc, inf = PJ.substage(s, Uc, pc, Nk, Nprev, k, dt)
+        Nprev = Nk
+        tot += inf[0] + inf[2]
+    return tot
 
 
 if price:
@@ -106,7 +123,11 @@ for i in range(nstep):
     tot = step()
     t += dt
     E, Om = F2.diagnostics(s, Uc)
-    bal = (-(E - prevE)/dt)/(2*NU*0.5*(Om + prevOm)) if i else 1.0
+    den = 2*NU*0.5*(Om + prevOm)
+    if den <= 0 or not np.isfinite(E):
+        print(f'BLEW UP at t={t:.4f}: E={E}, Omega={Om}', flush=True)
+        break
+    bal = (-(E - prevE)/dt)/den if i else 1.0
     prevE, prevOm = E, Om
     if i % 10 == 0 or i == nstep-1:
         line = (f't={t:8.4f}  E={E:.6f}  Om={Om:.5f}  '

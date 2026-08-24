@@ -204,7 +204,7 @@ def wall_indicator(mesh, nk, nz, nfield_c):
 JAMESON = (0.25, 1.0/3.0, 0.5, 1.0)
 
 
-def step_kim_moin(s, Uc, phi_prev, dt):
+def step_kim_moin(s, Uc, phi_prev, dt, pc=None):
     """One FULL step: RK convection -> one CN viscous solve -> one projection.
 
     THE STRUCTURE IS THE POINT.  substage() above projects inside every RKW3
@@ -250,6 +250,17 @@ def step_kim_moin(s, Uc, phi_prev, dt):
     # 2. Crank-Nicolson viscous, ONE solve over the whole dt
     lam = 2.0/dt + nu*(kz**2)
     r = s['wq3']*((2.0/dt)*up) - visc_weak(un, D, fx, fy, wq, kz, nu)
+    # INCREMENTAL PRESSURE, when a pressure is carried.  The pressure-free form
+    # is FIRST order, and with convection active that shows as first-order
+    # excess dissipation: the TGV balance -dE/dt / 2nuOmega measured 1.2302,
+    # 1.1153, 1.0578 as dt halved -- clean O(dt), against a least-squares
+    # reference holding 0.999.  Feeding grad(p) back makes it second order.
+    #
+    # This is safe here and was NOT safe per-substage at walls: the loop that
+    # ran sigma to 9.944 amplified an inconsistent WALL pressure condition, and
+    # a periodic domain has none.  Pass pc=None to keep the pressure-free form.
+    if pc is not None:
+        r = r - s['wq3']*gradient(pc, D, fx, fy, kz)
     bu = S3.gs(m, _split(r))
     ubc = None
     if s.get('wall_u') is not None and phi_prev is not None:
@@ -278,4 +289,6 @@ def step_kim_moin(s, Uc, phi_prev, dt):
                                 check_every=s.get('check_every'))
     phi = _join(phi)
     Uc = ustar - dt*gradient(phi, D, fx, fy, kz)
-    return Uc, phi, (it_u, res_u, it_p, res_p)
+    if pc is not None:
+        pc = pc + phi - nu*div          # rotational form
+    return Uc, phi, (it_u, res_u, it_p, res_p), pc

@@ -41,7 +41,7 @@ def run(dt, N=8):
     nstep = int(round(0.05/dt))
     ts, Es = [0.0], [G.energy(s, Uc)]
     for i in range(nstep):
-        Uc, phi, _ = PJ.step_kim_moin(s, Uc, phi, dt)
+        Uc, phi, _, _ = PJ.step_kim_moin(s, Uc, phi, dt)
         ts.append((i+1)*dt); Es.append(G.energy(s, Uc))
     ts, Es = np.array(ts), np.array(Es)
     k0 = len(ts)//2
