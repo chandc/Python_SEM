@@ -331,7 +331,63 @@ splitting error from the wall treatment.
 
 ---
 
+## 3.2a WHICH SCHEME TO USE — decided by the boundary conditions
+
+**Two step functions, opposite strengths. This is not a preference.**
+
+| | periodic — energy balance | walls — temporal order |
+|---|---|---|
+| `project.substage` (per RKW3 substage) | **1.0003, flat** ✅ | ~1.6 ❌ |
+| `project.step_kim_moin` (once per step) | 1.2296, **O(Δt)** ❌ | **~2.2** ✅ |
+
+Measured on TGV Re = 800, the parameter-free balance $-\mathrm{d}E/\mathrm{d}t = 2\nu\Omega$,
+mean over a run:
+
+| dt | 0.005675 | 0.002837 | 0.001419 |
+|---|---|---|---|
+| `step_kim_moin` | 1.2296 | 1.1148 | 1.0572 |
+| `substage` | **1.0004** | **1.0003** | **1.0003** |
+
+The LS reference holds 0.999. `substage` is flat and essentially exact;
+`step_kim_moin` is 575× worse at the working Δt and only first order.
+
+**Why**: RKW3/CN interleaves viscous damping into *every* substage, which the
+energy balance rewards; Kim–Moin's single Crank–Nicolson solve per step is a
+coarser convection/diffusion split. But only Kim–Moin's wall correction is
+*consistent*, because it extrapolates over a whole step — and the SMR weights
+$\beta$ sum to **0.606**, so applied per substage it is scaled to the wrong
+interval (§3.1b).
+
+**So: `substage` for periodic (TGV, CORIA); `step_kim_moin` for walls
+(channel).** Using the wrong one is not a small penalty — it is 20% on the
+energy balance or 0.4 of an order at the wall.
+
 ## 4. Linear solver
+
+**Per mode, per field: CG. But the two solves need DIFFERENT preconditioners,
+and getting the pressure one wrong cost two retracted conclusions (§3.1c).**
+
+| solve | preconditioner | iterations |
+|---|---|---|
+| velocity Helmholtz | FDM element inverse | **~6** |
+| pressure Poisson | **p-multigrid** (`lssem3d/hpmg.py`) | **9, flat in element count** |
+
+FDM is exact per element and that is enough for the velocity, which is
+mass-dominated ($\lambda = c_k + \nu k_z^2 \approx 10^3$). It is **useless for
+the pressure**: no better than a plain diagonal, and both grow like
+$\sqrt{\text{elements}}$, because Poisson's slow modes are global (§3.1c).
+
+`hpmg` must be built with `like=` so the V-cycle is **device-resident**. Host
+residency cost 275× a matvec; on the device, batched, it is 33×. The channel
+went 39.76 → 6.34 → 1.67 → **0.83 s/step** across those fixes, with **no change
+to the discretisation**.
+
+The smoother uses `helmholtz.jacobi_diagonal_analytic` — closed form, exact to
+2.1e-16. Do **not** use `helmholtz.jacobi_diagonal`: it probes with
+discontinuous vectors and is 5.0e-01 wrong for an assembled operator, while
+still producing a preconditioner that converges.
+
+Original text follows.
 
 **Per mode, per field: CG with an FDM element-block preconditioner.**
 
