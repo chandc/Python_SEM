@@ -70,7 +70,7 @@ if use_pmg:
     from lssem3d import hpmg
     t0 = time.perf_counter()
     s['Mp'] = hpmg.HelmholtzPMG(m, N, kz**2, 1.0, 1, nk, NZ, wall=False,
-                                pin_kz0=True, deg=6)
+                                pin_kz0=True, deg=6, like=s['mask_p'])
     print(f'pressure preconditioner: p-multigrid  '
           f'(setup {time.perf_counter()-t0:.1f}s, amortised over the run)')
 else:

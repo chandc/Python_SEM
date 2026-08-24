@@ -14,13 +14,19 @@ mask[...,0,0]*=(S3.gs(m,ind)[...,0,0]<0.5)
 kz=FR.wavenumbers(NZ,0.34*np.pi); D=diff_matrix(N)
 g=lambda a: cp.asarray(np.ascontiguousarray(a))
 maskd=g(mask)
-P=hpmg.HelmholtzPMG(m,N,kz**2,1.0,1,nk,NZ,wall=False,pin_kz0=True,deg=6)
+Ph=hpmg.HelmholtzPMG(m,N,kz**2,1.0,1,nk,NZ,wall=False,pin_kz0=True,deg=6)
+P =hpmg.HelmholtzPMG(m,N,kz**2,1.0,1,nk,NZ,wall=False,pin_kz0=True,deg=6,like=maskd)
 r=g(np.random.default_rng(0).standard_normal(mask.shape))*maskd
 A=lambda v: HH.apply(v,g(D),g(m.facx),g(m.facy),g(m.wq),g(kz**2),1.0,m,maskd)
-for f,nm in ((A,'matvec (GPU)'),(P,'PMG V-cycle')):
-    f(r); cp.cuda.Stream.null.synchronize()
+# same input, both preconditioners: does the ported one agree, and how fast?
+zh = Ph(cp.asnumpy(r)); zd = P(r)
+print(f'  device vs host V-cycle: rel diff '
+      f'{float(cp.abs(cp.asarray(zh)-zd).max()/cp.abs(zd).max()):.2e}')
+for f,nm in ((A,'matvec (GPU)'),(Ph,'PMG V-cycle (host)'),(P,'PMG V-cycle (device)')):
+    arg = cp.asnumpy(r) if nm.endswith('(host)') else r
+    f(arg); cp.cuda.Stream.null.synchronize()
     t0=time.perf_counter()
-    for _ in range(5): f(r)
+    for _ in range(5): f(arg)
     cp.cuda.Stream.null.synchronize()
     print(f'  {nm:<16} {(time.perf_counter()-t0)/5*1e3:8.2f} ms')
 print(f'\n  pressure field: {r.nbytes/2**20:.1f} MiB per host round trip')

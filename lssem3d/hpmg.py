@@ -33,22 +33,40 @@ from lssem2d.lgl import diff_matrix
 
 
 class _Lvl:
-    def __init__(self, mesh, p, lam, mu, nfield_c, nk, nz, wall, pin_kz0):
+    """One polynomial order.  Everything the V-cycle touches lives on `like`.
+
+    The masks, the analytic diagonal and the multiplicity weight are all built
+    in NumPy -- they are closed-form setup, evaluated once -- and moved once.
+    What must NOT stay on the host is anything the operator reads per
+    application: D, facx, facy, wq and mask.  Leaving those behind is what made
+    the first version cost 275x a matvec.
+    """
+
+    def __init__(self, mesh, p, lam, mu, nfield_c, nk, nz, wall, pin_kz0,
+                 like=None):
         from . import project as PJ
         self.m, self.p = mesh, p
-        self.D = diff_matrix(p)
-        self.mask = PJ.build_masks(mesh, nk, nz, nfield_c, wall=wall)
+        Dh = diff_matrix(p)
+        mask = PJ.build_masks(mesh, nk, nz, nfield_c, wall=wall)
         if pin_kz0:
-            ind = np.zeros(self.mask.shape)
+            ind = np.zeros(mask.shape)
             ind[0, 0, 0, 0, 0] = 1.0
-            self.mask[..., 0, 0] *= (S3.gs(mesh, ind)[..., 0, 0] < 0.5)
-        self.shape = self.mask.shape
-        self.A = lambda v: HH.apply(v, self.D, mesh.facx, mesh.facy, mesh.wq,
-                                    lam, mu, mesh, self.mask)
-        d = HH.jacobi_diagonal_analytic(mesh, p, mesh.wq, lam, mu,
-                                        2*nfield_c, nk, self.mask)
-        self.M_inv = HH.jacobi_inverse(d, self.mask)
-        self.mw = S3.multiplicity_weight(mesh, self.shape)
+            mask[..., 0, 0] *= (S3.gs(mesh, ind)[..., 0, 0] < 0.5)
+        self.shape = mask.shape
+        dh = HH.jacobi_diagonal_analytic(mesh, p, mesh.wq, lam, mu,
+                                         2*nfield_c, nk, mask)
+        mwh = S3.multiplicity_weight(mesh, self.shape)
+        to = (lambda a: a) if like is None else (lambda a: DEV.to_device(a, like))
+        self.D, self.mask = to(Dh), to(mask)
+        self.fx, self.fy, self.wq = to(mesh.facx), to(mesh.facy), to(mesh.wq)
+        self.M_inv = to(HH.jacobi_inverse(dh, mask))
+        self.mw = to(mwh)
+        self.mask_h = mask
+        # lam is per-mode (kz^2) and is MULTIPLIED into the operator, so it is
+        # read every application and has to move as well.  mu is a scalar.
+        lam_d = to(np.asarray(lam, dtype=float)) if np.ndim(lam) else lam
+        self.A = lambda v: HH.apply(v, self.D, self.fx, self.fy, self.wq,
+                                    lam_d, mu, mesh, self.mask)
 
 
 class _Direct:
@@ -61,12 +79,15 @@ class _Direct:
     resolve.
     """
 
-    def __init__(self, lvl):
+    def __init__(self, lvl, like=None):
         from .precond import _factor_spd
-        shape, m, mask = lvl.shape, lvl.m, lvl.mask
+        shape, m, mask = lvl.shape, lvl.m, lvl.mask_h
         nk = shape[-1]
         self.B, self.fac, self.lvl = [], [], lvl
-        self.mw = lvl.mw.ravel()
+        self.mw = np.asarray(S3.multiplicity_weight(m, shape)).ravel()
+        self.Dh, self.fxh, self.fyh = diff_matrix(lvl.p), m.facx, m.facy
+        self.wqh, self.lam, self.mu = m.wq, lvl.lam, lvl.mu
+        self.mwd = lvl.mw.reshape(-1)
         for k in range(nk):
             cols, seen = [], set()
             for e in range(shape[0]):
@@ -87,18 +108,28 @@ class _Direct:
                 self.B.append(None); self.fac.append(None); continue
             B = np.stack([c.ravel() for c in cols], axis=1)
             A = np.empty((B.shape[1], B.shape[1]))
+            Ah = lambda v: HH.apply(v, self.Dh, self.fxh, self.fyh, self.wqh,
+                                    self.lam, self.mu, m, mask)
             for a in range(B.shape[1]):
-                A[:, a] = B.T @ (lvl.A(B[:, a].reshape(shape)).ravel()*self.mw)
-            self.B.append(B)
-            self.fac.append(_factor_spd(0.5*(A + A.T)))
+                A[:, a] = B.T @ (Ah(B[:, a].reshape(shape)).ravel()*self.mw)
+            # store the explicit INVERSE, not a factorisation callable: a
+            # triangular solve is host-only, a dense matmul is not, and the
+            # coarse level is small enough that n^2 costs little.  Built from a
+            # Cholesky, so the cost is the factorisation's, not an SVD's.
+            fac = _factor_spd(0.5*(A + A.T))
+            Ai = np.stack([fac(e) for e in np.eye(B.shape[1])], axis=1)
+            to = (lambda a: a) if like is None else (
+                lambda a: DEV.to_device(a, like))
+            self.B.append(to(B))
+            self.fac.append(to(0.5*(Ai + Ai.T)))
 
     def __call__(self, r):
-        z = np.zeros(self.lvl.shape)
-        rf = r.ravel()
-        for B, f in zip(self.B, self.fac):
+        z = DEV.zeros_like(r)
+        rf = (r*self.lvl.mw).reshape(-1)
+        for B, Ai in zip(self.B, self.fac):
             if B is None:
                 continue
-            z += (B @ f(B.T @ (rf*self.mw))).reshape(self.lvl.shape)
+            z = z + (B @ (Ai @ (B.T @ rf))).reshape(self.lvl.shape)
         return z*self.lvl.mask
 
 
@@ -111,23 +142,40 @@ class HelmholtzPMG:
                                  if o <= N and o >= 2)
         orders = tuple(sorted(set(orders), reverse=True))
         meshes = [mesh] + [coarsen_mesh(mesh, p) for p in orders[1:]]
-        self.lv = [_Lvl(mm, p, lam, mu, nfield_c, nk, nz, wall, pin_kz0)
-                   for mm, p in zip(meshes, orders)]
-        self.P = [p_interp(c, f) for f, c in zip(orders[:-1], orders[1:])]
-        self.R = [P.T for P in self.P]
-        self.sm = [Chebyshev4(l.A, l.M_inv, l.shape, deg=deg)
-                   for l in self.lv[:-1]]
-        self.coarse = _Direct(self.lv[-1])
+        self.lv = []
+        for mm, p in zip(meshes, orders):
+            l = _Lvl(mm, p, lam, mu, nfield_c, nk, nz, wall, pin_kz0, like)
+            l.lam, l.mu = lam, mu
+            self.lv.append(l)
+        to = (lambda a: a) if like is None else (lambda a: DEV.to_device(a, like))
+        self.P = [to(p_interp(c, f)) for f, c in zip(orders[:-1], orders[1:])]
+        self.R = [to(p_interp(c, f).T) for f, c in zip(orders[:-1], orders[1:])]
+        self.sm = []
+        for l in self.lv[:-1]:
+            # estimate_lambda_max starts from a HOST random vector; give it a
+            # device one so the power iteration never leaves the device
+            v = DEV.to_device(np.random.default_rng(0).standard_normal(l.shape),
+                              l.mask)*l.mask
+            lm = 0.0
+            for _ in range(20):
+                w = l.M_inv*l.A(v)
+                nw = float(DEV.sqrt((w*w).sum()))
+                if nw <= 1e-300:
+                    break
+                lm, v = nw, w/nw
+            self.sm.append(Chebyshev4(l.A, l.M_inv, l.shape, deg=deg,
+                                      lam_max=lm))
+        self.coarse = _Direct(self.lv[-1], like)
         self.like = like
 
     def _restrict(self, x, i):
-        t = np.einsum('bj,eijvk->eibvk', self.R[i], x*self.lv[i].mw)
-        c = np.einsum('ai,eibvk->eabvk', self.R[i], t)
+        t = DEV.einsum('bj,eijvk->eibvk', self.R[i], x*self.lv[i].mw)
+        c = DEV.einsum('ai,eibvk->eabvk', self.R[i], t)
         return S3.gs(self.lv[i+1].m, c)*self.lv[i+1].mask
 
     def _prolong(self, xc, i):
-        t = np.einsum('bj,eijvk->eibvk', self.P[i], xc)
-        return np.einsum('ai,eibvk->eabvk', self.P[i], t)*self.lv[i].mask
+        t = DEV.einsum('bj,eijvk->eibvk', self.P[i], xc)
+        return DEV.einsum('ai,eibvk->eabvk', self.P[i], t)*self.lv[i].mask
 
     def _v(self, r, i):
         if i == len(self.lv) - 1:
@@ -138,28 +186,5 @@ class HelmholtzPMG:
         return z + self.sm[i](r - self.lv[i].A(z))
 
     def __call__(self, r):
-        """HOST-RESIDENT -- this is the port that is still missing.
-
-        The V-cycle runs in NumPy and the residual crosses the bus each way,
-        every CG iteration.  Measured on the Re_tau = 180 channel:
-
-            GPU matvec       0.71 ms
-            PMG V-cycle    194.98 ms      275x the matvec
-
-        On the Spark that is tolerable: unified memory makes the 2.3 MiB round
-        trip nearly free and the Grace cores are quick.  On a DISCRETE GPU it is
-        worse on both counts -- PCIe transfers, and Colab's vCPU measured 3.4x
-        slower than the Spark at issuing work.  So the A100 estimates that
-        scaled the whole solve by the GPU ratio are NOT reliable for this
-        preconditioner; the pressure solve would not scale at all.
-
-        Everything here can move: HH.apply is already device-capable, the
-        transfer operators are einsums, and the coarse solve is a small dense
-        solve per mode.  _Lvl just has to build its operator from device
-        arrays, exactly as project.substage now does.
-        """
-        host = DEV.to_host(r) if hasattr(DEV, 'to_host') else r
-        if not isinstance(host, np.ndarray):
-            host = host.get() if hasattr(host, 'get') else np.asarray(host)
-        z = self._v(host, 0)
-        return DEV.to_device(z, r) if not isinstance(r, np.ndarray) else z
+        """Device-resident when built with `like`: no transfer, no NumPy."""
+        return self._v(r, 0)
