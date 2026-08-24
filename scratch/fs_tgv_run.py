@@ -55,24 +55,30 @@ print(f'{NE}x{NE} N={N} Nz={NZ}, nu={NU:.5g}, dt={dt:.6g}, {nstep} steps to '
       f't={TEND:.4f}')
 print(f'velocity dof {dof*2/1e6:.2f} M (3 complex fields)\n')
 
-pre = [HH.fdm_preconditioner(s['m'], N,
-                             T.implicit_coeff(dt, k) + NU*(s['kz']**2),
-                             NU, s['mask_u'], 6, s['nk'], like=s['mask_u'])
-       for k in range(T.NSTAGE)]
+# PRESSURE: p-multigrid, device-resident.  One-level FDM is no better than a
+# plain diagonal on this operator and both grow with element count.
+from lssem3d import hpmg
+t0 = time.perf_counter()
+s['Mp'] = hpmg.HelmholtzPMG(s['m'], N, s['kz']**2, 1.0, 1, s['nk'], NZ,
+                            wall=False, pin_kz0=True, deg=6,
+                            like=s['mask_p'])
+print(f'pressure: device p-multigrid (setup {time.perf_counter()-t0:.1f}s)')
+# VELOCITY: one CN solve per step at lam = 2/dt, so ONE preconditioner, not
+# three -- step_kim_moin does a single projection per step rather than one per
+# RKW3 substage.
+s['Mu'] = HH.fdm_preconditioner(s['m'], N, 2.0/dt + NU*(s['kz']**2), NU,
+                                s['mask_u'], 6, s['nk'], like=s['mask_u'])
+s['force'] = None
+phi_state = [None]
 sync = (lambda: xp.cuda.Stream.null.synchronize()) if backend == 'cupy' \
     else (lambda: None)
 
 
 def step():
-    global Uc, pc, Nprev
-    tot = 0
-    for k in range(T.NSTAGE):
-        s['Mu'] = pre[k]
-        Nk = -CV.convective(Uc, s['Dg'], s['fxg'], s['fyg'], s['kzg'], NZ)
-        Uc, pc, inf = PJ.substage(s, Uc, pc, Nk, Nprev, k, dt)
-        Nprev = Nk
-        tot += inf[0] + inf[2]
-    return tot
+    """One Kim-Moin step: RK convection -> one CN viscous -> one projection."""
+    global Uc
+    Uc, phi_state[0], inf = PJ.step_kim_moin(s, Uc, phi_state[0], dt)
+    return inf[0] + inf[2]
 
 
 if price:
@@ -85,7 +91,7 @@ if price:
     sync()
     per = (time.perf_counter() - t0)/2
     print(f'PRICE  {per:.2f} s/step   {its/2:.0f} CG iters/step   '
-          f'-> {nstep*per/3600:.1f} h for {nstep} steps')
+          f'-> {nstep*per/3600:.1f} h for {nstep} steps', flush=True)
     print(f'       least-squares reference on the Mac: ~87 s/step, ~3600 '
           f'iters/step, 53.6 h')
     sys.exit()

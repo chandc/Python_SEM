@@ -77,21 +77,31 @@ def ic_tgv(s, to_device=True):
 
 
 def diagnostics(s, Uc):
-    """E and Omega, both from the velocity (vorticity computed here)."""
-    D, fx, fy, kz = s['D'], s['m'].facx, s['m'].facy, s['kz']
+    """E and Omega, both from the velocity (vorticity computed here).
+
+    DEVICE arrays.  This reached into s['m'].facx, which is host whatever the
+    backend, and --price never calls it -- so pricing passed while the run died
+    on the first diagnostic line.  A price path that does not exercise the run
+    path is not a smoke test.
+    """
+    D = s.get('Dg', s['D'])
+    fx = s.get('fxg', s['m'].facx)
+    fy = s.get('fyg', s['m'].facy)
+    kz = s.get('kzg', s['kz'])
     u, v, w = (Uc[..., i:i+1, :] for i in range(3))
     ox = DV.ddy(w, D, fy) - 1j*kz*v
     oy = 1j*kz*u - DV.ddx(w, D, fx)
     oz = DV.ddx(v, D, fx) - DV.ddy(u, D, fy)
-    wz, wq = L/s['nz'], s['m'].wq[..., None, None]
+    wz = L/s['nz']
     # wq is (nelem, n, n); the physical field is (nelem, n, n, F, nz), so it
     # needs TWO trailing axes, not one.  With one it broadcasts against the
     # field axis and silently weights the wrong thing -- here it raised, which
     # was luck.
-    w2 = s['m'].wq[..., None, None]
-    E = 0.5*wz*float(np.sum(np.abs(FR.to_physical(Uc, s['nz']))**2 * w2))
-    Om = 0.5*wz*float(np.sum(np.abs(FR.to_physical(
-        np.concatenate([ox, oy, oz], axis=-2), s['nz']))**2 * w2))
+    w2 = s.get('wqg', s['m'].wq)[..., None, None]
+    xp = np if isinstance(Uc, np.ndarray) else __import__('cupy')
+    E = 0.5*wz*float(xp.sum(xp.abs(FR.to_physical(Uc, s['nz']))**2 * w2))
+    Om = 0.5*wz*float(xp.sum(xp.abs(FR.to_physical(
+        xp.concatenate([ox, oy, oz], axis=-2), s['nz']))**2 * w2))
     return E, Om
 
 
