@@ -54,12 +54,22 @@ def apply(U, D, facx, facy, wq, lam, mu, mesh=None, mask=None):
 
 
 def jacobi_diagonal(shape, D, facx, facy, wq, lam, mu, mesh=None, mask=None):
-    """Diagonal of `apply`, by probing one node per element-interior position.
+    """WRONG for an ASSEMBLED operator -- use jacobi_diagonal_analytic.
 
-    The stencil of a spectral element spans the whole element, so a colouring
-    needs (N+1)^2 probes -- cheap here because they are shared across every
-    field and mode, unlike the VVP diagonal which is assembled analytically.
+    Kept only so the mistake is not repeated.  Setting `e[:, i, j] = 1` sets
+    that LOCAL index in every element at once, and a node shared between two
+    elements then carries 1 in one element's storage and 0 in the other's --
+    a DISCONTINUOUS vector, which the assembled operator is not defined on.
+    Measured against the true diagonal (probed one global dof at a time, via gs
+    of a one-hot): this is 5.0e-01 wrong, the analytic form 2.1e-16.
+
+    The failure is invisible without a reference: the numbers look plausible,
+    are positive, and give a preconditioner that converges -- just a worse one.
     """
+    import warnings
+    warnings.warn('jacobi_diagonal probes with discontinuous vectors and is '
+                  'wrong for an assembled operator; use '
+                  'jacobi_diagonal_analytic', RuntimeWarning, stacklevel=2)
     n = shape[1]
     d = np.zeros(shape)
     e = np.zeros(shape)
@@ -70,6 +80,47 @@ def jacobi_diagonal(shape, D, facx, facy, wq, lam, mu, mesh=None, mask=None):
             col = apply(e, D, facx, facy, wq, lam, mu, mesh, mask)
             d[:, i, j] = col[:, i, j]
     return d
+
+
+def jacobi_diagonal_analytic(mesh, N, wq, lam, mu, nfield, nk, mask=None):
+    """diag(lam*M + mu*K) in CLOSED FORM -- no probing.
+
+    With M = diag(wq), wq_ij = w_i w_j /(fx fy), and K = Kx + Ky assembled from
+    the same 1-D pieces the FDM factors use,
+
+        Kx[(i,j),(i,j)] = (fx/fy) w_j  sum_p w_p D[p,i]^2
+        Ky[(i,j),(i,j)] = (fy/fx) w_i  sum_q w_q D[q,j]^2
+
+    so the whole diagonal is
+
+        lam * w_i w_j/(fx fy)
+      + mu * [ (fx/fy) w_j S[i] + (fy/fx) w_i S[j] ],   S[i] = sum_p w_p D[p,i]^2
+
+    `jacobi_diagonal` above gets the same numbers by applying the operator to
+    (N+1)^2 unit vectors, which is fine once but is (N+1)^2 matvecs of setup --
+    and a multigrid smoother needs this at EVERY level, per dt, so the closed
+    form is what makes that affordable.  It is also assembly-exact: the sum
+    over elements sharing a node is just gather-scatter of the local diagonals.
+    """
+    from lssem2d.lgl import diff_matrix, lgl_weights
+    w = lgl_weights(N)
+    D = diff_matrix(N)
+    S = np.einsum('p,pi->i', w, D*D)          # sum_p w_p D[p,i]^2
+    fx = np.asarray(mesh.facx, dtype=float)
+    fy = np.asarray(mesh.facy, dtype=float)
+    lam = np.asarray(lam, dtype=float).reshape(-1)
+    if lam.size == 1:
+        lam = np.repeat(lam, nk)
+    n1 = N + 1
+    d = np.empty((mesh.nelem, n1, n1, nfield, nk))
+    for e in range(mesh.nelem):
+        m0 = 1.0/(fx[e]*fy[e])
+        stiff = mu*((fx[e]/fy[e])*np.outer(S, w) + (fy[e]/fx[e])*np.outer(w, S))
+        mass = m0*np.outer(w, w)
+        for k in range(nk):
+            d[e, :, :, :, k] = (stiff + lam[k]*mass)[:, :, None]
+    d = S3.gs(mesh, d)                        # assemble: shared nodes sum
+    return d*mask if mask is not None else d
 
 
 def jacobi_inverse(d, mask=None):
