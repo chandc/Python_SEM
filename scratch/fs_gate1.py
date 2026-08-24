@@ -44,6 +44,8 @@ def build(N=8, nz=8, tol=1e-12):
              lz=sd['lz'], mask_u=mask_u, mask_p=mask_p, tol=tol,
              wq3=m.wq[..., None, None], wq1=m.wq[..., None, None])
     s['Mp'] = HH.fdm_preconditioner(m, N, sd['kz']**2, 1.0, mask_p, 2, nk)
+    s['wall_u'] = PJ.wall_indicator(m, nk, nz, 3)
+    s['ubc'] = None
     # the kz = 0 null vector: the constant, restricted to unpinned dofs
     v = np.ones(mask_p[..., 0:1, 0:1].shape)*mask_p[..., 0:1, 0:1]
     s['mw1'] = S3.multiplicity_weight(m, mask_p.shape)[..., 0:1, 0:1]

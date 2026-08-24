@@ -1,4 +1,16 @@
-"""GATE 1 on the PRESSURE-FREE projection -- is it second order?
+"""GATE 1: PRESSURE-FREE projection + the Kim-Moin wall correction.
+
+The two error sources were separated and each addressed alone:
+
+  incremental + uhat = 0        UNSTABLE (sigma 9.316 -> 9.944 over 40 steps)
+  pressure-free + uhat = 0      stable, FIRST order (0.95, 0.97, 0.97)
+  incremental + Kim-Moin        still unstable, but less so (order -0.80)
+
+The pressure-free form is stable and its first-order error is the tangential
+slip; the Kim-Moin correction removes exactly that slip.  Together they are the
+scheme spectral channel codes in the Kim-Moin-Moser lineage actually use, and
+the combination is what this measures.
+
 
 The incremental form is unstable here (sigma runs to 9.94 over 40 steps), and
 the likely reason is not only the wall condition: an INCREMENTAL scheme carries

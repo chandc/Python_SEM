@@ -91,10 +91,27 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
         r = r - w*gradient(pc, D, fx, fy, kz)
 
     # (b) velocity Helmholtz, weak form: (c_k + nu kz^2) M + nu K
+    #
+    # KIM-MOIN WALL CORRECTION.  Imposing uhat = 0 at a wall is what leaves the
+    # tangential slip -beta_k*dt*dphi/dt in u^k -- the classic O(dt) boundary
+    # layer, and the inconsistency the incremental pressure loop amplifies into
+    # the instability measured on Gate 1 (sigma 9.316 -> 9.944 over 40 steps).
+    # But the slip is KNOWN: the projection subtracts beta_k*dt*grad(phi), so
+    # prescribing uhat|wall = beta_k*dt*grad(phi) makes u^k = 0 there exactly.
+    # phi is lagged by one substage, which is what makes this explicit and
+    # cheap.
     lam_u = ck + nu*(kz**2)
-    bu = S3.gs(m, _split(r))*s['mask_u']
+    bu = S3.gs(m, _split(r))
+    ubc = s.get('ubc')
+    if ubc is not None:
+        # inhomogeneous Dirichlet by lifting: solve for the correction with
+        # homogeneous BCs against a right-hand side that already carries A*ubc
+        bu = bu - HH.apply(ubc, D, fx, fy, wq, lam_u, nu, m, None)
+    bu = bu*s['mask_u']
     uhat, it_u, res_u = HH.solve(bu, D, fx, fy, wq, lam_u, nu, m, s['mask_u'],
                                  s['Mu'], tol=s['tol'])
+    if ubc is not None:
+        uhat = uhat + ubc
     uhat = _join(uhat)
 
     # (c) pressure Poisson: kz^2 M + K, natural (Neumann) walls, pinned at kz=0
@@ -123,6 +140,10 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
         pc = pc + phi - nu*div
     else:
         pc = phi - nu*div
+    # wall value for the NEXT substage's intermediate velocity
+    if s.get('wall_u') is not None:
+        gp = _split((dt*T.BETA[k])*gradient(phi, D, fx, fy, kz))
+        s['ubc'] = gp*s['wall_u']
     return Uc, pc, (it_u, res_u, it_p, res_p)
 
 
@@ -150,3 +171,24 @@ def build_masks(mesh, nk, nz, nfield_c, wall=False):
                 if code in BC.WALLISH:
                     mask[idx] = 0.0
     return mask
+
+
+def wall_indicator(mesh, nk, nz, nfield_c):
+    """1 on wall velocity dofs, 0 elsewhere -- where uhat is PRESCRIBED.
+
+    Not simply 1 - mask: the mask also zeroes the imaginary half at real modes,
+    which is a different constraint and must stay at zero, not be given a wall
+    value.
+    """
+    from . import bc as BC
+    from .bc import real_mode_columns
+    n = mesh.N + 1
+    F = 2*nfield_c
+    ind = np.zeros((mesh.nelem, n, n, F, nk))
+    for e in range(mesh.nelem):
+        for code, idx in BC._edges(mesh, e):
+            if code in BC.WALLISH:
+                ind[idx] = 1.0
+    for k in real_mode_columns(nk, nz):
+        ind[..., nfield_c:, k] = 0.0
+    return ind
