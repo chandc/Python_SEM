@@ -1,4 +1,8 @@
-"""Explicit convective term u.grad u, dealiased by the 3/2 rule in z.
+"""Explicit convective term, dealiased by the 3/2 rule in z.
+
+Advective form u.grad u by default; skew=True gives
+0.5*(div(uu) + u.grad u), which conserves energy even when div u is
+not zero -- see the note at the branch.
 
 NEW CODE.  Imports lssem2d.operators for the (x,y) derivatives; lssem2d is not
 modified.
@@ -36,7 +40,7 @@ from . import device as DEV
 from . import operator as OP
 
 
-def convective(Uh, D, facx, facy, kz, nz):
+def convective(Uh, D, facx, facy, kz, nz, skew=False):
     """u.grad u for the three momentum components, in mode space.
 
     Uh  (nelem, n, n, 7, nmode) complex; only u, v, w are read.  Note the var
@@ -67,9 +71,36 @@ def convective(Uh, D, facx, facy, kz, nz):
 
     # 4-5. products on the padded grid, then back and truncate
     out = DEV.empty_complex(tuple(Uh.shape[:-2]) + (3, Uh.shape[-1]), Uh)
+    if not skew:
+        for c in range(3):
+            Np = up[0]*dxp[c] + up[1]*dyp[c] + up[2]*dzp[c]
+            out[..., c, :] = dealias_backward(Np, nz)
+        return out
+
+    # SKEW-SYMMETRIC FORM, 0.5*(div(uu) + u.grad u).
+    #
+    # WHY IT IS NOT COSMETIC.  The advective form conserves energy ONLY when
+    # div u = 0:  int u.(u.grad u) = -0.5 int (div u)|u|^2.  The skew form
+    # conserves it IDENTICALLY, whatever div u is -- that is its defining
+    # property.  The least-squares path holds div u / |grad u| at 4e-07 and
+    # never notices; the PROJECTION path holds 3.6e-04, and at peak dissipation
+    # that residual becomes an energy SOURCE.  Measured: enstrophy ran 5.6%,
+    # 7.8%, 12.5% above the least-squares reference and then blew up at
+    # t = 9.32 where the reference peaked and rolled over cleanly.
+    #
+    # Kim & Moin use this form and say why -- "following Horiuti's
+    # recommendation, we employ the skew-symmetric form of the convective term
+    # to control aliasing errors".  Their scheme is well tested on long
+    # turbulent runs; the advective form is what did not carry over.
+    #
+    # The products are formed on the PADDED grid and brought back before
+    # differentiating, so the divergence half is dealiased exactly as the
+    # advective half is.
     for c in range(3):
-        Np = up[0]*dxp[c] + up[1]*dyp[c] + up[2]*dzp[c]
-        out[..., c, :] = dealias_backward(Np, nz)
+        adv = dealias_backward(up[0]*dxp[c] + up[1]*dyp[c] + up[2]*dzp[c], nz)
+        pj = [dealias_backward(up[c]*up[j], nz) for j in range(3)]
+        div = (dUdx(pj[0], D, facx) + dUdy(pj[1], D, facy) + ik*pj[2])
+        out[..., c, :] = 0.5*(adv + div)
     return out
 
 

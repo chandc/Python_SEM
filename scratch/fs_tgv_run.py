@@ -91,7 +91,14 @@ def step():
     tot = 0
     for k in range(T.NSTAGE):
         s['Mu'] = pre[k]
-        Nk = -CV.convective(Uc, s['Dg'], s['fxg'], s['fyg'], s['kzg'], NZ)
+        # SKEW-SYMMETRIC form.  The advective form conserves energy only when
+        # div u = 0, and this path carries 3.6e-04 where the least-squares path
+        # holds 4.1e-07.  Kim & Moin use skew for exactly this reason
+        # ("following Horiuti's recommendation ... to control aliasing
+        # errors"); it did not carry over, and the previous run blew up at
+        # t = 9.32 with enstrophy 155% above the reference.
+        Nk = -CV.convective(Uc, s['Dg'], s['fxg'], s['fyg'], s['kzg'], NZ,
+                            skew=True)
         Uc, pc, inf = PJ.substage(s, Uc, pc, Nk, Nprev, k, dt)
         Nprev = Nk
         tot += inf[0] + inf[2]
