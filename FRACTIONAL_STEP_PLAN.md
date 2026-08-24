@@ -10,26 +10,31 @@ Phase 3 is measured.** Updated 2026-08-24.
 | | fractional step | VVP LSSEM | |
 |---|---|---|---|
 | **TGV Re = 800, 88³** (periodic) | **3.85 s/step** | 79.4 s/step | **20.6× faster** |
-| **minimal channel Re_τ = 180** (walls) | 39.76 s/step | ~17 s/step¹ | **~2× SLOWER** |
+| **minimal channel Re_τ = 180** (walls)³ | **6.34 s/step** | 111.6 s/step | **17.6× faster** |
 | temporal order, periodic | 2.00 | 2.00 | equal |
 | temporal order, walls | **2.0**² | 2.00 | equal |
 | accuracy constant at equal dt, walls | 1.055e-4 | 1.045e-5 | **LSSEM ~10× better** |
 | energy–enstrophy balance (Gate 3) | 5.16e-05 | 6.65e-06 | LSSEM ~8× tighter |
 
-¹ scaled from a measured 35 days on the Mac by the measured 7.1× A100 factor;
-not measured directly. ² after the fix in §3.1b — it was ~1.6 before.
+¹ TGV rows on the Spark GB10. ² after the fix in §3.1b — it was ~1.6 before.
+³ channel rows both on the Spark GB10, with the pressure preconditioner of
+§3.1c.
 
-**The advantage is flow-dependent, and that is the headline.** Large for
-periodic DNS, absent for wall-bounded flow. The iteration ratio tells the
-story: **4.1×** in the projection path's favour on TGV (3190 vs 780 CG/step),
-**1.19×** on the channel (14358 vs 12030) — essentially gone. Chaining the
-periodic figure onto the channel would have been wrong by ~40×.
+**The advantage holds for BOTH, ~18–21×, once the pressure Poisson is properly
+preconditioned.** An earlier version of this table said the advantage was
+"flow-dependent — absent for wall-bounded flow", from a channel measurement of
+39.76 s/step and 12030 CG/step. **That was my preconditioner, not the flow.**
+The pressure solve was using one-level additive Schwarz with no coarse grid;
+with p-multigrid the same case takes **60 CG/step and 6.34 s/step** — 200×
+fewer iterations. The retracted conclusion is kept in §3.1c because the way it
+failed is instructive.
 
-**Recommendation: use the projection path for periodic DNS (TGV, CORIA), keep
-LSSEM for the channel work** — and note the ~10× accuracy-constant gap, which
-means matching LSSEM's accuracy needs dt roughly 3.2× smaller, eating into but
-not erasing the periodic speedup. That constant has **not** been measured on
-TGV; only the order has. It should be, before 20.6× is quoted as like-for-like.
+**Recommendation: the projection path is faster for both periodic and
+wall-bounded flow.** The remaining caveat is accuracy, not speed: the
+constants differ by ~10× at equal dt on the channel, so matching LSSEM's
+accuracy needs dt roughly 3.2× smaller. That eats into an ~18× advantage
+without erasing it — and it has **not** been measured on TGV, where only the
+order was checked.
 
 ---
 
@@ -185,6 +190,36 @@ $$\mathbf{u}^{k}\!\cdot\mathbf{t}\Big|_{\Gamma} \;=\; -\beta_k\Delta t\,\frac{\p
 the classic $O(\Delta t)$ numerical boundary layer of thickness
 $\sim\sqrt{\nu\Delta t}$. The LS path has no analogue: it imposes velocity
 directly and never splits.
+
+### 3.1c The channel verdict was my preconditioner, not the flow
+
+The pressure Poisson on the Re_τ = 180 channel took **12030 CG/step**, against
+780 on periodic TGV, and I concluded the projection path was ~2× slower there
+and that the advantage was flow-dependent. Both were wrong, and the diagnosis
+is worth keeping.
+
+`fdm_preconditioner` is **one-level additive Schwarz** — an exact element-local
+inverse plus gather-scatter, with **no coarse grid**. On this operator that
+buys nothing over a plain diagonal, and both grow with element count:
+
+| elements | Jacobi | FDM | **PMG** |
+|---|---|---|---|
+| 2×4 | 254 | 231 | **9** |
+| 6×12 | 734 | 826 | **9** |
+
+Growth like √elements is the signature: **Poisson's slow modes are global and
+smooth**, so exactness *inside* an element cannot reach them — which is why an
+exact element inverse was no better than a diagonal. A coarse grid reaches
+them, and the count goes flat.
+
+**§7K's p-MG closure does not transfer.** It closed p-MG for the VVP
+least-squares operator — 7.4× fewer iterations for ~27× the cost — because
+§7K.2 found *that* operator's slow modes **rough**. Poisson's are smooth, the
+canonical multigrid case. The machinery §7K left behind (`p_interp`,
+`coarsen_mesh`, `Chebyshev4`, `_factor_spd`) is operator-agnostic and is reused
+unchanged in `lssem3d/hpmg.py`.
+
+Channel, same machine (Spark GB10): **39.76 → 6.34 s/step**, 12030 → 60 CG/step.
 
 ### 3.1b RESOLVED, 2026-08-24: one projection per step, not per substage
 
