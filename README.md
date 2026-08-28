@@ -1,44 +1,55 @@
-# Python_SEM: Matrix-Free Spectral Element Method Solver
+# Python_SEM — Spectral Element Navier-Stokes on Laptop-Class Hardware
 
-A highly optimized, matrix-free Spectral Element Method (SEM) solver for the 2D Poisson equation, designed to run efficiently on Apple Silicon (M-series) CPUs using NumPy, MLX, and PyTorch, alongside a pure Modern Fortran benchmark.
+What began as a matrix-free 2D SEM Poisson benchmark is now a validated 3D
+incompressible Navier-Stokes solver: spectral elements in x-y, Fourier in z,
+running production DNS on a MacBook (NumPy/Accelerate) and desk-side GPUs
+(CuPy on NVIDIA GB10; A100-ready).
 
-## Features
+## Two solver paths
 
-- **Matrix-Free Tensor Contractions**: By exploiting the tensor-product structure of Gauss-Lobatto-Legendre (GLL) polynomials, the solver avoids constructing the global sparse stiffness matrix entirely. The discrete Laplacian is evaluated locally in $\mathcal{O}(p^3)$ time using highly optimized matrix multiplications.
-- **Direct Stiffness Summation (DSS)**: Global $C^0$ continuity is enforced on the fly by sharing boundary residuals between nearest-neighbor elements.
-- **Jacobi Preconditioned Conjugate Gradient (PCG)**: The condition number of spectral methods scales poorly with the polynomial degree $p$, i.e., $\mathcal{O}(p^4)$. We construct a global diagonal preconditioner algebraically and apply it via DSS to drastically reduce the number of iterations required to hit machine precision.
-- **Multi-Backend Benchmarking**: Execute the same solver logic across:
-  - **NumPy**: Delegated directly to Apple's Accelerate BLAS for near-compiled performance.
-  - **Apple MLX**: Utilizes `@mx.compile` to fuse the entire PCG loop into an optimized graph.
-  - **PyTorch**: Native CPU tensors (ready for GPU transition).
-  - **Fortran**: A pure compiled implementation acting as the theoretical speed limit.
+| | VVP LSSEM | Fractional step (RK3-CN) |
+|---|---|---|
+| formulation | velocity-vorticity-pressure least squares | projection, per-RKW3-substage |
+| strengths | tight coupling, robust BCs | 30-130x cheaper per step |
+| status | validated (TGV, Kovasznay, BFS, cavity...) | production path for periodic + wall flows |
 
-## Getting Started
+Convection uses the skew-symmetric form (Horiuti); z is 3/2-rule dealiased.
+A consistent P_N-P_N pressure operator E = G^T M^-1 G (`lssem3d/epmg.py`,
+`project.py`) zeroes the enforced divergence identically where required.
 
-### Prerequisites
+## Headline validations
 
-You need Python 3.9+ and the following libraries installed:
-```bash
-pip install numpy mlx torch matplotlib sympy
-```
-You will also need `gfortran` installed on your system to compile the Fortran benchmark.
+- **Taylor-Green Re=800, 160^3** (30 h on a GB10): peak dissipation within
+  0.12% of Gourianov et al. (2022) 256^3 DNS, 0.22% mean-curve error —
+  tighter than the two published references agree with each other; energy
+  balance within [0.9988, 1.0076] for the whole run.  `TGV_VALIDATION.md`.
+- **Minimal channel Re_tau=180** (Jimenez-Moin box, tripped from rest by a
+  shaped solenoidal low-k disturbance): statistically stationary over 15
+  eddy-turnover units; kappa = 0.408, B = 5.69, U+_c = 18.38, second-order
+  statistics within a few percent of Kim-Moser-Moin 1987; burst periods
+  t+ ~ 139/450 match the literature.  Data: `results/minchan_re180_K/`
+  (in the Dropbox tree).
+- **A-priori quality metrics that predicted, not explained**: the energy-
+  enstrophy balance -dE/dt / 2nu*Omega and the k_max*eta >= 1.5 criterion
+  priced every run in advance.  `DIVERGENCE_AND_CONSISTENCY.md`.
 
-### Running the Solver
+## Performance (measured)
 
-You can run the full $p$-refinement benchmark (which sweeps the polynomial degree from $p=3$ to $p=15$ on a highly oscillatory test problem) by executing:
-```bash
-python sem_2d.py
-```
-This script will automatically generate the 1D GLL matrices, compile the Fortran executable `sem_2d_f90`, run all four backends, and generate a convergence plot `p_convergence_2d_plot.png`.
+- GPU (CuPy): fused kernels, GEMM inner products, device-resident p-multigrid
+  with disk-cached setup — `CUPY_BACKEND.md`.
+- CPU (Apple Silicon): threaded-GEMM derivatives + per-mode adaptive freezing
+  + mode-space multiprocessing = 3.6x, channel step 4.6 -> 1.27 s
+  (`lssem3d/modepar.py`).
 
-## Test Problem & Benchmarks
+## Key documents
 
-The solver is tested against the highly oscillatory function:
+`DIVERGENCE_AND_CONSISTENCY.md` (progress report + operator decision map),
+`SCHEME_COMPARISON.md` (RK4-CN Kim-Moin vs RK3-CN, equations side by side),
+`KIM_MOIN_REVIEW.md`, `TGV_VALIDATION.md`, `CHANNEL_VALIDATION.md`,
+`CUPY_BACKEND.md`, `FRACTIONAL_STEP_PLAN.md`, `3D_STATUS.md` (full log).
 
-$$
-u(x,y) = \sin(4\pi x) \sin(4\pi y)
-$$
+## The original 2D benchmark
 
-On a fixed grid of $5 \times 15$ elements, the solver exhibits perfect exponential convergence (spectral accuracy), plunging from a large error at $p=3$ to a hard machine-precision floor of $\sim 10^{-11}$ around $p=13$.
-
-For a deep dive into the mathematics, the Numba thread-contention issues we discovered, and how NumPy achieves Fortran-level speeds by feeding dense $(p+1)\times(p+1)$ matrix multiplications directly into the Apple Accelerate BLAS framework, please read the [SEM Benchmark Report](SEM_BENCHMARK_REPORT.md).
+The matrix-free 2D Poisson solver and its NumPy/MLX/PyTorch/Fortran
+benchmark suite remain in place: `python sem_2d.py` sweeps p = 3..15 and
+reproduces the convergence plot.  See git history for that chapter.

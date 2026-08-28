@@ -155,9 +155,12 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
         # homogeneous BCs against a right-hand side that already carries A*ubc
         bu = bu - HH.apply(ubc, D, fx, fy, wq, lam_u, nu, m, None)
     bu = bu*s['mask_u']
-    uhat, it_u, res_u = HH.solve(bu, D, fx, fy, wq, lam_u, nu, m, s['mask_u'],
-                                 s['Mu'], tol=s['tol'],
-                                 check_every=s.get('check_every'))
+    if s.get('modepool') is not None:
+        uhat, it_u, res_u = s['modepool'].solve('u', k, bu)
+    else:
+        uhat, it_u, res_u = HH.solve(bu, D, fx, fy, wq, lam_u, nu, m,
+                                     s['mask_u'], s['Mu'], tol=s['tol'],
+                                     check_every=s.get('check_every'))
     if ubc is not None:
         uhat = uhat + ubc
     uhat = _join(uhat)
@@ -180,18 +183,28 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
         bp[..., 0:1, 0:1] -= (num/s['null_norm'])*v
     # CONSISTENT PROJECTION when asked for: invert D.G, the same operators the
     # update uses, so the divergence cancels exactly rather than only weakly.
-    if s.get('dg_pressure'):
+    if s.get('consistent_p'):
+        # P_N-P_N consistent projection: E = G^T M^{-1} G, weak divergence
+        # zeroed identically.  bp/null handling happens inside.
+        Uc, phi, it_p, res_p = project_consistent(s, uhat, dt*T.BETA[k])
+    elif s.get('dg_pressure'):
         phi, it_p, res_p = _solve_dg(bp, D, fx, fy, wq, kz, m, s['mask_p'],
                                      s['Mp'], s['tol'],
                                      s.get('check_every'))
+        phi = _join(phi)
+        Uc = uhat - (dt*T.BETA[k])*gradient(phi, D, fx, fy, kz)
+    elif s.get('modepool') is not None:
+        phi, it_p, res_p = s['modepool'].solve('p', 0, bp)
+        phi = _join(phi)
+        Uc = uhat - (dt*T.BETA[k])*gradient(phi, D, fx, fy, kz)
     else:
         phi, it_p, res_p = HH.solve(bp, D, fx, fy, wq, kz**2, 1.0, m,
                                     s['mask_p'], s['Mp'], tol=s['tol'],
                                     check_every=s.get('check_every'))
-    phi = _join(phi)
+        phi = _join(phi)
+        Uc = uhat - (dt*T.BETA[k])*gradient(phi, D, fx, fy, kz)
 
-    # (d) projection and (e) rotational pressure update
-    Uc = uhat - (dt*T.BETA[k])*gradient(phi, D, fx, fy, kz)
+    # (e) rotational pressure update
     if s.get('incremental', True):
         pc = pc + phi - nu*div
     else:
@@ -201,6 +214,229 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
         gp = _split((dt*T.BETA[k])*gradient(phi, D, fx, fy, kz))
         s['ubc'] = gp*s['wall_u']
     return Uc, pc, (it_u, res_u, it_p, res_p)
+
+
+def apply_E(ph, D, fx, fy, wq3, kz, mesh, mask_p, mask_u, Mginv):
+    """The CONSISTENT pressure operator  E = G^T M^{-1} G  (P_N-P_N).
+
+    G   : weak gradient, pressure -> velocity space: gs(wq * strong_grad),
+          then the velocity mask (essential BCs live in the velocity space).
+    M   : assembled diagonal GLL mass, Mginv = 1/gs(wq) per node.
+    G^T : its exact adjoint in the multiplicity-weighted inner product --
+          the weak divergence gs(Dx^T(wq vx) + Dy^T(wq vy)) - wq ikz^* vz.
+
+    Symmetric PSD BY CONSTRUCTION, which is the gate apply_dg failed (2.8e-2
+    asymmetry): strong-div o strong-grad with no mass weighting is NOT an
+    adjoint pair on C0 elements.  Solving E phi = (1/dt) G^T uhat and updating
+    u = uhat - dt M^{-1} G phi zeroes the WEAK divergence identically -- the
+    K-vs-G^T M^{-1} G mismatch that set the divergence floor, destabilised the
+    Kim-Moin stage pressure, and grew to 22% in the tripping channel is gone
+    in the norm the projection controls.
+
+    ph: split-real (nelem, n, n, 2, nk).  Returns the same shape, masked.
+    """
+    phc = _join(ph)
+    g = gradient(phc, D, fx, fy, kz)                  # strong grad, elementwise
+    v = S3.gs(mesh, _split(wq3*g))*mask_u             # G ph, in velocity space
+    v = v*Mginv                                       # M^{-1}
+    vc = _join(v)
+    z = (DV.ddxT(wq3*vc[..., 0:1, :], D, fx)
+         + DV.ddyT(wq3*vc[..., 1:2, :], D, fy)
+         - 1j*kz*(wq3*vc[..., 2:3, :]))              # (ikz)^* = -ikz
+    return S3.gs(mesh, _split(z))*mask_p
+
+
+def project_consistent(s, uhat_c, dtc):
+    """Consistent projection: solve E phi = (1/dtc) G^T uhat, correct uhat.
+
+    Returns (u_corrected_complex, phi_complex, iters, res).  The pressure
+    preconditioner s['Mp'] (built for K) is spectrally close enough to E to
+    precondition it; iteration counts run ~2x the K solve.
+    """
+    m = s['m']
+    D, fx, fy, kz, wq3 = s['Dg'], s['fxg'], s['fyg'], s['kzg'], s['wq3']
+    if 'Mginv' not in s:
+        s['Mginv'] = 1.0/S3.gs(m, wq3 + DEV.zeros_like(wq3))
+    mask_p, mask_u, Mginv = s['mask_p'], s['mask_u'], s['Mginv']
+    # RHS from the VELOCITY-SPACE PROJECTION of uhat.  With the Kim-Moin
+    # wall value active, uhat carries prescribed nonzero wall dofs; the
+    # correction M^{-1} G phi is masked to the interior space and can never
+    # cancel their flux, so G^T of the raw uhat has a component OUTSIDE
+    # range(E) and CG diverges (measured: res 4e18 whenever s['ubc'] is set,
+    # converges when it is None -- the A/B crash in one line).  Masking uhat
+    # first keeps b in range(E) up to the purged constant.
+    uv = _join(_split(uhat_c)*mask_u)
+    b = (DV.ddxT(wq3*uv[..., 0:1, :], D, fx)
+         + DV.ddyT(wq3*uv[..., 1:2, :], D, fy)
+         - 1j*kz*(wq3*uv[..., 2:3, :]))
+    b = S3.gs(m, _split(b))*mask_p*(1.0/dtc)
+    v = s.get('null_kz0')
+    if v is not None:
+        num = float((b[..., 0:1, 0:1]*v*s['mw1']).sum())
+        b = b.copy()
+        b[..., 0:1, 0:1] -= (num/s['null_norm'])*v
+    A = lambda p: apply_E(p, D, fx, fy, wq3, kz, m, mask_p, mask_u, Mginv)
+    # E's null vector is the PURE CONSTANT at kz=0 -- valid only on an
+    # UNPINNED pressure mask.  A pinned dof (the K-path convention) rotates
+    # the null vector into an unknown direction and CG amplifies it to 1e15.
+    # Purge the constant from every preconditioned residual.
+    nb = s.get('null_basis_kz0')      # list of (nelem,n,n), mw-orthonormal
+    # PURGE AT EVERY REAL FOURIER MODE.  At k=0 the z-gradient is identically
+    # zero; at the NYQUIST mode (even nz) it is imaginary and the mask kills
+    # it.  Either way E degenerates to the same singular 2-D operator with
+    # the same kernel -- the Nyquist lane diverged with PHYSICAL amplitude
+    # (bn 2.5e-2) once the cascade filled it, serial and pooled alike.
+    real_lanes = s.get('purge_lanes', (0,))
+    def purge(z):
+        if nb is not None:
+            z = z.copy()
+            mw0 = s['mw1'][..., 0, 0]
+            for kl in real_lanes:
+                for q in nb:
+                    num = (z[..., 0, kl]*q*mw0).sum()
+                    z[..., 0, kl] -= num*q
+            return z
+        if v is None:
+            return z
+        num = (z[..., 0:1, 0:1]*v*s['mw1']).sum()
+        z = z.copy()
+        z[..., 0:1, 0:1] -= (num/s['null_norm'])*v
+        return z
+    b = purge(b)
+    sub = None
+    if hasattr(s['Mp'], 'subset'):
+        def _mkA(idx):
+            kz_a, mp_a, mu_a = kz[idx], mask_p[..., idx], mask_u[..., idx]
+            return lambda p_: apply_E(p_, D, fx, fy, wq3, kz_a, m, mp_a,
+                                      mu_a, Mginv)
+        sub = (_mkA, s['Mp'].subset)
+    pool = s.get('modepool')
+    if pool is not None and getattr(pool, 'with_e', False):
+        ph, it, res = pool.solve('e', 0, b)
+    else:
+        ph, it, res = _pcg(A, b, s['Mp'], m, s.get('tol_p', s['tol']),
+                           s.get('check_every'), purge=purge, subset=sub)
+    phc = _join(ph)
+    corr = _join(S3.gs(m, _split(wq3*gradient(phc, D, fx, fy, kz)))
+                 * mask_u * Mginv)
+    return uhat_c - dtc*corr, phc, it, res
+
+
+def _pcg(A, b, M, mesh, tol, check_every, purge=None, subset=None,
+         bmax_global=None):
+    """PCG in the multiplicity-weighted inner product; operator passed in.
+
+    `purge`, when given, removes known null-space components from each
+    preconditioned residual -- required for singular operators whose
+    preconditioner does not respect the null space."""
+    xp = DEV.xp(b)
+    mw = DEV.to_device(S3.multiplicity_weight(mesh, tuple(b.shape)), b)
+    if check_every is None:
+        check_every = 1 if xp is np else 10
+    nk_ = b.shape[-1]; M_ = b.size//nk_
+    if DEV.is_cupy(b):
+        ones = S3._ones_row(M_, b)
+        dot = lambda a, c: (ones @ (a*c*mw).reshape(M_, nk_)).reshape(-1)
+    else:
+        dot = lambda a, c: xp.sum(a*c*mw, axis=(0, 1, 2, 3))
+    x = DEV.zeros_like(b)
+    bn = xp.sqrt(dot(b, b))
+    # DEAD-LANE GUARD.  A mode whose RHS is at roundoff (e.g. the Nyquist
+    # lane after a kernel purge) must be excluded, not iterated: its CG
+    # alpha = rz/den is 0/0 and amplifies roundoff into that lane -- step 1
+    # looked sane (|u| unchanged) while the dead lanes carried 1e15 of junk
+    # that step 2's convection mixed into everything (1e120).  Zero the lane
+    # and mark it converged.
+    # a WORKER solving a block of modes must judge deadness against the
+    # GLOBAL bmax: its local max can be orders smaller, and roundoff lanes
+    # then pass as alive and diverge (measured: 4000-iter zombie solves).
+    bmax = xp.max(bn) if bmax_global is None else max(float(xp.max(bn)),
+                                                     float(bmax_global))
+    # 1e-8: the roundoff floor SCALES WITH PROBLEM SIZE -- 1e-13 failed on
+    # the tiny grid (floor ~2e-12) and the recalibrated 1e-10 failed at 88^3
+    # (floor 1.06e-10, Nyquist lane amplified to 2e17).  1e-8 is 100x the
+    # measured production floor and still ~8 orders below any physical mode;
+    # a lane parked dead carries unsolved-pressure error of its own tiny size.
+    dead = bn < 1e-8*xp.maximum(bmax, 1e-300)
+    if bool(xp.any(dead)):
+        b = b*(~dead).astype(b.dtype)
+    r = b - A(x)
+    z = M(r)
+    if purge is not None:
+        z = purge(z)
+    p = DEV.clone(z)
+    rz = dot(r, z)
+    target = xp.where(dead, xp.inf, xp.maximum(tol*bn, 1e-300))
+    one = xp.ones_like(rz)
+    it = 0
+    # MODE-ADAPTIVE FREEZING (numpy path, subset callbacks provided).  Same
+    # rationale as helmholtz.solve: per-mode systems are independent, and
+    # iterating converged (or dead) lanes to the worst lane's count is the
+    # max-vs-sum waste.  subset = (makeA, makeM): rebuild operator and
+    # preconditioner on an index subset.
+    # no freezing when a purge is active: compaction moves lane positions
+    # under the purge closure's fixed indices, and a singular lane iterated
+    # without its purge diverges.  E-solve counts are small; the loss is minor.
+    can_c = (xp is np) and subset is not None and purge is None
+    active = None
+    xfull = x
+    A_a, M_a, tgt, mw_a = A, M, target, mw
+    nk_full = b.shape[-1]
+    def dot_a(a, c):
+        return xp.sum(a*c*mw_a, axis=(0, 1, 2, 3))
+    for it in range(1, 4001):
+        Ap = A_a(p)
+        den = dot_a(p, Ap)
+        al = xp.where(abs(den) > 1e-300, rz/xp.where(den == 0, one, den),
+                      0.0*one)
+        x = x + al*p
+        r = r - al*Ap
+        if it % check_every == 0 or it == 4000:
+            res_v = xp.sqrt(dot_a(r, r))
+            conv = res_v < tgt
+            if bool(xp.all(conv)):
+                break
+            if can_c and int(conv.sum()) >= max(2, len(conv)//3):
+                keep = np.flatnonzero(~np.asarray(conv))
+                cur = (np.arange(nk_full) if active is None else active)
+                if active is None:
+                    xfull = x.copy()
+                else:
+                    xfull[..., cur] = x
+                active = cur[keep]
+                x = xfull[..., active].copy()
+                r, p = r[..., keep].copy(), p[..., keep].copy()
+                mw_a = mw[..., active]
+                A_a = subset[0](active)
+                M_a = subset[1](active)
+                tgt = target[active]
+                rz, one = rz[keep], one[keep]
+
+        z = M_a(r)
+        if purge is not None:
+            z = purge(z)
+        rzn = dot_a(r, z)
+        be = xp.where(abs(rz) > 1e-300, rzn/xp.where(rz == 0, one, rz),
+                      0.0*one)
+        p = z + be*p
+        rz = rzn
+    if active is not None:
+        xfull[..., active] = x
+        x = xfull
+    rt = xp.sqrt(dot(b - A(x), b - A(x)))
+    rel = rt/xp.maximum(bn, 1e-300)
+    # LAST-LINE DEFENCE: a diverged lane is zeroed, never returned.  Garbage
+    # in one lane poisoned a full run (and its checkpoint) at t=1.197; a
+    # zeroed lane merely skips one mode's pressure for one solve.
+    blown = rel > 1.0
+    if bool(xp.any(blown)):
+        for kbad in [int(k) for k in xp.flatnonzero(blown)]:
+            print(f'_pcg: lane k={kbad} diverged '
+                  f'(bn={float(bn[kbad]):.3e}, rel={float(rel[kbad]):.2e}) '
+                  f'-- ZEROED', flush=True)
+        x = x*(~blown).astype(x.dtype)
+        rel = xp.where(blown, 0.0, rel)
+    return x, it, float(xp.max(rel))
 
 
 def build_masks(mesh, nk, nz, nfield_c, wall=False):
@@ -254,7 +490,7 @@ def wall_indicator(mesh, nk, nz, nfield_c):
 JAMESON = (0.25, 1.0/3.0, 0.5, 1.0)
 
 
-def step_kim_moin(s, Uc, phi_prev, dt, pc=None):
+def step_kim_moin(s, Uc, phi_prev, dt, pc=None, skew=True):
     """One FULL step: RK convection -> one CN viscous solve -> one projection.
 
     THE STRUCTURE IS THE POINT.  substage() above projects inside every RKW3
@@ -289,9 +525,105 @@ def step_kim_moin(s, Uc, phi_prev, dt, pc=None):
     #    stage and adds to u^n
     un = Uc
     u = un
-    for a in JAMESON:
-        from . import convect as CV
-        H = -CV.convective(u, D, fx, fy, kz, s['nz'])
+    # LAGGED PRESSURE IN THE STAGES.  With convection alone, the sweep drifts
+    # off the divergence-free manifold by dt*grad(p); the skew form conserves
+    # TOTAL energy, so the energy in that gradient mode -- (1/2) dt^2 |grad p|^2
+    # per step, 23.6% of 2*nu*Omega at TGV Re=800, dt=0.00567 -- is skimmed
+    # from the physical field, and the projection can only discard it
+    # (measured: predicted 0.2365 vs 0.2362, halves exactly with dt).
+    # Subtracting the LAGGED pressure gradient inside each stage is the
+    # interior analogue of the Kim-Moin wall correction (2.10): the surviving
+    # drift is dt*grad(p - p_lag) = O(dt^2), and the loss goes as its SQUARE.
+    # pc then accumulates the projection increments: pc^n = pc^{n-1} + phi^n.
+    from . import convect as CV
+    # FRESH PRESSURE, NOT ACCUMULATED.  pc = pc + phi has no cleaning
+    # mechanism: the projection's divergence floor leaks a little high-k junk
+    # into phi every step, the accumulator keeps all of it, and the stages
+    # differentiate it back into the momentum equation -- a positive feedback
+    # that blew up at t = 5.11 (Om 657 -> 686 in 10 steps, balance 0.68,
+    # energy CREATED) after ~900 steps.  Solving grad^2 p = div N(u^n) fresh
+    # each step is memoryless and bounded by construction; the source reuses
+    # stage 1's convective evaluation, so the extra cost is one Poisson solve.
+    H0 = -CV.convective(un, D, fx, fy, kz, s['nz'], skew=skew)
+    gp = None
+    if s.get('consistent_p') and pc is not None:
+        # E-CONSISTENT STAGE PRESSURE.  Solve E p = G^T N(u^n) and force the
+        # stages with the WEAK gradient M^{-1} G p -- then the sweep's weak
+        # divergence production cancels EXACTLY:  G^T(N - M^{-1}G p) =
+        # G^T N - E p = 0.  The strong-gradient variant left the K-vs-DG
+        # mismatch at full-dt amplitude and destabilised at t = 5.1.
+        if 'Mginv' not in s:
+            s['Mginv'] = 1.0/S3.gs(m, s['wq3'] + DEV.zeros_like(s['wq3']))
+        bfp = (DV.ddxT(s['wq3']*H0[..., 0:1, :], D, fx)
+               + DV.ddyT(s['wq3']*H0[..., 1:2, :], D, fy)
+               - 1j*kz*(s['wq3']*H0[..., 2:3, :]))
+        bfp = S3.gs(m, _split(bfp))*s['mask_p']
+        v = s.get('null_kz0')
+        if v is not None:
+            num = float((bfp[..., 0:1, 0:1]*v*s['mw1']).sum())
+            bfp = bfp.copy()
+            bfp[..., 0:1, 0:1] -= (num/s['null_norm'])*v
+        A = lambda p_: apply_E(p_, D, fx, fy, s['wq3'], kz, m, s['mask_p'],
+                               s['mask_u'], s['Mginv'])
+        nb = s.get('null_basis_kz0')
+        real_lanes = s.get('purge_lanes', (0,))
+        def _purge(z):
+            if nb is not None:
+                z = z.copy()
+                mw0 = s['mw1'][..., 0, 0]
+                for kl in real_lanes:
+                    for q in nb:
+                        nz_ = (z[..., 0, kl]*q*mw0).sum()
+                        z[..., 0, kl] -= nz_*q
+                return z
+            if v is None:
+                return z
+            nz_ = (z[..., 0:1, 0:1]*v*s['mw1']).sum()
+            z = z.copy()
+            z[..., 0:1, 0:1] -= (nz_/s['null_norm'])*v
+            return z
+        bfp = _purge(bfp)
+        subst = None
+        if hasattr(s['Mp'], 'subset'):
+            def _mkA2(idx):
+                kz_a = kz[idx]
+                mp_a = s['mask_p'][..., idx]
+                mu_a = s['mask_u'][..., idx]
+                return lambda p_: apply_E(p_, D, fx, fy, s['wq3'], kz_a, m,
+                                          mp_a, mu_a, s['Mginv'])
+            subst = (_mkA2, s['Mp'].subset)
+        pool = s.get('modepool')
+        if pool is not None and getattr(pool, 'with_e', False):
+            pn, it_fp, res_fp = pool.solve('e', 0, bfp)
+        else:
+            pn, it_fp, res_fp = _pcg(A, bfp, s['Mp'], m,
+                                     s.get('tol_p', s['tol']),
+                                     s.get('check_every'), purge=_purge,
+                                     subset=subst)
+        s['_dbg_stage_p'] = (it_fp, res_fp)
+        pc = _join(pn)
+        gp = _join(S3.gs(m, _split(s['wq3']*gradient(pc, D, fx, fy, kz)))
+                   * s['mask_u'] * s['Mginv'])
+    elif pc is not None:
+        bfp = -S3.gs(m, s['wq1']*_split(divergence(H0, D, fx, fy, kz)))              * s['mask_p']
+        v = s.get('null_kz0')
+        if v is not None:
+            num = float((bfp[..., 0:1, 0:1]*v*s['mw1']).sum())
+            bfp = bfp.copy()
+            bfp[..., 0:1, 0:1] -= (num/s['null_norm'])*v
+        pn, it_fp, _ = HH.solve(bfp, D, fx, fy, wq, kz**2, 1.0, m,
+                                s['mask_p'], s['Mp'], tol=s['tol'],
+                                check_every=s.get('check_every'))
+        pc = _join(pn)
+        gp = gradient(pc, D, fx, fy, kz)
+    for ist, a in enumerate(JAMESON):
+        # SKEW-SYMMETRIC: Kim & Moin, "following Horiuti's recommendation
+        # ... to control aliasing errors"; x-y is not dealiased here, and the
+        # advective form killed the substage TGV run at t = 9.32.
+        H = H0 if ist == 0 else -CV.convective(u, D, fx, fy, kz, s['nz'],
+                                               skew=skew)
+        if gp is not None:
+            H = H - gp
         if s.get('force') is not None:
             H = H + s['force']
         u = un + (dt*a)*H
@@ -309,8 +641,10 @@ def step_kim_moin(s, Uc, phi_prev, dt, pc=None):
     # This is safe here and was NOT safe per-substage at walls: the loop that
     # ran sigma to 9.944 amplified an inconsistent WALL pressure condition, and
     # a periodic domain has none.  Pass pc=None to keep the pressure-free form.
-    if pc is not None:
-        r = r - s['wq3']*gradient(pc, D, fx, fy, kz)
+    # (No pressure term here: the lagged gradient is applied inside the
+    # Jameson stages above, where the drift it must cancel is produced.
+    # A CN-side pressure term was measured to recover nothing -- the energy
+    # is skimmed during the sweep, before this solve runs.)
     bu = S3.gs(m, _split(r))
     ubc = None
     if s.get('wall_u') is not None and phi_prev is not None:
@@ -319,14 +653,21 @@ def step_kim_moin(s, Uc, phi_prev, dt, pc=None):
         ubc = _split(dt*gradient(phi_prev, D, fx, fy, kz))*s['wall_u']
         bu = bu - HH.apply(ubc, D, fx, fy, wq, lam, nu, m, None)
     bu = bu*s['mask_u']
-    ustar, it_u, res_u = HH.solve(bu, D, fx, fy, wq, lam, nu, m, s['mask_u'],
-                                  s['Mu'], tol=s['tol'],
-                                  check_every=s.get('check_every'))
+    pool = s.get('modepool')
+    if pool is not None and getattr(pool, 'with_e', False):
+        ustar, it_u, res_u = pool.solve('u', 0, bu)
+    else:
+        ustar, it_u, res_u = HH.solve(bu, D, fx, fy, wq, lam, nu, m,
+                                      s['mask_u'], s['Mu'], tol=s['tol'],
+                                      check_every=s.get('check_every'))
     if ubc is not None:
         ustar = ustar + ubc
     ustar = _join(ustar)
 
     # 3. projection
+    if s.get('consistent_p'):
+        Uc2, phi, it_p, res_p = project_consistent(s, ustar, dt)
+        return Uc2, phi, (it_u, res_u, it_p, res_p), pc
     div = divergence(ustar, D, fx, fy, kz)
     bp = -S3.gs(m, s['wq1']*_split(div/dt))*s['mask_p']
     v = s.get('null_kz0')
@@ -346,6 +687,6 @@ def step_kim_moin(s, Uc, phi_prev, dt, pc=None):
                                     check_every=s.get('check_every'))
     phi = _join(phi)
     Uc = ustar - dt*gradient(phi, D, fx, fy, kz)
-    if pc is not None:
-        pc = pc + phi - nu*div          # rotational form
+    # pc carries this step's freshly solved pressure out for diagnostics
+    # only; nothing accumulates.
     return Uc, phi, (it_u, res_u, it_p, res_p), pc

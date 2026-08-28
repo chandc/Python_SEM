@@ -21,7 +21,7 @@ backend = 'cupy' if '--backend' not in sys.argv else \
     sys.argv[sys.argv.index('--backend') + 1]
 price = '--price' in sys.argv
 outdir = (sys.argv[sys.argv.index('--outdir') + 1]
-          if '--outdir' in sys.argv else '/work/_fs800')
+          if '--outdir' in sys.argv else '/work/_fs800_160')
 chk_min = float(sys.argv[sys.argv.index('--chk-minutes') + 1]
                 if '--chk-minutes' in sys.argv else 20)
 
@@ -31,7 +31,7 @@ from lssem3d import (project as PJ, helmholtz as HH, convect as CV,
 import fs_phase2 as F2
 
 L = 2*np.pi
-NU, NE, N, NZ, TEND = 1.0/800.0, 11, 8, 88, 4.0*np.pi
+NU, NE, N, NZ, TEND = 1.0/800.0, 20, 8, 160, 4.0*np.pi
 TOL = 1e-6
 
 s = F2.build(N=N, ne=NE, nz=NZ, nu=NU, tol=TOL, backend=backend)
@@ -59,9 +59,9 @@ print(f'velocity dof {dof*2/1e6:.2f} M (3 complex fields)\n')
 # plain diagonal on this operator and both grow with element count.
 from lssem3d import hpmg
 t0 = time.perf_counter()
-# cache_path: the coarse factorisation is host-bound and pure setup, so a
-# checkpoint restart reloads it instead of repaying it (keyed on the
-# parameters; a config change rebuilds and overwrites)
+# cache_path: the coarse factorisation is host-bound (~90 min at 20x20 N=8)
+# and pure setup, so a checkpoint restart reloads it instead of repaying it
+# (keyed on the parameters; a config change rebuilds and overwrites)
 s['Mp'] = hpmg.HelmholtzPMG(s['m'], N, s['kz']**2, 1.0, 1, s['nk'], NZ,
                             wall=False, pin_kz0=True, deg=6,
                             like=s['mask_p'],

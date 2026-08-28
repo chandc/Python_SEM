@@ -172,17 +172,26 @@ def fdm_preconditioner(mesh, N, lam, mu, mask, nfield, nk, like=None,
     Sd = DEV.to_device(S, like) if like is not None else S
     dinv = DEV.to_device(dinv, like) if like is not None else dinv
 
-    def M(r):
-        g = r*mask if mask is not None else r
-        g = DEV.einsum('ip,eijvk->epjvk', Sd, g)
-        g = DEV.einsum('jq,epjvk->epqvk', Sd, g)
-        g = g*dinv
-        g = DEV.einsum('ip,epqvk->eiqvk', Sd, g)
-        g = DEV.einsum('jq,eiqvk->eijvk', Sd, g)
-        if assemble:
-            g = S3.gs(mesh, g)
-        return g*mask if mask is not None else g
+    def _make(mask_l, dinv_l):
+        def M(r):
+            g = r*mask_l if mask_l is not None else r
+            g = DEV.einsum('ip,eijvk->epjvk', Sd, g)
+            g = DEV.einsum('jq,epjvk->epqvk', Sd, g)
+            g = g*dinv_l
+            g = DEV.einsum('ip,epqvk->eiqvk', Sd, g)
+            g = DEV.einsum('jq,eiqvk->eijvk', Sd, g)
+            if assemble:
+                g = S3.gs(mesh, g)
+            return g*mask_l if mask_l is not None else g
+        return M
 
+    M = _make(mask, dinv)
+    # MODE SUBSET: all per-mode state lives on the last axis, so restricting
+    # the preconditioner to a subset of Fourier modes is a slice.  solve()
+    # uses this to drop converged modes instead of iterating them to the
+    # worst mode's count.
+    M.subset = lambda idx: _make(mask[..., idx] if mask is not None else None,
+                                 dinv[..., idx])
     return M
 
 
@@ -225,26 +234,60 @@ def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
     bn = xp.sqrt(dot(b, b))
     target = xp.maximum(tol*bn, 1e-300)
     one = xp.ones_like(rz)
+    # MODE-ADAPTIVE FREEZING.  The systems are independent per Fourier mode;
+    # vectorised CG otherwise runs every mode to the WORST mode's iteration
+    # count.  When enough modes have converged (numpy path only -- the
+    # compaction bookkeeping costs host syncs that the GPU path avoids by
+    # design), gather the still-active modes into contiguous smaller arrays
+    # and continue on those.  Converged lanes are frozen into x immediately.
+    can_compact = (xp is np) and hasattr(M, 'subset')
+    active = None          # None = all modes; else host index array
+    xfull = x              # full-width solution owner
+    lam_a, mask_a, mw_a, M_a, tgt = lam, mask, mw, M, target
     it = 0
     for it in range(1, max_iter + 1):
-        Ap = A(p)
-        den = dot(p, Ap)
+        Ap = A(p) if active is None else apply(p, D, facx, facy, wq, lam_a,
+                                               mu, mesh, mask_a)
+        den = (dot(p, Ap) if active is None else
+               xp.sum(p*Ap*mw_a, axis=(0, 1, 2, 3)))
         al = xp.where(abs(den) > 1e-300, rz/xp.where(den == 0, one, den),
                       0.0*one)
         x = x + al*p
         r = r - al*Ap
-        # TESTING CONVERGENCE COSTS A HOST SYNC: the CPU drains the queue,
-        # waits, reads one bit and re-issues.  Every iteration, that stall can
-        # dominate the iteration itself.  Testing every K costs at most K-1
-        # extra iterations out of hundreds, and skips K-1 reductions too.
         if it % check_every == 0 or it == max_iter:
-            if bool(xp.all(xp.sqrt(dot(r, r)) < target)):
+            res = xp.sqrt(xp.sum(r*r*mw_a, axis=(0, 1, 2, 3)))
+            conv = res < tgt
+            if bool(xp.all(conv)):
                 break
-        z = M(r)
-        rzn = dot(r, z)
+            if can_compact and int(conv.sum()) >= max(2, len(conv)//3):
+                keep = np.flatnonzero(~np.asarray(conv))
+                cur = (np.arange(b.shape[-1]) if active is None else active)
+                # freeze the converged lanes into the full solution
+                if active is None:
+                    xfull = x.copy()
+                else:
+                    xfull[..., cur] = x
+                active = cur[keep]
+                x = xfull[..., active].copy()
+                r, p = r[..., keep].copy(), p[..., keep].copy()
+                lam_full = np.asarray(lam, dtype=float).reshape(-1)
+                if lam_full.size == 1:
+                    lam_full = np.repeat(lam_full, b.shape[-1])
+                lam_a = lam_full[active]
+                mask_a = None if mask is None else mask[..., active]
+                mw_a = mw[..., active]
+                M_a = M.subset(active)
+                tgt = target[active]
+                rz, one = rz[keep], one[keep]
+        z = M_a(r)
+        rzn = (dot(r, z) if active is None else
+               xp.sum(r*z*mw_a, axis=(0, 1, 2, 3)))
         be = xp.where(abs(rz) > 1e-300, rzn/xp.where(rz == 0, one, rz), 0.0*one)
         p = z + be*p
         rz = rzn
+    if active is not None:
+        xfull[..., active] = x
+        x = xfull
     # TRUE residual, not the recursive one -- over thousands of iterations the
     # recursion drifts from b - A x, and CG then declares victory on a number
     # that no longer describes the iterate.
