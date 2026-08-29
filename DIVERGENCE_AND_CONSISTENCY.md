@@ -188,3 +188,16 @@ race (-> pipes), worker-local dead thresholds (-> global scale), roundoff-lane
 amplification (-> calibrated dead-lane guard + zero-on-divergence), and E's
 singularity at BOTH real Fourier modes on periodic domains (kernel dim 4,
 purged exactly).
+
+## 7. The operator A/B verdict (2026-08-29)
+
+Matched windows t = 3..15.95, 7401 samples each (E-run stopped at an
+E-solve stagnation plateau; statistics banked continuously):
+u_tau -0.5%, U+c +1.4%, u' +0.03%, v' -2.7%, w' -1.1%, -u'v' -1.1% --
+every difference within the ~1-3% finite-window sampling error.
+**The divergence treatment does not measurably affect low-order channel
+statistics at this resolution.**  Decision map confirmed: K-path for
+production statistics (2-5x cheaper); E-path where correctness of the
+enforced divergence / pressure energetics is itself the requirement.
+Open item: E-multigrid stagnation on some turbulent states (grinds near
+the CG cap without diverging) -- next preconditioner target.
