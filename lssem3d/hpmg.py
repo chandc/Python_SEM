@@ -46,12 +46,13 @@ class _Lvl:
     """
 
     def __init__(self, mesh, p, lam, mu, nfield_c, nk, nz, wall, pin_kz0,
-                 like=None, mask_h=None, Minv_h=None):
+                 like=None, mask_h=None, Minv_h=None, outflow_p=False):
         from . import project as PJ
         self.m, self.p = mesh, p
         Dh = diff_matrix(p)
         if mask_h is None:
-            mask = PJ.build_masks(mesh, nk, nz, nfield_c, wall=wall)
+            mask = PJ.build_masks(mesh, nk, nz, nfield_c, wall=wall,
+                                  outflow_p=outflow_p)
             if pin_kz0:
                 ind = np.zeros(mask.shape)
                 ind[0, 0, 0, 0, 0] = 1.0
@@ -195,7 +196,8 @@ class HelmholtzPMG:
     """
 
     def __init__(self, mesh, N, lam, mu, nfield_c, nk, nz, orders=None,
-                 deg=6, wall=False, pin_kz0=True, like=None, cache_path=None):
+                 deg=6, wall=False, pin_kz0=True, like=None, cache_path=None,
+                 outflow_p=False):
         orders = orders or tuple(o for o in (N, max(2, N//2), 2)
                                  if o <= N and o >= 2)
         orders = tuple(sorted(set(orders), reverse=True))
@@ -215,7 +217,8 @@ class HelmholtzPMG:
         for i, (mm, p) in enumerate(zip(meshes, orders)):
             l = _Lvl(mm, p, lam, mu, nfield_c, nk, nz, wall, pin_kz0, like,
                      mask_h=cache[f'mask{i}'] if cache is not None else None,
-                     Minv_h=cache[f'minv{i}'] if cache is not None else None)
+                     Minv_h=cache[f'minv{i}'] if cache is not None else None,
+                     outflow_p=outflow_p)
             l.lam, l.mu = lam, mu
             self.lv.append(l)
         to = (lambda a: a) if like is None else (lambda a: DEV.to_device(a, like))

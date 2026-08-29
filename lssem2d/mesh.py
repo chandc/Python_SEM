@@ -262,19 +262,15 @@ def build_channel(L_x, L_y, E_x, E_y, N, bcs=(0, 0, 1, 1)):
     mesh.compute_global_indices()
     return mesh
 
-def build_bfs(N, E_in_x=2, E_out_x=20, E_y=1):
+def build_bfs(N, E_in_x=2, E_out_x=20, E_y=1, L_in=2.0, L_out=20.0,
+              H_in=0.5, H_step=0.5):
     """
     Backward-facing step with an upstream inlet channel.
     Let's build a standard geometry:
     Inlet channel: x in [-L_in, 0], y in [0, H]
     Expansion: x in [0, L_out], y in [-H, H] (step down by H)
     """
-    # For now, a minimal representative geometry
-    # 2 elements for inlet, 6 elements for expansion
-    L_in = 2.0
-    L_out = 20.0
-    H_in = 0.5
-    H_step = 0.5
+    # Geometry now parametric: Armaly ER=1.94 is H_in=1.0, H_step=0.94.
     
     # We will just construct this manually block by block.
     # Block 1 (Inlet): [-2, 0] x [0.5, 1.0] (2x1 elements)

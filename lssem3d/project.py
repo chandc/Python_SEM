@@ -213,6 +213,11 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
     if s.get('wall_u') is not None:
         gp = _split((dt*T.BETA[k])*gradient(phi, D, fx, fy, kz))
         s['ubc'] = gp*s['wall_u']
+        if s.get('ubc_in') is not None:
+            # static inflow profile rides on top of the wall correction
+            s['ubc'] = s['ubc'] + s['ubc_in']
+    elif s.get('ubc_in') is not None:
+        s['ubc'] = s['ubc_in']
     return Uc, pc, (it_u, res_u, it_p, res_p)
 
 
@@ -439,7 +444,8 @@ def _pcg(A, b, M, mesh, tol, check_every, purge=None, subset=None,
     return x, it, float(xp.max(rel))
 
 
-def build_masks(mesh, nk, nz, nfield_c, wall=False):
+def build_masks(mesh, nk, nz, nfield_c, wall=False,
+                outflow_p=False):
     """Split-real mask for `nfield_c` complex fields.
 
     Two constraints, both required and both easy to forget:
@@ -449,6 +455,13 @@ def build_masks(mesh, nk, nz, nfield_c, wall=False):
         correction takes no wall condition at all: homogeneous Neumann is the
         NATURAL boundary condition of the weak form, so imposing nothing is
         imposing dphi/dn = 0.
+      * `outflow_p` (edge code 4) is the OPEN boundary of the projection
+        path: the VELOCITY stays FREE there -- the weak form's natural
+        condition is zero viscous traction -- while the PRESSURE mask is
+        zeroed, imposing the homogeneous Dirichlet phi = 0 that anchors the
+        pressure.  Together: the classical do-nothing outflow (p = 0,
+        nu du/dn = 0).  With an outflow the pressure Poisson is NONSINGULAR;
+        callers must disable the null-space projection.
     """
     from . import bc as BC
     from .bc import real_mode_columns
@@ -461,6 +474,11 @@ def build_masks(mesh, nk, nz, nfield_c, wall=False):
         for e in range(mesh.nelem):
             for code, idx in BC._edges(mesh, e):
                 if code in BC.WALLISH:
+                    mask[idx] = 0.0
+    if outflow_p:
+        for e in range(mesh.nelem):
+            for code, idx in BC._edges(mesh, e):
+                if code == OUTFLOW:
                     mask[idx] = 0.0
     return mask
 
@@ -485,6 +503,10 @@ def wall_indicator(mesh, nk, nz, nfield_c):
         ind[..., nfield_c:, k] = 0.0
     return ind
 
+
+# Edge code for an OPEN (outflow) boundary: WALLISH (1,2,3) are Dirichlet
+# velocity edges; 4 leaves the velocity free and Dirichlets the pressure.
+OUTFLOW = 4
 
 # Jameson's four-stage RK, the convection integrator of the Kim-Moin scheme.
 JAMESON = (0.25, 1.0/3.0, 0.5, 1.0)

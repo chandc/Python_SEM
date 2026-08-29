@@ -8,3 +8,4 @@ scratch/*.npz
 scratch/*.log
 scratch/*.png
 *.nohup
+scratch/_bfs/
