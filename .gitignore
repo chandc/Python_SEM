@@ -9,3 +9,6 @@ scratch/*.log
 scratch/*.png
 *.nohup
 scratch/_bfs/
+scratch/_bfs_ref*
+scratch/_bfs_re600*
+scratch/_bfs_forensic/
