@@ -103,3 +103,42 @@ streamline figures, README.
   solver tolerance.  Integral quantities (x_r) are unaffected at this
   grid; corner-sensitive quantities need the graded refinement pass --
   exactly why the validated 2D mesh graded toward the step.
+
+---
+
+## 7. Refinement pass and the corner-mask defect (2026-08-29, in progress)
+
+Executing sec 5 steps 1-2 (graded mesh + N=9; Re=600 base for the Tier-2a
+null test) surfaced two defects.  Both are fixed and both are general:
+
+**7.1 CFL must come from the mesh, not the hand.**  The 1.6-power grading
+shrinks the first outlet column 5.3x; two runs launched with hand-picked dt
+died immediately (one at 3e-3 from step one, one at 1e-3 as the inflow
+ramp crossed ~35%).  The driver now computes dt = 0.35 x unit-CFL from the
+inflow profile evaluated ON the actual mesh, and a C1 cosine inflow ramp
+(--ramp) softens impulsive starts.  Measured: N=9 graded dt = 7.9e-4,
+N=7 graded dt = 1.27e-3.
+
+**7.2 Mask consistency at multiblock corners (the real find).**  Forensic
+tracing localised an e-folding-0.05 explosion of v at exactly the step
+corner (0, 0.94).  Cause: the corner node's three element copies carried
+INCONSISTENT Dirichlet masks -- the inlet-channel copy (south edge = step
+top) and outlet-bottom copy (west edge = step face) masked, but the
+outlet-top copy (west edge = interior fluid) FREE.  The no-slip condition
+leaks through the free copy under gather-scatter and the masked operator
+loses symmetry on the assembled space -- the pin_dof docstring's warning,
+materialised.  The uniform-mesh Gate 3 run was marginally stable with the
+same latent leak; grading resolved the corner dynamics and detonated it.
+
+Fix (build_masks): after edge masking,
+    leaked = gs(1 - mask) > 0.5;  mask[leaked] = 0
+-- any node masked in one copy is masked in all copies (Dirichlet wins at
+corners), for every boundary type at once.  Verified: zero inconsistent
+copies on the graded mesh; a no-op on corner-free meshes (channel, TGV),
+so no validated result changes.  Dynamic retest: the reproducible t=1.1
+blow-up now runs clean to t=3 (2.7x past the death point).
+
+**Standing consequence for Gate 3**: its passed run carried the latent
+leak (stable, but present).  The N=9 graded rerun in flight doubles as
+re-validation: x_r near 8.11-8.145 confirms the number; a shift would make
+the refined value the number of record.

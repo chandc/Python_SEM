@@ -8,7 +8,7 @@ PASS: reattachment x_r/S -> 8.1 +/- 0.4 (in-house 2D: 8.145; Armaly: 8.05).
 import os, sys, time
 for v in ('OMP_NUM_THREADS','MKL_NUM_THREADS','OPENBLAS_NUM_THREADS',
           'VECLIB_MAXIMUM_THREADS'):
-    os.environ[v] = '12'
+    os.environ[v] = os.environ.get('BFS_THREADS', '12')
 sys.path.insert(0,'.'); sys.path.insert(0,'scratch')
 import numpy as np
 
@@ -22,14 +22,19 @@ def main():
                          deriv as DV, hpmg)
     S_h, H_in = 0.94, 1.0
     UM = 1.0
-    NU = UM*2*H_in/389.0
-    NZ = 4
-    N, EIX, EOX, EY = 7, 3, 16, 3
+    arg = lambda f, dflt: (sys.argv[sys.argv.index(f)+1] if f in sys.argv
+                           else dflt)
+    RE = float(arg('--re', 389.0))
+    NU = UM*2*H_in/RE
+    NZ = int(arg('--nz', 4))
+    N = int(arg('--order', 7))
+    XPOW = float(arg('--xpow', 1.0))
+    EIX, EOX, EY = 3, 16, 3
     LIN, LOUT = 2.0, 18.0
     m = build_bfs(N, E_in_x=EIX, E_out_x=EOX, E_y=EY, L_in=LIN, L_out=LOUT,
-                  H_in=H_in, H_step=S_h)
+                  H_in=H_in, H_step=S_h, xpow=XPOW)
     nk, n = NZ//2 + 1, N + 1
-    LZ = 1.0
+    LZ = float(arg('--lz', 1.0))
     kz = FR.wavenumbers(NZ, LZ)
     mask_u = PJ.build_masks(m, nk, NZ, 3, wall=True)
     mask_p = PJ.build_masks(m, nk, NZ, 1, wall=False, outflow_p=True)
@@ -44,7 +49,17 @@ def main():
              wq3=m.wq[..., None, None], wq1=m.wq[..., None, None],
              mw1=mw1, null_kz0=None, null_norm=1.0,
              wall_u=None, ubc=None, backend='numpy', check_every=1)
-    dt = 4e-3
+    # dt from the ACTUAL mesh via the CFL rule -- hand-picked dt failed twice
+    # when grading shrank the smallest column 5.3x.  The estimate uses the
+    # steady inflow profile as the velocity scale; 0.35 safety covers the
+    # corner acceleration (local speeds ~1.5x inflow there).
+    up0 = np.zeros((m.nelem, n, n, 7, NZ))
+    yy0 = np.clip((Y - S_h)/H_in, 0.0, 1.0)
+    up0[..., 0, :] = (6.0*UM*yy0*(1.0 - yy0)
+                      * ((Y > S_h) & (Y < S_h + H_in)))[..., None]
+    dt_cfl = CV.max_dt_for_cfl(up0, D, m.facx, m.facy, LZ, NZ, 1.0)
+    dt = min(float(arg('--dt', 1e9)), 0.35*dt_cfl)
+    print(f'dt = {dt:.2e}  (0.35 x unit-CFL {dt_cfl:.2e})', flush=True)
     t0 = time.time()
     s['Mp'] = hpmg.HelmholtzPMG(m, N, kz**2, 1.0, 1, nk, NZ, wall=False,
                                 pin_kz0=False, outflow_p=True, deg=6,
@@ -62,6 +77,7 @@ def main():
     Uprof = FR.to_modes(up)[..., :nk]
     lift = PJ._split(Uprof)*(1.0 - mask_u)
     s['ubc_in'] = lift; s['ubc'] = lift
+    TRAMP = float(arg('--ramp', 0.0))   # smooth inflow spin-up over TRAMP
     # IC: the profile field masked to interior (top stream flows, bottom still)
     Uc = PJ._join(PJ._split(Uprof)*mask_u + lift)
     pc = np.zeros((m.nelem, n, n, 1, nk), dtype=complex)
@@ -93,8 +109,15 @@ def main():
     nstep = int(round((float(sys.argv[sys.argv.index('--tend')+1])
                        if '--tend' in sys.argv else 150.0)/dt))
     w0 = last = time.time()
-    os.makedirs('scratch/_bfs', exist_ok=True)
+    OUT = arg('--outdir', 'scratch/_bfs')
+    os.makedirs(OUT, exist_ok=True)
     for i in range(nstep):
+        if TRAMP > 0:
+            r = min(1.0, (i*dt)/TRAMP)
+            r = 0.5 - 0.5*np.cos(np.pi*r)      # C1 ramp
+            s['ubc_in'] = lift*r
+            if i*dt <= TRAMP + 2*dt:
+                s['ubc'] = lift*r
         tot = 0
         for k in range(T.NSTAGE):
             s['Mu'] = pre[k]
@@ -102,6 +125,13 @@ def main():
             Uc, pc, inf = PJ.substage(s, Uc, pc, Nk, Nprev, k, dt)
             Nprev = Nk
             tot += inf[0] + inf[2]
+        if '--forensic' in sys.argv and i % 50 == 49:
+            P0 = np.abs(Uc).max()
+            am = np.unravel_index(np.argmax(np.abs(Uc[..., 0])), Uc[..., 0].shape)
+            print(f'  t={(i+1)*dt:.3f} max|U|={P0:.3e} at elem {am[0]} '
+                  f'(x0={m.x0[am[0]]:.2f}, y0={m.y0[am[0]]:.2f}) '
+                  f'field {am[3]} mode {am[4] if len(am)>4 else 0}', flush=True)
+            np.savez(f'{OUT}/forensic_{i+1}.npz', U=Uc, t=(i+1)*dt)
         if not np.isfinite(np.abs(Uc).max()):
             print(f'BLEW UP at t={(i+1)*dt:.3f}', flush=True); return
         if i % 500 == 499:
@@ -109,9 +139,9 @@ def main():
             print(f't={(i+1)*dt:7.2f}  x_r/S={xr:6.3f}  CG={tot}  '
                   f'[{time.time()-w0:.0f}s]', flush=True)
         if time.time() - last > 20*60:
-            np.savez('scratch/_bfs/chk.npz', U=Uc, p=pc, t=(i+1)*dt)
+            np.savez(f'{OUT}/chk.npz', U=Uc, p=pc, t=(i+1)*dt)
             last = time.time()
-    np.savez('scratch/_bfs/final.npz', U=Uc, p=pc, t=nstep*dt)
+    np.savez(f'{OUT}/final.npz', U=Uc, p=pc, t=nstep*dt)
     print(f'DONE x_r/S={reattach(Uc):.3f}', flush=True)
 
 

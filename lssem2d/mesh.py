@@ -263,7 +263,7 @@ def build_channel(L_x, L_y, E_x, E_y, N, bcs=(0, 0, 1, 1)):
     return mesh
 
 def build_bfs(N, E_in_x=2, E_out_x=20, E_y=1, L_in=2.0, L_out=20.0,
-              H_in=0.5, H_step=0.5):
+              H_in=0.5, H_step=0.5, xpow=1.0):
     """
     Backward-facing step with an upstream inlet channel.
     Let's build a standard geometry:
@@ -283,7 +283,9 @@ def build_bfs(N, E_in_x=2, E_out_x=20, E_y=1, L_in=2.0, L_out=20.0,
     hx_in = L_in / E_in_x
     hy_in = H_in / E_y
     
-    hx_out = L_out / E_out_x
+    # xpow > 1 clusters outlet columns toward the step (x = 0), the 2D
+    # Armaly mesh's recipe (1.6) for the corner singularity and shear layer.
+    xedges = L_out*(np.arange(E_out_x + 1)/E_out_x)**xpow
     hy_out = H_step / E_y
     
     e = 0
@@ -302,9 +304,9 @@ def build_bfs(N, E_in_x=2, E_out_x=20, E_y=1, L_in=2.0, L_out=20.0,
     elem_out_top = np.zeros((E_out_x, E_y), dtype=int)
     for ex in range(E_out_x):
         for ey in range(E_y):
-            mesh.x0[e] = ex * hx_out
+            mesh.x0[e] = xedges[ex]
             mesh.y0[e] = H_step + ey * hy_in
-            mesh.hx[e] = hx_out
+            mesh.hx[e] = xedges[ex+1] - xedges[ex]
             mesh.hy[e] = hy_in
             elem_out_top[ex, ey] = e
             e += 1
@@ -313,9 +315,9 @@ def build_bfs(N, E_in_x=2, E_out_x=20, E_y=1, L_in=2.0, L_out=20.0,
     elem_out_bot = np.zeros((E_out_x, E_y), dtype=int)
     for ex in range(E_out_x):
         for ey in range(E_y):
-            mesh.x0[e] = ex * hx_out
+            mesh.x0[e] = xedges[ex]
             mesh.y0[e] = ey * hy_out
-            mesh.hx[e] = hx_out
+            mesh.hx[e] = xedges[ex+1] - xedges[ex]
             mesh.hy[e] = hy_out
             elem_out_bot[ex, ey] = e
             e += 1

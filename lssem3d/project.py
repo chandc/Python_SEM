@@ -480,6 +480,16 @@ def build_masks(mesh, nk, nz, nfield_c, wall=False,
             for code, idx in BC._edges(mesh, e):
                 if code == OUTFLOW:
                     mask[idx] = 0.0
+    # CONSISTENCY ACROSS COPIES.  A shared node masked in one element's copy
+    # but free in a sibling's (the BFS step corner: the outlet-top element's
+    # west edge is interior fluid while its two siblings' edges are walls)
+    # leaks the Dirichlet condition and breaks operator symmetry -- the
+    # pin_dof docstring's warning, materialised: v exploded at exactly
+    # (0, 0.94) with e-folding 0.05 on the graded mesh.  gs of (1 - mask)
+    # marks every copy of any node with a masked sibling; zero them all.
+    from .solver3d import gs as _gs
+    leaked = _gs(mesh, 1.0 - mask) > 0.5
+    mask[leaked] = 0.0
     return mask
 
 
