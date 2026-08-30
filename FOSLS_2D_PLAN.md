@@ -665,3 +665,53 @@ need a factorisation, which is what AMG exists to avoid. The standard answer is
 **adaptive / bootstrap AMG** (`pyamg.adaptive_sa_solver`), which discovers the
 near-kernel algebraically by relaxing on $Ax=0$. Untested here and the obvious
 next step.
+
+### F2f — AmgX on the GB10: the compiled-vs-compiled test F2 could not run
+
+F2's wall times were Python-vs-Python and I said explicitly they don't transfer.
+AmgX 2.5.0 (built 2026-08-30, `sm_121`, CUDA 13.1) supplies the missing leg: a
+compiled GPU V-cycle against a compiled GPU Jacobi, same matrices, same
+`tol=1e-8`, same RHS seed. Driven through the C API by ctypes
+(`scratch/amgx_run.py`) because the point-block path needs `block_dimx=4`, which
+the MatrixMarket reader cannot express.
+
+**The pipeline validates exactly.** AmgX's PCG+Jacobi reproduced F2's scipy
+CG+Jacobi on all four meshes — **671 / 1245 / 1611 / 2103**, not one iteration
+out. Every number below sits on that footing.
+
+| mesh | ndof | Jacobi | AmgX agg (blk 4) | AmgX classical | *pyamg SA+energy* |
+|---|---|---|---|---|---|
+| 4×4 | 1027 | 671 — 0.044 s | 568 — 0.278 s | 421 — 0.165 s | *113* |
+| 8×8 | 4099 | 1245 — 0.082 s | 571 — 0.332 s | 503 — 0.249 s | *138* |
+| 12×12 | 9219 | 1611 — 0.118 s | 969 — 0.597 s | 653 — 0.352 s | *137* |
+| 16×16 | 16387 | 2103 — 0.187 s | 1005 — 0.752 s | 542 — 0.352 s | *131* |
+| **growth** | | **3.13×** | **1.77×** | **1.29×** | ***1.16×*** |
+
+**AmgX loses to compiled Jacobi at every mesh** — 0.16× to 0.53×. Setup is
+negligible (0.01–0.02 s); the cost is per-iteration, 7–10× Jacobi's.
+
+**And neither AmgX scheme reproduces the h-independence.** Aggregation grows
+1.77×, classical 1.29×, against pyamg's 1.16×. **The missing ingredient is
+identifiable**: AmgX's AGGREGATION is *plain*, with no energy-minimising
+prolongation — and F2 already showed that `smooth='energy'` is what converted a
+constant-factor preconditioner into an h-independent one (4-field `B` alone:
+1.40× growth; with energy: 1.21×).
+
+**Point-block aggregation does work, and confirms F2's mechanism.** On the same
+matrix, `block_dimx=4` versus scalar: **740 → 568, a 1.30× gain** — against
+pyamg's scalar-`B` → 4-field-`B` step of 153 → 124 = 1.23×. Two different
+libraries recovering the same field-constant structure by different means.
+Classical AMG cannot take it at all (*"Unsupported block size for strong
+connections"* — it is scalar-only).
+
+**The projection is the actual answer to F2's open question.** At 16×16 AmgX
+runs a V-cycle iteration in 0.649 ms. A compiled preconditioner of *pyamg's
+quality* — 131 iterations — would take **0.085 s against Jacobi's 0.187 s, i.e.
+2.20× faster**, and the margin widens with h since Jacobi grows 3.13×.
+
+> **So a compiled V-cycle does beat compiled Jacobi on this operator — but not
+> with anything AmgX ships.** The win requires energy-minimised prolongation on a
+> 4-field near-null space, which AmgX has no API for. The engineering question
+> F2 deferred now has a number attached and a specific missing feature named.
+
+Raw data: `scratch/amgx_mats/amgx_f2f_results.json`.

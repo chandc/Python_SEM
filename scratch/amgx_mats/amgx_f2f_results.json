@@ -1,0 +1,18 @@
+{
+  "date": "2026-08-30",
+  "host": "spark-b85b (DGX Spark, GB10, sm_121)",
+  "amgx": "2.5.0, built 2026-08-30 11:25:55, CUDA 13.1, /tmp/AMGX/build/libamgxsh.so",
+  "container": "nvcr.io/nvidia/pytorch:25.12-py3 with /tmp/AMGX bind-mounted",
+  "case": "2D FOSLS VVP, steady dt=1e4, w_mom=1, nu=1/100, N=4, tol=1e-8 rel",
+  "note": "pyamg column is F2's smoothed_aggregation_solver(B=4 field constants, smooth='energy')",
+  "h_sweep_N4": [
+    {"mesh":"4x4","ndof":1027,"jac_its":671,"jac_s":0.0436,"agg4_its":568,"agg4_s":0.2782,"cls_its":421,"cls_s":0.1652,"pyamg_its":113},
+    {"mesh":"8x8","ndof":4099,"jac_its":1245,"jac_s":0.0824,"agg4_its":571,"agg4_s":0.3321,"cls_its":503,"cls_s":0.2490,"pyamg_its":138},
+    {"mesh":"12x12","ndof":9219,"jac_its":1611,"jac_s":0.1178,"agg4_its":969,"agg4_s":0.5974,"cls_its":653,"cls_s":0.3521,"pyamg_its":137},
+    {"mesh":"16x16","ndof":16387,"jac_its":2103,"jac_s":0.1872,"agg4_its":1005,"agg4_s":0.7522,"cls_its":542,"cls_s":0.3515,"pyamg_its":131}
+  ],
+  "block_vs_scalar_4x4": {"agg_scalar_its":740,"agg_block4_its":568,"gain":1.30,
+                          "pyamg_scalarB_its":153,"pyamg_4fieldB_its":124,"gain_ref":1.23},
+  "validation": "AmgX PCG+Jacobi reproduced F2's scipy CG+Jacobi EXACTLY on all four meshes: 671/1245/1611/2103",
+  "classical_block_error": "Unsupported block size for strong connections -- classical AMG is scalar-only"
+}
