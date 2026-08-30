@@ -561,3 +561,55 @@ beyond 16×16 on this harness and somewhere different in production.
 not whether the mathematics works. And the scope limit from F1 stands: this is
 the **steady** solver only. At production $\Delta t$ the mass term dominates and
 Jacobi is near-optimal.
+
+### F2 QUALIFIED — AMG is h-independent, but CG is carrying it
+
+Prompted by the question *"did we try it as a preconditioner?"* — every F2 number
+is preconditioned CG, and CG can compensate for a weak preconditioner. The honest
+measure is the **standalone V-cycle factor**:
+
+| mesh | ρ | V-cycles to 1e−8 | CG its |
+|---|---|---|---|
+| 4×4 | 0.9715 | 637 | 113 |
+| 8×8 | 0.9673 | 555 | 138 |
+| 12×12 | 0.9671 | 550 | 137 |
+| 16×16 | 0.9704 | 613 | 131 |
+
+**ρ ≈ 0.97 — the V-cycle removes ~3% of the error per cycle**, against a textbook
+0.1–0.3. AMG alone needs ~600 cycles; AMG+CG needs 131. So "h-independent" is
+supported and "works well" is not — they are different claims.
+
+It is *not* §7K's stall (ρ = 1.0000 exactly). ρ < 1 genuinely converges, and
+**ρ is flat**, which is where the h-independence actually comes from.
+
+**Not the smoother.** Block Gauss–Seidel at blocksize 4 gives results *identical*
+to scalar (0.9700/138 both — pyamg falls back silently on a CSR matrix), and
+doubling the sweeps moves CG (138→102) while leaving ρ at 0.9701. More smoothing
+does not help, so the bottleneck is the **coarse-grid correction**.
+
+**It is the near-null space — and §7J predicted which one.** Computing the true
+softest modes:
+
+```
+softest-mode energy by field (u, v, p, ω):  [0.018  0.005  0.00004  0.977]
+```
+
+**97.7% in ω** — the 2D analogue of §7J's 3D cluster, which carried 100% of its
+energy in $(\omega_x,\omega_y)$. Four field constants cannot span that:
+
+| `B` | ρ | CG |
+|---|---|---|
+| 4 field constants | 0.9673 | 138 |
+| constants + 4 computed modes | 0.9583 | **59** |
+| 8 computed near-null modes | 0.9476 | **52** |
+
+**138 → 52, a further 2.7×**, and it closes the loop on §7J: the same
+ω-dominated cluster that made the redundant row ruinous in 3D is what limits AMG
+in 2D. The row-7 down-weighting attacked the *symptom* pointwise; a coarse space
+containing those modes attacks the cause.
+
+**Production route.** Shift-invert eigensolves are not usable in production — they
+need a factorisation, which is what AMG exists to avoid. The standard answer is
+**adaptive / bootstrap AMG** (`pyamg.adaptive_sa_solver`), which discovers the
+near-kernel algebraically by relaxing on $Ax=0$. Untested here and the obvious
+next step.

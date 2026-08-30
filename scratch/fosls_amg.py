@@ -215,7 +215,48 @@ def h_walltime():
     print('  wall times do not -- both sides here are Python.')
 
 
+def standalone_vcycle():
+    """AMG as a SOLVER, not a preconditioner -- the more demanding test.
+
+    Every F2 number so far is preconditioned CG.  But CG can carry a mediocre
+    preconditioner: it compensates by building a Krylov space, so the iteration
+    count can look healthy while the V-cycle itself barely converges.
+
+    sec 7K found exactly that for p-multigrid -- "the V-cycle stalled with
+    reduction factor exactly 1.0000 on those modes" -- and that stall is what
+    exposed the row-7 problem.  So the standalone convergence factor
+
+        rho = ||r_{k+1}|| / ||r_k||
+
+    is the honest measure of whether AMG is SOLVING this operator.  Textbook
+    multigrid gives rho ~ 0.1-0.3, h-independent.  rho close to 1 would mean CG
+    was carrying a preconditioner that does not itself converge.
+    """
+    print('\n\nF2d -- AMG as a STANDALONE solver: V-cycle convergence factor\n')
+    print(f'{"mesh":>7} {"ndof":>7} {"lvls":>5} {"op cx":>7} {"rho":>8} '
+          f'{"V-cyc to 1e-8":>14} {"CG its":>7}')
+    for ex, ey in ((4, 4), (8, 8), (12, 12), (16, 16)):
+        Af, free = case(4, ex, ey)
+        n = Af.shape[0]
+        B = near_null(n, free)
+        ml = pyamg.smoothed_aggregation_solver(Af, B=B, max_coarse=20,
+                                               smooth='energy')
+        rng = np.random.default_rng(0)
+        b = Af @ rng.standard_normal(n)
+        res = []
+        ml.solve(b, x0=np.zeros(n), tol=1e-10, maxiter=60, residuals=res,
+                 accel=None)
+        r = np.asarray(res)
+        k = max(2, len(r)//2)
+        rho = float((r[-1]/r[k])**(1.0/(len(r)-1-k))) if len(r) > k+1 else float('nan')
+        nv = int(np.ceil(np.log(1e-8)/np.log(rho))) if 0 < rho < 1 else -1
+        M = LinearOperator((n, n), matvec=ml.aspreconditioner().matvec)
+        print(f'{f"{ex}x{ey}":>7} {n:7d} {len(ml.levels):5d} '
+              f'{ml.operator_complexity():7.3f} {rho:8.4f} {nv:14d} '
+              f'{count_cg(Af, M):7d}')
+    print('\n  rho ~ 0.1-0.3 and flat is textbook.  rho -> 1 would mean CG was')
+    print('  carrying a preconditioner that does not itself converge (sec 7K).')
+
+
 if __name__ == "__main__":
-    _hsweep()
-    order_and_walltime()
-    h_walltime()
+    standalone_vcycle()
