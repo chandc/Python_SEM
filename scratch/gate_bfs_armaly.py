@@ -20,7 +20,11 @@ def main():
     from lssem3d import (project as PJ, helmholtz as HH, convect as CV,
                          fourier as FR, solver3d as S3, timestep as T,
                          deriv as DV, hpmg)
-    S_h, H_in = 0.94, 1.0
+    # geometry: --er sets the expansion ratio (H_in + S)/H_in.
+    # 1.94 = Armaly's rig (S = 0.94); 2.0 = the Erturk/literature standard.
+    _er = float(sys.argv[sys.argv.index('--er')+1]) if '--er' in sys.argv else 1.94
+    H_in = 1.0
+    S_h = H_in*(_er - 1.0)
     UM = 1.0
     arg = lambda f, dflt: (sys.argv[sys.argv.index(f)+1] if f in sys.argv
                            else dflt)
@@ -30,7 +34,12 @@ def main():
     N = int(arg('--order', 7))
     XPOW = float(arg('--xpow', 1.0))
     EIX, EOX, EY = 3, 16, 3
-    LIN, LOUT = 2.0, 18.0
+    LIN = 2.0
+    # Re=600 references put the upper-wall bubble's reattachment at ~17 step
+    # heights: an 18-unit outlet ends AT the bubble and the open boundary
+    # interacts with it (measured: x_r oscillating 12.6 <-> 17.6).  Scale the
+    # domain with Re.
+    LOUT = float(sys.argv[sys.argv.index('--lout')+1]) if '--lout' in sys.argv         else 18.0
     m = build_bfs(N, E_in_x=EIX, E_out_x=EOX, E_y=EY, L_in=LIN, L_out=LOUT,
                   H_in=H_in, H_step=S_h, xpow=XPOW)
     nk, n = NZ//2 + 1, N + 1
@@ -96,14 +105,20 @@ def main():
                 xs.append(X[e][i, 0]); tw.append(du[e, i, 0])
         xs, tw = np.array(xs), np.array(tw)
         o = np.argsort(xs); xs, tw = xs[o], tw[o]
-        # last sign change from negative (recirc) to positive
+        # A SHED EDDY between the primary bubble and the exit adds crossing
+        # pairs; reporting only the LAST crossing conflated eddy transits
+        # with reattachment swings (measured: 'x_r' 12.6 <-> 17.6 while the
+        # primary reattachment sat near 6).  Report FIRST (primary), LAST,
+        # and the crossing count; skip the corner micro-features (x < 0.5 S).
         sgn = np.sign(tw)
         idx = np.flatnonzero((sgn[:-1] < 0) & (sgn[1:] >= 0))
+        idx = [i for i in idx if xs[i] > 0.5*S_h]
         if len(idx) == 0:
-            return 0.0
-        i = idx[-1]
-        x0, x1, f0, f1 = xs[i], xs[i+1], tw[i], tw[i+1]
-        return (x0 - f0*(x1 - x0)/(f1 - f0))/S_h
+            return 0.0, 0.0, 0
+        def xz(i):
+            x0, x1, f0, f1 = xs[i], xs[i+1], tw[i], tw[i+1]
+            return (x0 - f0*(x1 - x0)/(f1 - f0))/S_h
+        return xz(idx[0]), xz(idx[-1]), len(idx)
     nstep = int(round(float(sys.argv[sys.argv.index('--tend')+1])
                       if '--tend' in sys.argv else 150.0)/dt) if True else 0
     nstep = int(round((float(sys.argv[sys.argv.index('--tend')+1])
@@ -135,14 +150,16 @@ def main():
         if not np.isfinite(np.abs(Uc).max()):
             print(f'BLEW UP at t={(i+1)*dt:.3f}', flush=True); return
         if i % 500 == 499:
-            xr = reattach(Uc)
-            print(f't={(i+1)*dt:7.2f}  x_r/S={xr:6.3f}  CG={tot}  '
-                  f'[{time.time()-w0:.0f}s]', flush=True)
+            xr1, xrN, nc = reattach(Uc)
+            print(f't={(i+1)*dt:7.2f}  x_r/S={xr1:6.3f}  xlast/S={xrN:6.3f}  '
+                  f'ncross={nc}  CG={tot}  [{time.time()-w0:.0f}s]',
+                  flush=True)
         if time.time() - last > 20*60:
             np.savez(f'{OUT}/chk.npz', U=Uc, p=pc, t=(i+1)*dt)
             last = time.time()
     np.savez(f'{OUT}/final.npz', U=Uc, p=pc, t=nstep*dt)
-    print(f'DONE x_r/S={reattach(Uc):.3f}', flush=True)
+    xr1, xrN, nc = reattach(Uc)
+    print(f'DONE x_r/S={xr1:.3f} (last {xrN:.3f}, ncross {nc})', flush=True)
 
 
 if __name__ == '__main__':

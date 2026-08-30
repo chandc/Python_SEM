@@ -155,3 +155,28 @@ re-validated after the corner-mask fix; grid-converged at the 0.1%
 level.**  The coarse and refined runs bracket the reference from below
 by ~0.4%, consistent with the remaining outflow-length truncation.
 Archive: results/bfs_armaly_re389/ (final_N9refined_t60.npz).
+
+## 8. Tier 1b passed: Erturk Re=600 comparison (2026-08-30)
+
+Two runs, consistent naming `_bfs_er{194,200}_re600`:
+
+- **ER=1.94, L_out=18, tend=80** -- the OBC stress test.  The upper-wall
+  bubble sheds eddies at this Re; two full shedding/exit cycles passed
+  through the open boundary with no reflection (wall-shear crossings
+  collapse 3 -> 1 as each eddy exits).  Domain ends inside the upper
+  bubble, so no steady x_r from this run (by design; kept as the OBC
+  record).
+- **ER=2.0, L_out=32, tend=100** -- the literature-standard geometry.
+  Startup eddy exited at t~48; monotone single-crossing approach
+  thereafter.  Exponential fit over t>50/60/70 windows:
+
+      x_r/h = 10.2 +/- 0.1   (tau ~ 70)
+
+  vs **Erturk (2008) 2D steady: 10.05** -> +1.5%, inside the combined
+  extrapolation + inlet-condition uncertainty.  Together with Gate 3
+  (Re=389: 8.11 vs 8.145) the reattachment curve's slope with Re is
+  captured across the laminar range.
+
+Archives: results/bfs_er194_re600/, results/bfs_er200_re600/ (final
+fields, crossing histories, x_r fit figure).  Next tier: 2a Barkley
+null test (L_z=6.9S seeded perturbation must decay at Re~600).
