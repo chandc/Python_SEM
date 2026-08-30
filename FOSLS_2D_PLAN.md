@@ -47,11 +47,13 @@ $\Delta t$ ($a_{\text{mass}} \sim 10^3$). That *helps* conditioning — and it a
 means an $h$-independence result obtained at large $a_{\text{mass}}$ proves
 nothing about the elliptic limit. Any test must sweep $a_{\text{mass}}$.
 
-**AMG needs an assembled sparse matrix; our solver is matrix-free.** This is the
-main implementation cost and the document does not mention it. It is tractable in
-2D: the operator is element-local before gather-scatter, so
-$A_e = L_{0,e}^{T} (\rho W) L_{0,e}$ is a dense $324 \times 324$ block at $N=8$,
-and 64 elements assemble to a sparse global $A$ in seconds.
+**AMG needs a *sparse* matrix, and the SEM operator is not one.** The document
+says AMG applies "naturally" to the FOSLS stiffness matrix. For a *low-order* FOSLS
+discretisation it does. For a **spectral element** discretisation it does not: the
+element block is dense ($324\times324$ at $N=8$), which is exactly what AMG cannot
+coarsen. The fix is low-order refined preconditioning (F2) — standard practice for
+high-order methods, and the single most important thing the document omits for our
+setting.
 
 ---
 
@@ -126,23 +128,61 @@ preconditioner can deliver $h$-independence** until the weights are fixed.
 *This single measurement decides whether the rest of the plan is about the
 preconditioner or about the formulation.* Run it first.
 
-### F2 — AMG on the assembled operator (1 day) — tests **H2**
+### F2 — AMG on a **low-order refined** operator (1 day) — tests **H2**
 
-`uv pip install pyamg`. Try, in order of increasing sophistication:
+**Not on the SEM matrix.** The high-order element block is *dense* — $324\times324$
+at $N=8$ — and AMG's whole premise is exploiting sparsity and strong connections
+in the matrix graph. In a dense block every DOF is strongly connected to every
+other, so there is nothing to coarsen and the setup cost is quadratic in the
+block size:
 
-1. **Classical Ruge–Stüben** on $A$ — the naive baseline, and likely poor: $A$ is a
-   *coupled system*, and scalar AMG has no notion of the 4 unknowns per node.
-2. **Smoothed aggregation with block size 4** (`pyamg.smoothed_aggregation_solver`
-   with `B` = the near-null space). This is the right tool for a FOSLS system.
-3. **Supply the near-null space explicitly.** For VVP-Stokes the near-kernel is
-   the constants and rigid modes; §7J found the softest 3D modes were
-   $(\omega_x,\omega_y)$-dominated, so the 2D analogue is worth extracting from
-   `eigsh` and handing to AMG as $B$.
+| $N$ | SEM block | LOR nnz/elem | sparser |
+|---|---|---|---|
+| 4 | $100^2 = 10{,}000$ | 900 | 11× |
+| **8** | $\mathbf{324^2 = 104{,}976}$ | **2,916** | **36×** |
+| 16 | $1156^2 = 1{,}336{,}336$ | 10,404 | **128×** |
 
-**Gate — and it is stated in advance:** iterations must stay **flat within 20%**
-across a 4× $h$-refinement at fixed $N$. Anything that merely *reduces* iterations
-by a constant factor is the same result §7K already rejected, and should be
-recorded as such rather than reported as success.
+The standard remedy is **low-order refined (LOR) preconditioning**, going back to
+Orszag (1980) and used by Nek5000, MFEM and libParanumal: build the $Q_1$ FEM
+operator on the *same GLL nodes*, treating each GLL cell as a bilinear quad. That
+matrix $A_{\text{LOR}}$ is sparse (9-point stencil), shares the DOF set with
+$A_{\text{SEM}}$, and — for an $H^1$-elliptic operator — is **spectrally
+equivalent with a constant independent of $N$** ($\approx \pi^2/4$ for the
+Laplacian). AMG then coarsens $A_{\text{LOR}}$, and the result preconditions
+$A_{\text{SEM}}$.
+
+**So there are three matrices, and only the middle one is ever handed to AMG:**
+
+| | what | assembled? | used for |
+|---|---|---|---|
+| $A_{\text{SEM}}$ | the actual operator | F0, small cases only | verification, spectra (F1) |
+| $A_{\text{LOR}}$ | $Q_1$ on GLL nodes | **yes, sparse** | **AMG input** |
+| coarse levels | AMG's own hierarchy | by pyamg | the V-cycle |
+
+Production stays **matrix-free** for $A_{\text{SEM}}$; only the preconditioner is
+assembled.
+
+**F1 is a precondition, not merely an input.** The LOR–SEM equivalence is an
+$H^1$ result. It extends to a FOSLS system *if and only if* the functional is
+$H^1$-norm-equivalent — which is exactly what F1 measures. **If F1 fails, F2's
+whole approach loses its basis**, not just its expected performance. The chain is
+C1 $\Rightarrow$ LOR-AMG viable $\Rightarrow$ C3.
+
+Then, in order:
+
+1. **Smoothed aggregation, block size 4** (`pyamg.smoothed_aggregation_solver`),
+   since $A_{\text{LOR}}$ is a coupled 4-field system and scalar AMG has no notion
+   of that.
+2. **Supply the near-null space $B$ explicitly** rather than letting pyamg guess
+   constants. §7J found the softest 3D modes were $(\omega_x,\omega_y)$-dominated;
+   extract the 2D analogue with `eigsh` and hand it over.
+3. **Expect anisotropy trouble.** GLL nodes cluster at element edges with spacing
+   $O(1/N^2)$, so the LOR mesh is severely stretched there — a known difficulty
+   for AMG coarsening, and the most likely reason a first attempt underperforms.
+
+**Gate — stated in advance:** iterations **flat within 20%** across a 4×
+$h$-refinement at fixed $N$. A constant-factor reduction is the result §7K already
+rejected and must be recorded as such, not reported as success.
 
 ### F3 — Weak boundary conditions (1 day) — tests **H3**
 
