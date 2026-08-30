@@ -234,6 +234,39 @@ Log the conserved quantities from step one, and keep a case with a known answer
 you can run at any time (§7M's Stokes gate, ~10 minutes). Neither is expensive;
 both are worthless if built only once something looks wrong.
 
+### L17. Check that the thing you varied actually varied, and that the thing you measured is above its own noise floor
+
+The FOSLS study (`FOSLS_2D_PLAN.md`) produced **seven** wrong answers before its
+four real ones. None crashed; every one was plausible, well-formed and wrong, and
+every one was caught by the *next* measurement rather than by reading the code:
+
+| | the error | what it looked like |
+|---|---|---|
+| 1 | swept row weightings at `dt=1`, where they are **algebraically identical** | three matching numbers, reported as a result |
+| 2 | scaled $\omega$ the wrong way in the norm | made it 7e6× worse, not better |
+| 3 | the whole rescaling idea | **invariant** — a no-op dressed as a fix |
+| 4 | compared weightings in the elliptic limit | a "conflict" production never visits |
+| 5 | left the pressure gauge in $\|e\|_1$ | error pinned at 0.993 for every $N$ |
+| 6 | read the effectivity gate past the round-off floor | a ratio of two noise levels |
+| 7 | detected convergence on the wrong quantity | admitted a saturated point |
+
+**Four of the seven (1, 5, 6, 7) share one shape: the measurement did not measure
+what it was named after.** A sweep that varies nothing, a norm reporting a gauge
+constant, a ratio of two zeros, a detector watching the wrong signal.
+
+Two habits catch all four, and both are cheap:
+
+* **Before trusting a sweep, assert that the swept quantity changed.** One line.
+  Trap 1 would have failed instantly.
+* **Before trusting a ratio, check both sides are above their own noise floor.**
+  Traps 5, 6 and 7 are all versions of dividing by something that had stopped
+  meaning anything.
+
+Same family as L14 (an A/B with one leg from a file), L15 (assert your dtype) and
+L16 (a run healthy on every diagnostic you happen to log). The recurring failure
+in this project is not wrong arithmetic — it is **confident measurement of the
+wrong quantity**, and it is caught by cheap assertions, not by care.
+
 ### L5. Know your floor before calling something an error
 
 `div u` is never zero in a least-squares formulation — continuity is a weighted
