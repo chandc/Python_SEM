@@ -142,3 +142,16 @@ blow-up now runs clean to t=3 (2.7x past the death point).
 leak (stable, but present).  The N=9 graded rerun in flight doubles as
 re-validation: x_r near 8.11-8.145 confirms the number; a shift would make
 the refined value the number of record.
+
+**7.3 Re-validation result (N=9 graded, run complete).**  tend=60 with
+the mask fix in place; the startup eddy exited the OBC at t~30 and the
+primary bubble's approach fitted x_r(t) = A - B exp(-t/tau) over
+t=35-60 (rms 4e-4):
+
+    A = 8.108 (+/- 0.01),  tau = 38
+
+vs coarse gate 8.11, 2D reference 8.145, Armaly 8.05 +/- 0.7.  **Gate 3
+re-validated after the corner-mask fix; grid-converged at the 0.1%
+level.**  The coarse and refined runs bracket the reference from below
+by ~0.4%, consistent with the remaining outflow-length truncation.
+Archive: results/bfs_armaly_re389/ (final_N9refined_t60.npz).
