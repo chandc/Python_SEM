@@ -258,5 +258,72 @@ def standalone_vcycle():
     print('  carrying a preconditioner that does not itself converge (sec 7K).')
 
 
+
+def near_null_computed(Af, k):
+    """The operator's ACTUAL softest modes, via shift-invert."""
+    from scipy.sparse.linalg import eigsh
+    w, V = eigsh(Af.tocsc(), k=k, sigma=0.0, which='LM')
+    return w, V
+
+
+def p_sweep_diagnostics():
+    """Does the N=4 story survive to PRODUCTION order?
+
+    Every headline F2 number -- h-independence, rho ~ 0.97, the omega-dominated
+    near-kernel, 138 -> 52 -- was measured at N=4, the LOWEST order this code
+    supports.  Production is N=8.  That matters for one specific reason already
+    written into this plan: the LOR argument was rejected on N=4 evidence, and
+    the dense-block concern it rested on bites hardest at high N.  The element
+    block is 100x100 at N=4 and 324x324 at N=8.
+
+    So this re-runs the four diagnostics across p on a FIXED 6x6 mesh:
+      rho          -- does the V-cycle degrade with order?
+      CG its       -- does the field-constant coarse space still work?
+      omega energy -- is the softest mode still omega-dominated?
+      computed B   -- does supplying the true modes still pay?
+    """
+    print('\n\nF2e -- do the N=4 conclusions survive p-refinement?  (6x6 mesh)\n')
+    print(f'{"N":>3} {"blk":>9} {"ndof":>7} {"jac":>6} {"AMG":>5} {"rho":>7} '
+          f'{"om frac":>8} {"CG cmp":>7} {"gain":>6}')
+    rows = []
+    for N in (4, 6, 8):
+        Af, free = case(N, 6, 6)
+        n = Af.shape[0]
+        B = near_null(n, free)
+        ij = count_cg(Af, sp.diags(1.0/Af.diagonal()))
+        ml = pyamg.smoothed_aggregation_solver(Af, B=B, max_coarse=20,
+                                               smooth='energy')
+        ia = count_cg(Af, LinearOperator((n, n),
+                                         matvec=ml.aspreconditioner().matvec))
+        rng = np.random.default_rng(0)
+        b = Af @ rng.standard_normal(n)
+        res = []
+        ml.solve(b, x0=np.zeros(n), tol=1e-10, maxiter=60, residuals=res,
+                 accel=None)
+        r = np.asarray(res); k = max(2, len(r)//2)
+        rho = float((r[-1]/r[k])**(1.0/(len(r)-1-k))) if len(r) > k+1 else float('nan')
+
+        # softest mode: how much of its energy sits in omega?
+        w, V = near_null_computed(Af, 8)
+        idx = np.arange(free.size)[free]
+        v0 = V[:, 0]
+        frac = [float((v0[idx % NV == f]**2).sum()) for f in range(NV)]
+        omf = frac[3]/sum(frac)
+
+        # does supplying the TRUE modes still pay at this order?
+        mlc = pyamg.smoothed_aggregation_solver(Af, B=V, max_coarse=20,
+                                                smooth='energy')
+        ic = count_cg(Af, LinearOperator((n, n),
+                                         matvec=mlc.aspreconditioner().matvec))
+        blk = (N+1)**2*NV
+        print(f'{N:3d} {f"{blk}^2":>9} {n:7d} {ij:6d} {ia:5d} {rho:7.4f} '
+              f'{omf:8.3f} {ic:7d} {ia/max(ic,1):5.2f}x')
+        rows.append((N, n, ij, ia, rho, omf, ic))
+    print('\n  om frac = fraction of the SOFTEST mode energy in omega.')
+    print('  CG cmp  = CG its with 8 COMPUTED near-null modes as B.')
+    print('  If rho and om frac are flat in N, the N=4 story is the N=8 story.')
+    return rows
+
+
 if __name__ == "__main__":
-    standalone_vcycle()
+    p_sweep_diagnostics()

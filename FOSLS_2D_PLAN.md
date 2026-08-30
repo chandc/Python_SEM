@@ -583,6 +583,37 @@ not whether the mathematics works. And the scope limit from F1 stands: this is
 the **steady** solver only. At production $\Delta t$ the mass term dominates and
 Jacobi is near-optimal.
 
+### F2e — every F2 number above was measured at **N=4**; here it is at N=8
+
+A fair question, and the gap was real: the h-refinement gate, $\rho$, the
+$\omega$-dominated near-kernel and the 138\u2009\u2192\u200952 result were **all** at N=4,
+the lowest order this code supports. **Production is N=8.** It matters for one
+specific reason already written into this plan: LOR was rejected on N=4 evidence,
+and the dense-block concern it rested on bites hardest at high order.
+
+Fixed 6\u00d76 mesh, p-refined:
+
+| N | element block | ndof | Jacobi | AMG | ρ | ω frac of softest mode | CG w/ computed `B` |
+|---|---|---|---|---|---|---|---|
+| 4 | 100² | 2307 | 1033 | 142 | 0.9710 | **0.978** | 58 (2.45×) |
+| 6 | 196² | 5187 | 1529 | 184 | 0.9704 | **0.977** | 72 (2.56×) |
+| **8** | **324²** | 9219 | 2327 | **209** | **0.9682** | **0.977** | **94 (2.22×)** |
+
+**Three of the four are flat and the conclusions carry.** $\rho$ does not degrade
+(0.9710 → 0.9682) even though the element block grows 10.5× in entries — so
+**the LOR rejection now stands at the order where its own counter-argument was
+strongest**, which is exactly where I had flagged it as untested. The
+$\omega$ fraction is invariant to three figures (0.978 / 0.977 / 0.977): the
+near-kernel's structure is a property of the *first-order system*, not of the
+discretisation. And the computed-mode gain holds at 2.2–2.6×.
+
+**The fourth is not flat, and it is a genuine limit.** AMG iterations grow 1.47×
+(142 → 209) as the order doubles, against Jacobi's 2.25×. **AMG is
+$h$-independent but not $p$-independent** — which is what FOSLS theory actually
+promises, so this is a correction to my reporting, not to the theory. The C3
+gate was and remains an $h$-refinement gate; nothing here claimed p-independence,
+but nothing here had tested it either.
+
 ### F2 QUALIFIED — AMG is h-independent, but CG is carrying it
 
 Prompted by the question *"did we try it as a preconditioner?"* — every F2 number
