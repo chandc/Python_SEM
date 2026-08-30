@@ -833,3 +833,66 @@ equivalent low-order operator on a GLL-refined mesh, **equivalence constants
 independent of both mesh size and polynomial degree**, matrix-free, AMG on the
 LOR operator, GPU-accelerated. That is the published remedy for exactly the
 term F2g identified as binding.
+
+### F2h(ii) — what Pazner *et al.* actually say, and a correction to F2h
+
+F2h called LOR *"the published remedy for exactly the term F2g identified as
+binding."* Having now read the papers rather than their abstracts, that is too
+clean. Also a citation fix: **arXiv:1908.07071 is Pazner alone** (Kolev is
+thanked in the acknowledgements); **arXiv:2210.12253 is Pazner, Kolev & Camier.**
+
+**They motivate LOR from exactly our measurement.** *"The number of couplings
+(i.e. the number of nonzeros per row of the system matrix) will also scale like
+O(pᵈ)… the system matrix will have O(p²ᵈ) nonzero entries."* That is F2g's
+31 → 159 nnz/row. The LOR operator instead has **9 nonzeros per row in 2D and 27
+in 3D — constant in p.** That is the whole point, and it is the right fix for the
+cost term.
+
+**But LOR does not hand the problem to AMG.** The refined mesh is built from
+Gauss–Lobatto points, whose spacing near element endpoints scales like $1/p^2$,
+so the LOR elements have **aspect ratio ~ p** and the mesh is *"not shape regular
+in p."* Pazner tests BoomerAMG **and pyAMG**, each with Jacobi and Gauss–Seidel
+smoothing, on GLL-refined meshes and reports:
+
+> *"The algebraic multigrid methods are **not robust in p**, likely due to the
+> anisotropy introduced in the low-order refined mesh by the Gauss–Lobatto
+> points."*
+
+**So LOR trades a dense-operator problem for an anisotropy problem.** His working
+recipe is therefore *not* AMG: an element-structured **geometric** multigrid
+V-cycle with **ordered ILU(0)** smoothing (MDF / RCM / AMD orderings), wrapped in
+overlapping additive Schwarz. Iterations then grow slowly but really — single
+patch **15 (p=2) → 24–37 (p=20)**; vertex patches **24 → 46–72**.
+
+**The GPU paper does use AMG successfully** (hypre, in MFEM, with AMS/ADS for
+H(curl)/H(div)) — but on topologically **Cartesian** grids where the LOR matrix
+is a clean 9/27-point stencil. Its profile on a V100 at p=6, 9.4M DOF is worth
+recording because it contradicts our small-problem experience:
+
+| | share of runtime (GPU) |
+|---|---|
+| **setup total** | **~75%** |
+| of which AMG setup | **>50%** |
+| LOR assembly | 3% (2D), 10% (3D) |
+| within solve: AMG V-cycle | **>80%** |
+| within solve: high-order operator | 16–18% |
+
+Our AmgX setup was negligible (0.01–0.02 s) only because our matrices are ~10⁴
+DOF against their 9.4×10⁶. **At production scale AMG setup becomes the dominant
+cost, not the solve** — and they note it amortises only when the mesh and
+coefficients are fixed across many steps, which for our Newton/RKW3 driver they
+are not.
+
+**Two limits on transferring any of this to us.** First, every result above is
+for **elliptic** problems — Poisson, definite Helmholtz, and the H(curl)/H(div)
+de Rham complex. FEM–SEM spectral equivalence is *proved* for those. It is not
+established for a 4-field FOSLS VVP system with an ω-dominated near-kernel.
+Second, their high-order operator is applied **matrix-free via sum
+factorisation** — which our 3D solver already is, so that precondition is met,
+but our 2D FOSLS study assembles, and the LOR comparison would have to be built
+against the matrix-free path to mean anything.
+
+**Revised statement.** LOR is the right attack on the O(p²ᵈ) cost term, and it is
+the standard one. It is *not* a way to make AMG work at high order — the author
+who developed it reports AMG is not p-robust on the LOR operator and uses
+ILU-smoothed geometric multigrid instead.
