@@ -765,3 +765,71 @@ from Python and CUDA.
 > phenomenon.** F2f's 2.20× was measured at fixed N=4 under mesh refinement and
 > should not be read as a general result. Refining $p$ buys AMG nothing in wall
 > time on this operator.
+
+### F2h — prior art: this was done in 2005, by the author of our source document
+
+**Heys, Manteuffel, McCormick & Olson, "Algebraic multigrid for higher-order
+finite elements", J. Comput. Phys. 204 (2005) 520–532.** AMG applied to a **FOSLS
+formulation of Stokes on GLL nodal spectral elements**, 8×8 mesh, p = 1…8. That
+is our study, twenty-one years earlier, by the author of the document that
+started this line of work.
+
+**Their Table 2 and our measurements agree, independently:**
+
+| | theirs (2005) | ours (F2/F2g) |
+|---|---|---|
+| standalone V-cycle factor | **0.89 → 0.95** over p=1…8 | **0.9710 → 0.9643** over N=4…12 |
+| with CG acceleration | 0.45 → 0.67 | CG carries it (113–307 its) |
+| operator complexity | 1.4 – 2.1 | 1.16 – 1.51 |
+| coarsening | *"modified… so that coarsening can be applied to each of the **seven unknowns separately**"* | 4-field near-null `B`; `block_dimx=4` |
+| high-order operator cost | *"Both costs typically scale as **O(p⁴)** in 2-D"* | nnz/row **31 → 159**, block (N+1)⁴ |
+
+**Four of our findings are confirmations, not discoveries.**
+
+1. **ρ ≈ 0.95 with CG carrying it is the *known* behaviour**, not a defect. This
+   corrects F2's framing: I measured ρ ≈ 0.97 and compared it to *"a textbook
+   0.1–0.3"*. That textbook figure is for **scalar low-order elliptic** problems.
+   Heys et al. give the right baseline — geometric MG on bilinear FOSLS Stokes
+   yields **0.75–0.85**, and AMG on high-order FOSLS Stokes **0.89–0.95**. Our
+   0.96–0.97 is marginally worse than theirs, in the same regime. **Not an
+   anomaly.**
+2. **Per-unknown coarsening is required** — they modify Ruge–Stüben to coarsen
+   each of seven unknowns separately; we found the same for four fields, twice
+   (pyamg `B`, AmgX `block_dimx=4`).
+3. **The O(p⁴) density cost is the known obstacle**, exactly F2g's finding.
+4. **Plain AMG on a high-order operator fails; adjusted AMG succeeds** —
+   *"Early attempts at applying AMG directly to the high-order operator are
+   discouraging [21]. However… this poor performance is the result of several
+   obstacles that can be overcome with relatively modest adjustments."* That is
+   precisely AmgX's plain aggregation stalling where pyamg's energy-minimised SA
+   converges.
+
+**And they state the LOR reframing that F2g arrived at, verbatim in substance:**
+
+> *"the convergence factors are not as low as applying AMG/CG directly to the
+> spectral operator, a reflection of using a less effective preconditioner, but
+> the benefit of not having to build and store the higher-order operator may
+> outweigh the cost of additional iterations."*
+
+**LOR is a cost play, not a convergence play** — which is why F2/F2e/F2g
+refuting it *on convergence grounds* never actually tested it. Their §4 route is
+AMG on a bilinear overlay `A_f` preconditioning a **matrix-free** high-order
+`A_s` — and matrix-free is exactly what our 3D solver already is.
+
+**One place we go beyond them.** They report near-p-independence for 3 < p ≤ 8;
+we measure 2.16× iteration growth over N = 4…12. Different problem (Stokes vs a
+ν=1/100 Oseen linearisation), different AMG (unknown-based RS vs SA+energy), and
+a wider p range. Our ω-dominated near-null space (97.7%) has no counterpart in
+their paper, though their observation that a **modal** basis fails *"a result of
+the lowest, smooth eigenmode not being represented by an approximately constant
+vector — a fundamental assumption in AMG"* is the same mechanism stated for the
+basis rather than the field.
+
+**Modern instantiation, and the direct answer to F2g's cost problem:** Pazner &
+Kolev, *"End-to-end GPU acceleration of low-order-refined preconditioning"*
+(arXiv:2210.12253) and *"Efficient low-order refined preconditioners for
+high-order matrix-free CG and DG methods"* (arXiv:1908.07071) — spectrally
+equivalent low-order operator on a GLL-refined mesh, **equivalence constants
+independent of both mesh size and polynomial degree**, matrix-free, AMG on the
+LOR operator, GPU-accelerated. That is the published remedy for exactly the
+term F2g identified as binding.
