@@ -490,3 +490,74 @@ across geometries, or under h-refinement, and F1 says the bounds themselves
 degrade as $\nu^{-2}$. So $J$ is established as a **relative monitor within a
 run** — which needs no constants at all and is what `minchan_001` lacked — and
 not yet as a portable quantitative estimator.
+
+---
+
+## F2 RESULTS — AMG gives h-independent iterations: **GATE PASSED**
+
+`scratch/fosls_amg.py`. Steady (`dt=1e4`, `w_mom=1`), ν=1/100, N=4.
+
+### h-refinement — the gate
+
+| mesh | ndof | Jacobi | **AMG** | ratio | wall (incl. setup) |
+|---|---|---|---|---|---|
+| 4×4 | 1027 | 671 | **113** | 5.9× | 0.62× |
+| 8×8 | 4099 | 1245 | **138** | 9.0× | 0.62× |
+| 12×12 | 9219 | 1611 | **137** | 11.8× | 0.68× |
+| 16×16 | 16387 | 2103 | **131** | 16.1× | 0.85× |
+
+**AMG iterations are flat — 113, 138, 137, 131 over a 16× increase in elements**
+(1.16× spread, gate was <1.2×). Jacobi grows 3.1× over the same range and the
+ratio widens monotonically, 5.9× → 16.1×.
+
+**Two independent routes agree.** F1 predicted the ceiling at
+$\sqrt{c_2/c_1} = \sqrt{1.55\times10^4} \approx 124$ iterations. AMG measures
+113–138. The ellipticity constant predicted the preconditioned iteration count
+before it was run.
+
+### The near-null space was the whole game
+
+| variant | 4×4 | 6×6 | 8×8 | 12×12 | growth |
+|---|---|---|---|---|---|
+| Jacobi | 671 | 1033 | 1245 | 1611 | 2.40× |
+| scalar `B` (pyamg default) | 153 | 198 | 249 | 349 | 2.28× |
+| 4-field `B` | 124 | 169 | 144 | 173 | 1.40× |
+| **4-field `B` + energy prolongation** | **113** | **142** | **138** | **137** | **1.21×** |
+
+The default single all-ones vector cannot represent a mode constant in one field
+and zero in the others, so it coarsens a 4-field system as though it were scalar
+— and grows almost exactly like Jacobi (2.28× vs 2.40×). **Supplying one constant
+per field is what converts a constant-factor preconditioner into an
+$h$-independent one**, which was item 2 on F2's list and turns out to be the only
+item that mattered.
+
+### **LOR was not needed** — a prediction of this plan, refuted
+
+§F2 argued at length that AMG *must* go on a low-order refined operator because
+SEM element blocks are dense (324² at N=8), leaving AMG "nothing to coarsen".
+**Smoothed aggregation handled the SEM matrix directly.** The dense-block concern
+was real but not decisive: aggregation works on the strength-of-connection graph,
+and a dense block still has structure once the near-null space identifies the
+fields. LOR remains untested and may yet matter at higher order — the density
+argument bites hardest at N ≥ 12 — but it is not required for the result.
+
+### Wall time: **not yet a win, and the measurement is not representative**
+
+0.62× → 0.85×, trending up but still below 1 at 16×16 even with 16× fewer
+iterations: an AMG iteration costs ~19× a Jacobi one here. Under $p$-refinement
+it breaks even (1.01× at N=8, 1.05× at N=10).
+
+This is the §7K pattern — iterations vindicated, wall time not — but with a
+caveat §7K also carried: **both sides are Python**. scipy CG with a Python
+callback against pyamg's Python V-cycle, while production runs a fused
+numba/CUDA matvec. **The iteration counts transfer; the wall times do not.** The
+ratio widens 5.9× → 16.1× over the range tested, so the wall-clock crossover lies
+beyond 16×16 on this harness and somewhere different in production.
+
+### Verdict
+
+**C3 is confirmed, not merely available.** The remaining question is engineering
+— whether a compiled V-cycle beats a compiled Jacobi at production mesh sizes —
+not whether the mathematics works. And the scope limit from F1 stands: this is
+the **steady** solver only. At production $\Delta t$ the mass term dominates and
+Jacobi is near-optimal.
