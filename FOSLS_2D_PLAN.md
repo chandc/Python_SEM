@@ -244,3 +244,96 @@ becomes the next question, not a settled one.
 direct solves for small cases, exact spectra, and a check on every future
 preconditioner claim; the ellipticity constant is the invariant that four wrong
 preconditioner conclusions in §7I–§7K were reached without.
+
+---
+
+## RESULTS — F0 and F1 (2026-08-24)
+
+### F0 — assembled, and gated: **PASS**
+
+| case | ndof | matvec vs `apply_A` | asymmetry | κ(A) |
+|---|---|---|---|---|
+| N=4, 2×2 | 324 | 2.21e−16 | 4.25e−17 | 5.50e+04 |
+| N=6, 3×2 | 988 | 3.84e−16 | 9.05e−17 | 1.61e+05 |
+| N=8, 3×3 | 2500 | 4.60e−16 | 9.69e−17 | 6.28e+05 |
+
+`scratch/fosls_assemble.py`. Probed **element-locally** (324 probes at N=8, not
+`nelem`×324) using the code's own `apply_L`/`apply_LT` — reimplementing $L_0$ is
+the L1 trap that let four missing factors survive a full suite (§2.1).
+
+Density falls 6.2% → 2.9% as the mesh grows: **sparse between elements, dense
+within them** — the concrete reason AMG must go on the LOR operator.
+
+### F1 — the ellipticity constant: **the functional IS norm-equivalent, but only when correctly scaled**
+
+**The C3 test — $h$-refinement in the elliptic limit ($dt\to\infty$), `w_mom=1`:**
+
+| mesh | $c_1$ | $c_2$ | $c_2/c_1$ | step |
+|---|---|---|---|---|
+| 1×1 | 8.49e−05 | 1.000 | 1.178e+04 | |
+| 2×2 | 7.31e−05 | 1.000 | 1.369e+04 | 1.16× |
+| 4×4 | 6.54e−05 | 1.000 | 1.530e+04 | 1.03× |
+| **6×6** | 6.44e−05 | 1.000 | **1.552e+04** | **1.01×** |
+
+**It saturates. The constant is bounded independently of $h$**, which is exactly
+what FOSLS predicts — so C1 holds and C3 is live. $c_2 = 1.000$ exactly.
+
+**The weighting decides everything, and only in the elliptic limit:**
+
+| dt | $a_{\text{mass}}$ | legacy | `w_mom=1` |
+|---|---|---|---|
+| 1 | 1 | 8.89e+03 | 8.89e+03 *(identical — see below)* |
+| 100 | 0.01 | 2.96e+06 | 1.33e+04 |
+| 10⁴ | 10⁻⁴ | **2.00e+10** | **1.55e+04** |
+
+*Both* saturate, so legacy is not non-equivalent in the technical sense — **its
+constant is 1.3 million times larger.** Legacy sets $a_{\text{flux}} = \Delta t$,
+scaling momentum by $\Delta t$ against unweighted continuity and vorticity, so the
+functional stops being a balanced sum of residuals.
+
+*Methodological note: the first version of this sweep ran at $dt = 1$, where the
+two weightings **coincide** ($a_{\text{mass}} = a_{\text{flux}} = 1$) — it
+reported three identical numbers as though they were a result. $\Delta t$ is what
+separates them.*
+
+**And the residual constant is a variable-scaling artefact:**
+
+| ν | $c_2/c_1$ | vs $\nu^{-2}$ |
+|---|---|---|
+| 0.1 | 4.89e+02 | — |
+| 0.01 | 1.37e+04 | 0.28× |
+| 0.001 | 1.34e+06 | 0.27× |
+
+$c_2/c_1 \propto \nu^{-2}$ (the ratio to the $\nu^{-2}$ extrapolation is constant
+at 0.28). The mechanism is visible in the rows: momentum carries
+$p_x + \nu\,\omega_y$ while the vorticity definition carries $\omega + u_y - v_x$,
+so **the same variable $\omega$ enters one row $\nu$ times weaker than the
+other** and no single $H^1$ norm bounds both tightly. Classical Stokes FOSLS
+avoids this by rescaling the variables (Bochev & Gunzburger).
+
+### What this means
+
+**The accuracy-vs-ellipticity conflict the plan anticipated is real.** §7F and
+WEIGHT_VS_TIMESTEP_STUDY.md establish that legacy weighting is required for
+*accuracy* — Poiseuille is 1875× worse under `w_mom=1`. F1 now shows legacy's
+ellipticity constant is **1.3 × 10⁶ worse** in the elliptic limit. These are not
+reconcilable by tuning; they are different objectives.
+
+**But the conflict may be an artefact of the coupling, not fundamental.** The
+$\nu^{-2}$ result says a *variable rescaling* — not a row reweighting — should
+recover ~10³ of the constant at production $\nu$, and variable scaling does not
+touch the accuracy argument, which is about the relative weight of the *rows*.
+**That is the most promising thread out of F1 and it was not in the original plan.**
+
+### Revised next steps
+
+| | | |
+|---|---|---|
+| **F1b** | rescale $\omega$ (and test $p$), re-measure $c_2/c_1$ vs $\nu$ | ~½ day, and it may be worth more than F2 |
+| **F2** | LOR-AMG, run in the elliptic limit with `w_mom=1` where the theory holds | predicted $\sim\sqrt{1.55\times10^4} \approx 124$ iterations, flat in $h$ |
+| **F3** | weak BCs | unchanged |
+
+F2's gate is now *quantitative* rather than qualitative: an $H^1$-optimal
+preconditioner should give $O(\sqrt{c_2/c_1})$ iterations, so ~124 at ν=0.01 and
+flat under refinement. Anything far above that indicts the AMG setup; anything
+that *grows* indicts the LOR equivalence.
