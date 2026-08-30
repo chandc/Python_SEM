@@ -376,3 +376,75 @@ F2's gate is now *quantitative* rather than qualitative: an $H^1$-optimal
 preconditioner should give $O(\sqrt{c_2/c_1})$ iterations, so ~124 at ν=0.01 and
 flat under refinement. Anything far above that indicts the AMG setup; anything
 that *grows* indicts the LOR equivalence.
+
+---
+
+## F4′ RESULTS — the functional as an error estimator: **PASS**
+
+`scratch/fosls_estimator.py`. Kovasznay, Re=40, 4×4 elements, steady
+(`dt=1e30`, `w_mom=1` — the regime F1 measured).
+
+### The success measure, and why "J correlates with error" is not it
+
+Any monotone function correlates. The theory gives the sharp test: the
+**effectivity index** $\theta = \sqrt{J(Q)}\,/\,\|e\|_1$ must satisfy
+$\sqrt{c_1} \le \theta \le \sqrt{c_2}$. Three gates:
+
+| | gate | why |
+|---|---|---|
+| **G1** | $\theta \in [\sqrt{c_1},\sqrt{c_2}]$ | theory check — if it escapes, F1's constants or the functional are wrong |
+| **G2** | $\theta \to$ const under refinement, **< 2× spread** | **the one that matters**: a drifting effectivity cannot decide anything — a falling $J$ would not distinguish a better solution from a coarser yardstick |
+| **G3** | $J$ **rises** with an injected defect | the `minchan_001` test — an estimator blind to the failure we actually suffered is useless however elegant |
+
+### Results
+
+| N | $J$ | $\|e\|_1$ | $\theta$ | eps_rms |
+|---|---|---|---|---|
+| 4 | 4.520e−05 | 1.819e−01 | **0.0370** | 9.72e−05 |
+| 6 | 1.585e−09 | 8.711e−04 | **0.0457** | 1.60e−07 |
+| 8 | 1.363e−14 | 2.261e−06 | **0.0516** | 2.49e−10 |
+| 10 | 5.652e−19 | 1.201e−07 | 0.0063 | 1.09e−10 |
+| 12 | 5.817e−19 | 1.519e−07 | 0.0050 | 1.22e−10 |
+
+**G2 PASS** — $\theta$ = 0.0370, 0.0457, 0.0516, spread **1.40×** over three
+resolutions spanning six orders of magnitude in error.
+**G1 PASS** — all inside $[0.0080, 1.0]$.
+**G3 PASS, decisively** — injecting non-solenoidal noise at amplitude $10^{-4}$
+raises $J$ by **8.6 × 10⁹**, and $J$ scales exactly as amp² (a squared norm, as
+the theory requires): 1.17e−4, 1.17e−2, 1.17e0, 1.17e2 across four decades.
+
+### Three methodological traps, all of which produced a false FAIL first
+
+**The pressure gauge.** $p$ is determined only up to a constant, so the raw
+difference carries an O(1) offset. Measured: $\|e\|_1$ pinned at **0.993 for
+every N** while the velocity error fell to 1e−10 — the norm was reporting the
+constant, not the solution. `kov.py` already subtracts the mean; this now does too.
+
+**The gate read past the round-off floor.** Beyond N=8 this case is converged to
+machine precision: $J \approx 5.7\times10^{-19}$, i.e. zero, and `eps_rms` stops
+improving. $\theta$ there is a ratio of two noise levels. Taking "the last three
+N" — the obvious choice — selects **exactly** the meaningless points and reported
+an 8.25× spread.
+
+**The convergence detector on the wrong quantity.** Using $\|e\|_1$ admitted N=10,
+where it still fell 19× while `eps_rms` moved only 2.3×. Detecting on `eps_rms`
+— the driver's own metric — gives the clean regime.
+
+### What this is now worth
+
+$J$ is **already computed** by `kov.residual()` and never used. It gives a
+computable error bound on problems with **no exact solution** — the cavity, the
+BFS, the turbulent channel — which is precisely where this project currently has
+no accuracy measure at all.
+
+The effectivity 0.037–0.052 means $\|e\|_1 \approx \sqrt{J}/0.045$, so **a single
+free number estimates the error to within ~40%** in this configuration. That is
+far sharper than the $\sqrt{c_2/c_1} \approx 124$ worst case, because $\theta$ sits
+well inside its bounds rather than at an extreme.
+
+**Caveat, and it is the important one:** $\theta$ is constant *for one
+configuration under p-refinement*. It has **not** been shown constant across ν,
+across geometries, or under h-refinement, and F1 says the bounds themselves
+degrade as $\nu^{-2}$. So $J$ is established as a **relative monitor within a
+run** — which needs no constants at all and is what `minchan_001` lacked — and
+not yet as a portable quantitative estimator.
