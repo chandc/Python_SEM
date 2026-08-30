@@ -5,45 +5,66 @@ three claims against the 2D solver.
 
 ---
 
-## 0. Net-net
+## 0. Conclusion
 
-**McCormick's framework applies to this solver, and one of its consequences is
-worth more than the one we set out to test.**
+**FOSLS theory applies to this solver — established by measurement, and it made a
+correct quantitative prediction before the fact.** F1 measured the ellipticity
+constant at $1.55\times10^4$, predicting $\sqrt{c_2/c_1}\approx124$ preconditioned
+iterations; F2 then measured AMG at 113–138, flat across a 16× increase in
+elements. Two independent routes, one number.
 
-| claim | verdict | evidence |
-|---|---|---|
-| **C1** — the functional is $H^1$-norm-equivalent | **CONFIRMED** | $c_2 = 1.000$, $c_2/c_1$ saturates at $1.55\times10^4$ under $h$-refinement (steps 1.16 → 1.03 → **1.01**) |
-| **C3** — $h$-independent convergence is available | **CONFIRMED as a ceiling** | the $H^1$ constant is flat while Jacobi's grows 2–3× per level; they **cross at 4×4 elements**, and by 6×6 the ceiling is 3.6× better |
-| **C2** — weak BCs in the functional | **UNTESTED** (F3) | — |
-| C3 *realised* by AMG | **UNTESTED** (F2) | ceiling is $\sqrt{1.55\times10^4}\approx124$ iterations |
+| claim | verdict |
+|---|---|
+| **C1** functional is $H^1$-norm-equivalent | **CONFIRMED** — $c_2=1.000$, $c_2/c_1$ saturates at 1.55e4 (steps 1.16 → 1.03 → **1.01**) |
+| **C3** $h$-independent convergence | **CONFIRMED** — AMG flat at 113→131 while Jacobi grows 3.1×; ratio widens 5.9× → 16.1× |
+| **C2** weak BCs in the functional | **UNTESTED** (F3) |
 
-**The independent check that matters most:** at production $\Delta t$, F1's
-constant predicts $\sqrt{c_2/c_1} \approx 2740$ CG iterations against the
-**~4000 measured** in the 3D minimal channel. Within a factor of 1.5 — the first
-evidence that any of this describes the real solver rather than an idealisation.
+**But three limits bound what it is worth today.**
 
-**New capability, and it was a side-effect:** the least-squares functional $J$ —
-already computed, never used — is a validated error estimator (F4′, three gates,
-all passed). $\theta = \sqrt{J}/\|e\|_1$ is constant to **1.40×** across six
-orders of magnitude of error, and $J$ rises by $8.6\times10^9$ when the
-`minchan_001` defect is injected. It works where there is **no exact solution**,
-which is where this project currently has no accuracy measure at all.
+**Steady only.** At production $\Delta t$ the mass term dominates, the problem is
+ill-conditioned regardless of preconditioner, and Jacobi is near-optimal. AMG has
+nothing to offer the time-stepper.
 
-**Refuted — including two of my own proposals:**
+**CG is carrying the multigrid.** The standalone V-cycle factor is $\rho\approx0.97$
+against a textbook 0.1–0.3. "$h$-independent" is supported; "works well" is not.
+
+**Wall time is not yet a win** — 0.85× at 16×16 even with 16× fewer iterations —
+though both sides of that comparison are Python and the iteration counts are what
+transfer.
+
+### The finding that outlived the question
+
+The softest mode carries **97.7% of its energy in $\omega$** — the 2D analogue of
+§7J's 3D cluster, which carried 100% in $(\omega_x,\omega_y)$. That single
+structure explains three separate results: why the redundant $\nabla\cdot\omega$
+row was ruinous in 3D, why `ROW7_WEIGHT = 1e-4` buys 14.6×, and why AMG stalls at
+$\rho\approx0.97$ with a constants-only coarse space. Supplying those modes takes
+CG from 138 to 52.
+
+**`ROW7_WEIGHT` treats the symptom pointwise; a coarse space containing the cluster
+treats the cause.** That reframing — not the preconditioner — is the most useful
+thing this study produced, and it points at deflation or a formulation without the
+cluster rather than at more preconditioner tuning.
+
+### New capability, obtained as a side-effect
+
+The least-squares functional $J$ — already computed, never used — is a **validated
+error estimator** (F4′: effectivity constant to 1.40× across six orders of error;
+$J$ rises $8.6\times10^9$ on the `minchan_001` defect). It works where there is no
+exact solution, which is where this project has no accuracy measure at all. **Free,
+and immediately usable.**
+
+### Refuted — including three of my own predictions
 
 * **F1b (rescale $\omega$)** — $c_2/c_1$ is *invariant* under change of variables.
-  Measured identical to 7 digits for scalings of 100, 0.01 and 10. The idea was a
-  no-op dressed as a fix; the $\nu^{-2}$ is structural to this first-order system.
-* **"accuracy vs ellipticity conflict"** — retracted. I compared the two
-  weightings in the elliptic limit, which production never visits. There is a
-  crossover at $\Delta t \approx 0.03$, each weighting is optimal in its own
-  regime, and **the code already chooses correctly**.
-* **AMG for the time-stepper** — at small $\Delta t$ the mass term dominates and
-  Jacobi is near-optimal, so F2's payoff is confined to the **steady** solver.
+* **"accuracy vs ellipticity conflict"** — a comparison made in a limit production
+  never visits; the code already chooses the right weighting in each regime.
+* **"AMG must go on a low-order refined operator"** — smoothed aggregation handled
+  the dense-block SEM matrix directly.
 
-**Scope, honestly.** Everything above is 2D, steady, without convection, on one
-geometry, with $c_2/c_1 = 1.55\times10^4$ — bounded, but far from the O(1) a
-textbook FOSLS achieves, and degrading as $\nu^{-2}$.
+**Scope, honestly:** 2D, steady, no convection, one geometry, $\nu \ge 10^{-3}$,
+and $c_2/c_1 = 1.55\times10^4$ — bounded, but far from the O(1) a textbook FOSLS
+achieves, degrading as $\nu^{-2}$.
 
 ---
 
