@@ -6,13 +6,131 @@
   "case": "2D FOSLS VVP, steady dt=1e4, w_mom=1, nu=1/100, N=4, tol=1e-8 rel",
   "note": "pyamg column is F2's smoothed_aggregation_solver(B=4 field constants, smooth='energy')",
   "h_sweep_N4": [
-    {"mesh":"4x4","ndof":1027,"jac_its":671,"jac_s":0.0436,"agg4_its":568,"agg4_s":0.2782,"cls_its":421,"cls_s":0.1652,"pyamg_its":113},
-    {"mesh":"8x8","ndof":4099,"jac_its":1245,"jac_s":0.0824,"agg4_its":571,"agg4_s":0.3321,"cls_its":503,"cls_s":0.2490,"pyamg_its":138},
-    {"mesh":"12x12","ndof":9219,"jac_its":1611,"jac_s":0.1178,"agg4_its":969,"agg4_s":0.5974,"cls_its":653,"cls_s":0.3521,"pyamg_its":137},
-    {"mesh":"16x16","ndof":16387,"jac_its":2103,"jac_s":0.1872,"agg4_its":1005,"agg4_s":0.7522,"cls_its":542,"cls_s":0.3515,"pyamg_its":131}
+    {
+      "mesh": "4x4",
+      "ndof": 1027,
+      "jac_its": 671,
+      "jac_s": 0.0436,
+      "agg4_its": 568,
+      "agg4_s": 0.2782,
+      "cls_its": 421,
+      "cls_s": 0.1652,
+      "pyamg_its": 113
+    },
+    {
+      "mesh": "8x8",
+      "ndof": 4099,
+      "jac_its": 1245,
+      "jac_s": 0.0824,
+      "agg4_its": 571,
+      "agg4_s": 0.3321,
+      "cls_its": 503,
+      "cls_s": 0.249,
+      "pyamg_its": 138
+    },
+    {
+      "mesh": "12x12",
+      "ndof": 9219,
+      "jac_its": 1611,
+      "jac_s": 0.1178,
+      "agg4_its": 969,
+      "agg4_s": 0.5974,
+      "cls_its": 653,
+      "cls_s": 0.3521,
+      "pyamg_its": 137
+    },
+    {
+      "mesh": "16x16",
+      "ndof": 16387,
+      "jac_its": 2103,
+      "jac_s": 0.1872,
+      "agg4_its": 1005,
+      "agg4_s": 0.7522,
+      "cls_its": 542,
+      "cls_s": 0.3515,
+      "pyamg_its": 131
+    }
   ],
-  "block_vs_scalar_4x4": {"agg_scalar_its":740,"agg_block4_its":568,"gain":1.30,
-                          "pyamg_scalarB_its":153,"pyamg_4fieldB_its":124,"gain_ref":1.23},
+  "block_vs_scalar_4x4": {
+    "agg_scalar_its": 740,
+    "agg_block4_its": 568,
+    "gain": 1.3,
+    "pyamg_scalarB_its": 153,
+    "pyamg_4fieldB_its": 124,
+    "gain_ref": 1.23
+  },
   "validation": "AmgX PCG+Jacobi reproduced F2's scipy CG+Jacobi EXACTLY on all four meshes: 671/1245/1611/2103",
-  "classical_block_error": "Unsupported block size for strong connections -- classical AMG is scalar-only"
+  "classical_block_error": "Unsupported block size for strong connections -- classical AMG is scalar-only",
+  "p_sweep_6x6": {
+    "note": "N=4..12 at 6x6.  AmgX runs in F2f were ALL N=4; this extends to N=12 (element block 676^2).",
+    "rows": [
+      {
+        "N": 4,
+        "ndof": 2307,
+        "jac_its": 1033,
+        "jac_s": 0.0677,
+        "agg4_its": 665,
+        "agg4_s": 0.3415,
+        "cls_its": 406,
+        "cls_s": 0.1756,
+        "pyamg_its": 142,
+        "pyamg_rho": 0.971
+      },
+      {
+        "N": 6,
+        "ndof": 5187,
+        "jac_its": 1530,
+        "jac_s": 0.1219,
+        "agg4_its": "20000 STALL",
+        "agg4_s": 15.171,
+        "cls_its": 585,
+        "cls_s": 0.3475,
+        "pyamg_its": 184,
+        "pyamg_rho": 0.9704
+      },
+      {
+        "N": 8,
+        "ndof": 9219,
+        "jac_its": 2327,
+        "jac_s": 0.2224,
+        "agg4_its": "20000 STALL",
+        "agg4_s": 30.5962,
+        "cls_its": "20000 STALL",
+        "cls_s": 15.4838,
+        "pyamg_its": 209,
+        "pyamg_rho": 0.9682
+      },
+      {
+        "N": 10,
+        "ndof": 14403,
+        "jac_its": 2985,
+        "jac_s": 0.3746,
+        "agg4_its": "20000 STALL",
+        "agg4_s": 58.1243,
+        "cls_its": "20000 STALL",
+        "cls_s": 29.5672,
+        "pyamg_its": 285,
+        "pyamg_rho": 0.9642
+      },
+      {
+        "N": 12,
+        "ndof": 20739,
+        "jac_its": 3750,
+        "jac_s": 0.9248,
+        "agg4_its": "20000 STALL",
+        "agg4_s": 101.2385,
+        "cls_its": "20000 STALL",
+        "cls_s": 53.9962,
+        "pyamg_its": 307,
+        "pyamg_rho": 0.9643
+      }
+    ],
+    "stall_residuals": {
+      "agg_N6": 4e-08,
+      "agg_N12": 5.2e-07,
+      "cls_N8": 0.00044,
+      "cls_N12": 0.019
+    },
+    "verdict": "BOTH AmgX schemes collapse under p-refinement; pyamg energy-minimised SA does not."
+  }
 }

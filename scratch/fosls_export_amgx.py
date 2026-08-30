@@ -87,8 +87,11 @@ def main():
     print('h-sweep (N=4) -- matches F2 gate')
     for ex, ey in ((4, 4), (8, 8), (12, 12), (16, 16)):
         one(f'h_N4_{ex}x{ey}', 4, ex, ey)
-    print('\np-sweep (6x6) -- matches F2e')
-    for N in (4, 6, 8):
+    # Extended past F2e's N=8.  The LOR argument this plan raised rests on the
+    # element block being DENSE, and it grows as (N+1)^4: 100^2 at N=4, 324^2 at
+    # N=8, 676^2 at N=12.  If AMG degrades with order, THIS is where it shows.
+    print('\np-sweep (6x6) -- F2e range plus higher p')
+    for N in (4, 6, 8, 10, 12):
         one(f'p_N{N}_6x6', N, 6, 6)
     print(f'\nwritten to {OUT}')
 

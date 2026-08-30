@@ -715,3 +715,53 @@ quality* — 131 iterations — would take **0.085 s against Jacobi's 0.187 s, i
 > F2 deferred now has a number attached and a specific missing feature named.
 
 Raw data: `scratch/amgx_mats/amgx_f2f_results.json`.
+
+### F2g — higher p: both AmgX schemes collapse, pyamg does not
+
+F2f's AmgX runs were **all N=4**. Extending to N=12 — element block 676², a
+6.8× denser block than N=4 — changes the picture, and settles the LOR question
+at the order where its own argument is strongest.
+
+| N | block | ndof | Jacobi | AmgX agg (blk 4) | AmgX classical | **pyamg SA+energy** | ρ |
+|---|---|---|---|---|---|---|---|
+| 4 | 100² | 2307 | 1033 | 665 | 406 | **142** | 0.9710 |
+| 6 | 196² | 5187 | 1530 | **STALL** | 585 | **184** | 0.9704 |
+| 8 | 324² | 9219 | 2327 | **STALL** | **STALL** | **209** | 0.9682 |
+| 10 | 484² | 14403 | 2985 | **STALL** | **STALL** | **285** | 0.9642 |
+| 12 | 676² | 20739 | 3750 | **STALL** | **STALL** | **307** | 0.9643 |
+
+**STALL** = 20000 iterations without reaching `tol=1e-8`. Aggregation stagnates
+around 1e−7; classical stagnates far worse — **1.9e−02** at N=12.
+
+**pyamg's energy-minimised SA converges at every order**, and its ρ *improves*
+slightly (0.9710 → 0.9643) as the block grows 6.8× denser.
+
+**So LOR stays refuted — now at N=12.** F2 rejected it on N=4 evidence, F2e
+extended to N=8, and this reaches the density regime the dense-block argument was
+actually about. Energy-minimised prolongation coarsens the dense SEM matrix
+directly, all the way up. **What collapses is *plain* aggregation, not
+high-order AMG** — the same ingredient F2 identified as converting a
+constant-factor preconditioner into an $h$-independent one is also what separates
+"converges" from "stalls at 20000" under $p$-refinement.
+
+**But the wall-time projection reverses, and this qualifies F2f's headline.**
+AMG's per-iteration cost grows *faster* than its iteration advantage as $p$ rises:
+
+| N | Jacobi ms/it | classical ms/it | ratio | projected pyamg-quality vs Jacobi |
+|---|---|---|---|---|
+| 4 | 0.066 | 0.433 | 6.6× | 1.10× |
+| 8 | 0.096 | 0.774 | 8.1× | 1.37× |
+| 12 | 0.247 | 2.700 | 10.9× | **1.12×** |
+
+Jacobi:AMG iterations widen 7.3× → 12.2×, but per-iteration cost widens 6.6× →
+10.9× and cancels it. **Under $p$-refinement a compiled V-cycle only breaks
+even** (0.89–1.37×), against **2.20×** under $h$-refinement.
+
+**Two independent implementations agree on that.** F2's Python p-sweep measured
+1.01× at N=8 and 1.05× at N=10; compiled AmgX projects 1.10–1.12×. Same verdict
+from Python and CUDA.
+
+> **Refined conclusion: the compiled-V-cycle win is an $h$-refinement
+> phenomenon.** F2f's 2.20× was measured at fixed N=4 under mesh refinement and
+> should not be read as a general result. Refining $p$ buys AMG nothing in wall
+> time on this operator.
