@@ -201,3 +201,122 @@ production statistics (2-5x cheaper); E-path where correctness of the
 enforced divergence / pressure energetics is itself the requirement.
 Open item: E-multigrid stagnation on some turbulent states (grinds near
 the CG cap without diverging) -- next preconditioner target.
+
+## 8. K vs E, closed form (2026-08-29)
+
+This section collects the algebra behind the A/B verdict of §7 in one
+place: what each operator provably controls, why E is exact where K is
+not, and what E's exactness costs.
+
+### 8a. Notation
+
+Let $\psi_i$ be the C0 SEM velocity basis, $q_j$ the (identical,
+P$_N$–P$_N$) pressure basis, $M$ the lumped (diagonal) GLL mass matrix.
+Define the **weak gradient** and **weak divergence**
+
+$$ (G\phi)_i = \int_\Omega \psi_i\, \nabla\phi \; dV, \qquad
+   (D u)_j \;=\; -\int_\Omega \nabla q_j \cdot u \; dV
+   \;\;\Rightarrow\;\; D = -G^{T}, $$
+
+and the two candidate Poisson operators
+
+$$ K_{jk} = \int_\Omega \nabla q_j \cdot \nabla q_k \, dV
+   \qquad\text{(weak Laplacian)}, \qquad
+   E = G^{T} M^{-1} G \qquad\text{(consistent operator)}. $$
+
+On a staggered grid $K = G^T M^{-1} G$ identically and there is nothing
+to choose.  On collocated C0 SEM the quadrature and continuity
+constraints make $K \ne G^T M^{-1} G$; the difference is supported on
+the element-interface (high-$k$) modes.
+
+### 8b. E is exact by construction
+
+The E-path projection uses the *same* $G$ and $M$ in the solve and in
+the velocity update:
+
+$$ E\,\phi = \frac{1}{\Delta t}\, G^{T}\hat u, \qquad
+   u^{n+1} = \hat u - \Delta t\, M^{-1} G \phi . $$
+
+Apply $G^T$ to the update:
+
+$$ G^{T} u^{n+1}
+   = G^{T}\hat u - \Delta t\, \underbrace{G^{T} M^{-1} G}_{E}\,\phi
+   = G^{T}\hat u - G^{T}\hat u = 0 . $$
+
+The residue of §2, $(L - DG)\phi$, vanishes **identically** — not
+because the operators happen to agree, but because the update is the
+$M$-orthogonal projection of $\hat u$ onto $\ker(G^T)$: E is the Schur
+complement of that projection.  Equivalently, $u^{n+1}$ is the closest
+field to $\hat u$ in the $M$-norm satisfying every weak-divergence
+constraint.  Measured: weak divergence 1.2e-6 (solver tolerance), flat
+for the whole run.
+
+With K, the update residue is $(K - E)\phi \ne 0$: the projection is
+approximate, and the weak divergence floats at the level set by how much
+$\phi$'s interface modes excite $K - E$ (~1e-3 in the channel).
+
+### 8c. What E cannot fix: the strong divergence
+
+Exactness above is exactness of $G^T u = 0$ — a set of
+$n_p$ integral constraints, one per pressure dof.  Pointwise
+$\nabla\!\cdot\!u = 0$ at every GLL node is a *different and larger* set
+of constraints, and the collocated C0 velocity space simply does not
+contain a subspace satisfying them while representing the flow: the
+polynomial interpolant of a solenoidal field is not itself solenoidal,
+with the mismatch concentrated at element interfaces and sharp features.
+Hence the measured split:
+
+| | weak $\|G^T u\|$ | strong $\|\nabla\!\cdot\!u\|_\infty$ |
+|---|---|---|
+| K-path channel | ~1e-3 | ~0.15 |
+| E-path channel | **1.2e-6** | ~0.14 |
+| BFS corner cell | — | O(1) (singularity) |
+
+The strong divergence is an interpolation/resolution error: it decays
+spectrally with $N$ (TGV 88³ → 160³) and is *invariant* to the choice of
+K vs E.  Only compatible (staggered / P$_N$–P$_{N-2}$) discretisations
+control it by construction — which is also the honest summary of the
+Kim–Moin negative result (§ KIM_MOIN_REVIEW): its robustness through
+sharp transients is a property of the staggered mesh, not of the RK4-CN
+time discretisation.
+
+### 8d. The price of E: kernel and conditioning
+
+**Kernel.** $M$ is SPD, so $\ker E = \ker G$: fields with
+$\int \psi_i \nabla\phi = 0$ for all $i$.  On a periodic mesh this
+kernel is 4-dimensional — the constant plus the three checkerboard
+modes — and it appears at *both* real Fourier lanes ($k_z = 0$ and
+Nyquist).  The checkerboard is exactly the classical collocated-grid
+pressure mode: K, being an assembled elliptic operator, gives it a
+positive eigenvalue and suppresses it silently; E is honest about its
+existence and demands an explicit purge (computed null basis, projected
+out of RHS and iterates every solve).  Walls reduce the kernel to the
+constant alone; an outflow-Dirichlet boundary removes it entirely
+(measured on BFS: high-mode pressure fraction 2e-5, no purge needed).
+
+**Conditioning and cost.**  Each E application is two derivative sweeps
+plus a mass inversion (~2-3x a K application), and $\kappa(E) \gg
+\kappa(K)$ because $E$'s spectrum inherits the near-null checkerboard
+family shifted only slightly off zero by mesh non-uniformity.  Measured
+on a stiff turbulent-channel state: Jacobi-CG 878 iterations for E; the
+deg-2 coarse E-multigrid stalls; a deg-6 coarse space restores
+convergence in 60 iterations.  This is the open engineering item — a
+sparse-assembled, factorise-once coarse level to turn the 15x iteration
+reduction into wall-time.
+
+### 8e. Decision rule (final form)
+
+$$ \textbf{K: } \; \min_\phi \;\text{cost}, \;\; G^T u \approx 0
+   \qquad\qquad
+   \textbf{E: } \; u^{n+1} = \Pi_{M}\,\hat u, \;\; G^T u = 0 . $$
+
+- **Production statistics** (means, Reynolds stresses, spectra): K.
+  The A/B of §7 shows every low-order statistic agrees within sampling
+  noise; the weak-divergence residue K leaves behind does not couple to
+  the momentum budget at measurable level.
+- **Cumulative-conservation problems** — passive scalar transport,
+  long-horizon mass budgets, pressure-work energetics — where a 1e-3
+  divergence residue integrates into secular drift: E (or a compatible
+  discretisation if pointwise conservation is required).
+- **Verification**: E remains the instrument that turns "the divergence
+  is fine" from an assumption into a measurement.
