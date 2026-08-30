@@ -311,27 +311,66 @@ so **the same variable $\omega$ enters one row $\nu$ times weaker than the
 other** and no single $H^1$ norm bounds both tightly. Classical Stokes FOSLS
 avoids this by rescaling the variables (Bochev & Gunzburger).
 
-### What this means
+### What this means — and a correction
 
-**The accuracy-vs-ellipticity conflict the plan anticipated is real.** §7F and
-WEIGHT_VS_TIMESTEP_STUDY.md establish that legacy weighting is required for
-*accuracy* — Poiseuille is 1875× worse under `w_mom=1`. F1 now shows legacy's
-ellipticity constant is **1.3 × 10⁶ worse** in the elliptic limit. These are not
-reconcilable by tuning; they are different objectives.
+**RETRACTED: "the accuracy-vs-ellipticity conflict is real."** I compared legacy
+against `w_mom=1` in the *elliptic limit* and concluded they were irreconcilable.
+Production never visits that limit. Sweeping $\Delta t$ shows a **crossover at
+$\Delta t \approx 0.03$**:
 
-**But the conflict may be an artefact of the coupling, not fundamental.** The
-$\nu^{-2}$ result says a *variable rescaling* — not a row reweighting — should
-recover ~10³ of the constant at production $\nu$, and variable scaling does not
-touch the accuracy argument, which is about the relative weight of the *rows*.
-**That is the most promising thread out of F1 and it was not in the original plan.**
+| dt | regime | legacy | `w_mom=1` | winner |
+|---|---|---|---|---|
+| 1e−3 | **3D production** | 7.54e+06 | 2.04e+09 | **legacy, 270×** |
+| 3e−2 | — | 7.39e+04 | 8.33e+04 | legacy, 1.1× |
+| 1e−1 | — | 6.15e+04 | 2.09e+04 | `w_mom=1`, 2.9× |
+| 1e+4 | steady (Kovasznay) | 1.94e+10 | 1.37e+04 | `w_mom=1`, 1.4e6× |
+
+**Each weighting is optimal in its own regime, and the code already chooses
+correctly** — Kovasznay runs `dt=1e30, w_mom=1`; unsteady runs legacy. §7F's
+accuracy finding and F1's ellipticity finding are about *different $\Delta t$
+regimes* and are consistent. There was never a conflict; there was a comparison
+made in the wrong limit.
+
+**A consistency check falls out of it.** At production $\Delta t = 10^{-3}$ the
+constant is $7.5\times10^6$, so $\sqrt{c_2/c_1} \approx 2740$ predicted CG
+iterations — against the **~4000 measured** in the 3D minimal channel. The
+ellipticity constant predicts the observed iteration count to within a factor
+of 1.5, which is the first independent check that any of this describes the real
+solver.
+
+**And it scopes F2 sharply.** At small $\Delta t$ the mass term dominates, the
+problem is ill-conditioned *regardless of preconditioner*, and Jacobi is close to
+optimal. **AMG has little to offer the time-stepper.** Its payoff is confined to
+the STEADY solver — Kovasznay, the steady cavity, BFS, Gartling — which is
+already where `w_mom=1` is used and where the ceiling is flat at 1.55e4.
 
 ### Revised next steps
 
 | | | |
 |---|---|---|
-| **F1b** | rescale $\omega$ (and test $p$), re-measure $c_2/c_1$ vs $\nu$ | ~½ day, and it may be worth more than F2 |
-| **F2** | LOR-AMG, run in the elliptic limit with `w_mom=1` where the theory holds | predicted $\sim\sqrt{1.55\times10^4} \approx 124$ iterations, flat in $h$ |
+| ~~**F1b**~~ | ~~rescale $\omega$~~ — **REFUTED**: $c_2/c_1$ is *invariant* under variable rescaling, since $q = D\tilde q$ maps $Aq=\lambda Hq$ to $(DAD)\tilde q = \lambda (DHD)\tilde q$. Measured: 1.368939e+04 for scalings of 100, 0.01 and 10 — ratio exactly 1.000. Only a change to the **rows** (which alters the answer) or to the first-order **system** can move it | ½ day saved |
+| **F2** | LOR-AMG — now scoped to **steady** problems only, at $\ge 6\times6$ elements (they cross at $4\times4$; below that Jacobi wins and the test would mislead) | ceiling $\sqrt{1.55\times10^4} \approx 124$ iterations flat, vs Jacobi unbounded |
 | **F3** | weak BCs | unchanged |
+| **F4′** | **the functional as an error monitor** — the consequence of ellipticity that costs nothing and the project has never exploited | see below |
+
+### F4' — the cheapest consequence, and the one this week argued for
+
+Ellipticity means $c_1\|e\|_1^2 \le J(Q) \le c_2\|e\|_1^2$: the functional
+**already being minimised** is a computable two-sided bound on the error, needing
+no exact solution and no auxiliary problem.
+
+The project has no a-posteriori error estimate; accuracy is measured only where an
+analytic answer exists. `minchan_001` ran 14 h looking healthy on every logged
+diagnostic while carrying an 11% divergence defect — and $J$ aggregates *every*
+row residual, so it would have been visibly elevated from the first step. L16
+asked for "a conserved quantity and a validated reference"; a computable error
+bound is stronger than both and works on the cavity, the BFS and the turbulent
+channel, none of which have exact solutions.
+
+Caveat: the bound is loose by $\sqrt{c_2/c_1}$ — ~124× at $\nu=10^{-2}$, ~1160×
+at $10^{-3}$ — so it is an honest *monitor* and a poor *quantitative* estimate.
+As a relative instrument across runs of one configuration, it needs no constants
+at all.
 
 F2's gate is now *quantitative* rather than qualitative: an $H^1$-optimal
 preconditioner should give $O(\sqrt{c_2/c_1})$ iterations, so ~124 at ν=0.01 and
