@@ -115,5 +115,58 @@ def main(N=8, Ex=6, Ey=2):
     print(f'\nsaved -> {OUT}')
 
 
+
+def sweep():
+    """Isolate the two changes, and see whether either grows with order.
+
+    CONTROL "cheby (OBC bug)" reproduces the pre-fix coarse operator by resetting
+    the coarse state's OBC coefficients to their defaults after construction --
+    the exact condition scratch/pmg_coarse_probe.py measured.  Without it we
+    cannot tell how much of DirectCoarse's advantage is really the bug fix.
+    """
+    print('\n\nSweep -- Poiseuille + Dong OBC, 6x2 elements, tol 1e-10\n')
+    print(f'{"N":>3} {"coarse":>7} {"jacobi":>9} {"cheby(bug)":>11} '
+          f'{"cheby(fixed)":>13} {"DIRECT":>8} {"setup_d":>8}')
+    rows = []
+    for N in (6, 8, 10, 12):
+        m, st, fu, fv = case(N, 6, 2)
+        M_inv = S.compute_jacobi(st, fu, fv, pin_p=False); st._M_inv = M_inv
+        from lssem2d.assembly import gather_scatter
+        mult = gather_scatter(m, np.ones((m.nelem, N+1, N+1, 4)))
+        mw = 1.0/np.where(mult < 1e-10, 1.0, mult)
+        rng = np.random.default_rng(0)
+        b = apply_A(st, rng.standard_normal((m.nelem, N+1, N+1, 4)), fu, fv,
+                    pin_p=False)
+
+        tj, rj, ij = count(st, b, fu, fv, mw, None)
+
+        pc_fix = P.make('pmg2', st, fu, fv, M_inv, False, pc=2, deg=4)
+        tf, rf, if_ = count(st, b, fu, fv, mw, pc_fix)
+
+        pc_bug = P.make('pmg2', st, fu, fv, M_inv, False, pc=2, deg=4)
+        pc_bug.sc.obc_D0 = 0.0; pc_bug.sc.obc_delta = None
+        pc_bug.coarse = P.Chebyshev4(pc_bug.sc, pc_bug.fuc, pc_bug.fvc,
+                                     pc_bug.Mic, False, deg=10, optimised=True)
+        tb, rb, ib = count(st, b, fu, fv, mw, pc_bug)
+
+        t0 = time.perf_counter()
+        pd = P.make('pmg2', st, fu, fv, M_inv, False, pc=2, deg=4,
+                    coarse_solver='direct')
+        ts = time.perf_counter() - t0
+        td, rd, id_ = count(st, b, fu, fv, mw, pd)
+
+        g = lambda x: x[0] if x else -1
+        print(f'{N:3d} {pd.coarse.ndof:7d} {g(ij):9d} {g(ib):11d} {g(if_):13d} '
+              f'{g(id_):8d} {ts:7.2f}s')
+        rows.append((N, pd.coarse.ndof, g(ij), g(ib), g(if_), g(id_), ts))
+    np.savez_compressed(os.path.join(_R, 'scratch', 'pmg_direct_sweep.npz'),
+                        rows=np.array(rows, dtype=float),
+                        cols=['N', 'ndof_c', 'jacobi', 'cheby_bug',
+                              'cheby_fixed', 'direct', 'setup_direct'])
+    print('\n  cheby(bug) vs cheby(fixed) isolates the OBC propagation fix.')
+    print('  cheby(fixed) vs DIRECT isolates the exact coarse solve.')
+
+
 if __name__ == '__main__':
     main()
+    sweep()

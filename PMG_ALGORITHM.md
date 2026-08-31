@@ -424,3 +424,48 @@ symptom rather than removing the cause** -- the same relationship
   [FOSLS_2D_PLAN.md](./FOSLS_2D_PLAN.md) §F2h(ii), which also records that AMG
   is *not* `p`-robust on the LOR operator and that Pazner uses ILU-smoothed
   geometric multigrid instead.
+
+---
+
+## 8. Conclusion on the direct coarse solve
+
+**It is the better choice on every axis measured, and the evidence is
+consistent across two problems and three independent measures.**
+
+| | Poiseuille (T1/T2) | Gartling BFS (T3) |
+|---|---|---|
+| CG iterations vs Chebyshev coarse | 1.25–1.40× fewer | — |
+| path dependence | **117×** less than Jacobi | **17×** less drift |
+| benchmark physics | — | reattachment spread 3.0% → **1.3%** |
+| wall time | ~2× | **2.6×** |
+
+The ordering is monotone and in the predicted direction every time — Jacobi
+worst, Chebyshev coarse in between, direct best — and the wall-time advantage
+*grows* with problem size (2× at 3,888 DOF, 2.6× at 9,048), because the coarse
+problem stays fixed while the fine solve gets harder.
+
+**Three qualifications bound the claim.**
+
+1. **It slows the symptom, not the cause.** T3's drift falls 17× but never
+   reaches zero; the iteration still does not converge. The soft direction is a
+   property of the **formulation**, and no coarse solver removes it. This is the
+   same relationship `ROW7_WEIGHT` has to the ω cluster in 3D — attack the
+   symptom pointwise, buy a large factor, leave the cause standing.
+2. **It is not a p-robustness fix.** The advantage *shrinks* with order (1.40× at
+   N=6 → 1.25× at N=12), and `PMG2` remains a flat ~11–12× constant-factor
+   preconditioner rather than a p-independent one (§6.2).
+3. **Assembly is `O(elements)`** — one `apply_A` per free coarse DOF, per
+   linearisation. Trivial at 202–828 coarse DOF (0.03 s), but it scales with the
+   **mesh**, not with `p`. This is the one thing blocking it as a universal
+   default.
+
+**Scope.** Every case tested had a Dong outflow. The generic iteration-count gain
+should transfer anywhere, but the large wins — 117× spread, 17× drift, the
+reattachment result — are all soft-outflow-mode effects. On closed-boundary
+problems it is untested, and less should be expected.
+
+**Recommendation.** Make `coarse_solver='direct'` the default **for open-outflow
+cases** once T4 confirms it under genuine backflow, and convert the assembly to
+element-local probing (as `scratch/fosls_assemble.py` does, `O(1)` in mesh size)
+before using it on large meshes. Keep `Chebyshev4` as the fallback where
+assembly cost would dominate.
