@@ -130,6 +130,74 @@ def _p_interp(p_from, p_to):
     return C
 
 
+class DirectCoarse:
+    """EXACT coarse solve: assemble the coarse operator once, factorise, reuse.
+
+    Why this may matter.  PMG2 uses a polynomial smoother on the fine level AND
+    a polynomial on the coarse level, so NOTHING in the cycle actually inverts
+    the soft direction.  Polynomial smoothers damp a spectral BAND; the soft end
+    is exactly what a coarse solve is meant to remove -- and the soft outflow
+    pressure mode (~8e3x softer than generic) is the reason PMG2 exists at all.
+
+    Like Chebyshev4 this is a FIXED LINEAR operator, so it is admissible as a CG
+    preconditioner.  An inner CG would NOT be: its polynomial depends on the
+    right-hand side, which destroys the symmetry the outer CG needs.
+
+    ASSEMBLY IS BY GLOBAL PROBING of apply_A -- one application per free coarse
+    DOF.  That is correct BY CONSTRUCTION: whatever apply_A does (masking, the
+    Dong OBC boundary term, the least-squares weights) is in the matrix, with no
+    second implementation to drift.  The cost is O(ndof_coarse) applications of
+    a small operator, paid once per linearisation.  At pc = 2 that is 260 DOF on
+    the Poiseuille mesh and 828 on Gartling's 11x4 -- cheap.  It scales with the
+    ELEMENT count, not with p, so it is the mesh that limits this, not the order.
+    """
+
+    name = "direct"
+
+    def __init__(self, state, fu, fv, pin_p=False):
+        import scipy.sparse as sp
+        import scipy.sparse.linalg as spla
+        m = state.mesh
+        n = m.N + 1
+        self.flat = m.gidx.ravel()
+        ngl = int(self.flat.max()) + 1
+        order = np.argsort(self.flat, kind='stable')
+        fs = self.flat[order]
+        lo = np.searchsorted(fs, np.arange(ngl), 'left')
+        hi = np.searchsorted(fs, np.arange(ngl), 'right')
+        self.copies = [order[lo[j]:hi[j]] for j in range(ngl)]
+        # After gather_scatter every local copy of a node holds the SAME
+        # assembled value, so one representative per node reads the global vector.
+        self.rep = np.array([c[0] for c in self.copies])
+        self.ngl = ngl
+
+        mask = state.get_global_mask(pin_p=pin_p)
+        self.free = (mask.reshape(-1, 4)[self.rep].reshape(-1) > 0)
+        gd_free = np.nonzero(self.free)[0]
+
+        U = np.zeros((m.nelem, n, n, 4))
+        Uf = U.reshape(-1, 4)
+        cols = np.empty((gd_free.size, gd_free.size))
+        for k, gd in enumerate(gd_free):
+            j, f = divmod(int(gd), 4)
+            U[:] = 0.0
+            # The global basis function is the SUM of its local copies, so the
+            # probe must be set on every copy, not just the representative.
+            Uf[self.copies[j], f] = 1.0
+            out = apply_A(state, U, fu, fv, pin_p=pin_p)
+            cols[:, k] = out.reshape(-1, 4)[self.rep].reshape(-1)[self.free]
+
+        self.asym = float(np.abs(cols - cols.T).max() / max(np.abs(cols).max(), 1e-300))
+        self.lu = spla.splu(sp.csc_matrix(0.5*(cols + cols.T)))
+        self.ndof = gd_free.size
+
+    def __call__(self, rc):
+        rg = rc.reshape(-1, 4)[self.rep].reshape(-1)
+        xg = np.zeros_like(rg)
+        xg[self.free] = self.lu.solve(rg[self.free])
+        return xg.reshape(self.ngl, 4)[self.flat].reshape(rc.shape)
+
+
 class PMG2:
     """Two-level p-multigrid V-cycle used as a CG preconditioner.
 
@@ -145,7 +213,7 @@ class PMG2:
     name = "pmg2"
 
     def __init__(self, state, fu, fv, M_inv, pin_p=False, pc=2, deg=6,
-                 optimised=True, coarse_deg=10):
+                 optimised=True, coarse_deg=10, coarse_solver='chebyshev'):
         self.smooth = Chebyshev4(state, fu, fv, M_inv, pin_p, deg=deg,
                                  optimised=optimised)
         self.state, self.fu, self.fv, self.pin_p = state, fu, fv, pin_p
@@ -179,6 +247,19 @@ class PMG2:
                               w_mass=getattr(state, 'w_mass', None),
                               dtau=getattr(state, 'dtau', None))
 
+        # --- Dong OBC parameters MUST be carried down too -----------------
+        # obc_active() is decided by the MESH (bc == 6 edges), which copy(m)
+        # preserves, so apply_A adds the boundary term on BOTH levels.  But the
+        # coefficients live on the STATE and default to (w, D0, delta, U0) =
+        # (1.0, 0.0, None, 1.0).  Without this loop the coarse rows lose the
+        # nu*D0*du/dt term entirely -- D0 sits on the boundary diagonal, so
+        # this is precisely the w_mom/w_mass/dtau failure above in a new place:
+        # measured (1.0, 1.0, 0.05, 1.0) fine against (1.0, 0.0, None, 1.0)
+        # coarse.  See scratch/pmg_coarse_probe.py.
+        for _a in ('obc_w', 'obc_D0', 'obc_delta', 'obc_U0', 'obc_picard'):
+            if hasattr(state, _a):
+                setattr(self.sc, _a, getattr(state, _a))
+
         # coarse linearisation velocities: restrict fu, fv
         # Prolongation P: coarse -> fine (nodal interpolation).
         # Restriction MUST be its adjoint (R = P^T), otherwise the V-cycle is
@@ -198,12 +279,21 @@ class PMG2:
         from .solver import compute_jacobi
         self.Mic = compute_jacobi(self.sc, self.fuc, self.fvc,
                                   pin_p=self._map_pin(pin_p))
-        # Coarse solver: fixed-degree Chebyshev.  It must be a FIXED LINEAR
-        # operator -- CG is not (its polynomial depends on the right-hand
-        # side), which would destroy the symmetry of the whole V-cycle.
-        self.coarse = Chebyshev4(self.sc, self.fuc, self.fvc, self.Mic,
-                                 self._map_pin(pin_p), deg=coarse_deg,
-                                 optimised=optimised)
+        # Coarse solver.  Either choice must be a FIXED LINEAR operator -- CG
+        # is not (its polynomial depends on the right-hand side), which would
+        # destroy the symmetry of the whole V-cycle.
+        #   'chebyshev' (default)  fixed-degree polynomial -- SMOOTHS the coarse
+        #                          problem, does not solve it
+        #   'direct'               assemble + factorise -- actually inverts it,
+        #                          including the soft modes a polynomial cannot
+        #                          reach.  See DirectCoarse.
+        if str(coarse_solver).lower() in ('direct', 'lu', 'exact'):
+            self.coarse = DirectCoarse(self.sc, self.fuc, self.fvc,
+                                       self._map_pin(pin_p))
+        else:
+            self.coarse = Chebyshev4(self.sc, self.fuc, self.fvc, self.Mic,
+                                     self._map_pin(pin_p), deg=coarse_deg,
+                                     optimised=optimised)
 
     def _map_pin(self, pin_p):
         if not pin_p or not isinstance(pin_p, tuple):
