@@ -52,9 +52,14 @@ follow-up.
 """
 import os, sys, time
 SC = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, '/Users/danielchan/Dropbox/Apple_MLX_CFD/sem_demo')
+# Derived from __file__, not hardcoded: this module is imported by scripts that
+# run on other machines (the T3 sweep runs in a container on the DGX Spark), and
+# a hardcoded '/Users/danielchan/...' chdir kills them at import with
+# FileNotFoundError before a single line of solver code executes.
+ROOT = os.path.dirname(SC)
+sys.path.insert(0, ROOT)
 sys.path.insert(0, SC)
-os.chdir('/Users/danielchan/Dropbox/Apple_MLX_CFD/sem_demo')
+os.chdir(ROOT)
 import numpy as np
 import lssem2d
 lssem2d.set_backend('numpy')

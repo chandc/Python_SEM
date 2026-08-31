@@ -10,8 +10,11 @@ Format:
     iwest ieast isouth inorth      (1-based; 0 = boundary)
     ibcw  ibce  ibcs   ibcn        (0 interior, 1 wall, 2 lid, 3 inlet, 4 outlet)
 """
+import os
 import sys
-sys.path.insert(0, '/Users/danielchan/Dropbox/Apple_MLX_CFD/sem_demo')
+# Derived from __file__ so this module imports on any machine -- it is pulled in
+# by sweeps that run in a container on the DGX Spark.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import numpy as np
 from lssem2d.mesh import Mesh
 
