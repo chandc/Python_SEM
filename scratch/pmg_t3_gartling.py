@@ -22,6 +22,15 @@ steady form (w_mass = 0), Dong outlet.  Two measures, not one:
               of the solve that produced it, and T2's direct-coarse spread was
               1.07e-08.  So cg_tol = 1e-10 here, as in T2.  The physics is
               unaffected: a tighter solve cannot move reattachment.
+
+              AND THE STEADY TOLERANCE MUST BE REACHABLE.  The first T3 attempt
+              used tol = 1e-11 and ALL TWELVE configurations hit the step cap:
+              with cg_tol = 1e-10 and pseudo-time cgsfac = 1e-3, |dU| plateaus
+              between 2e-9 and 4e-8 and never reaches 1e-11.  Comparing states at
+              a common STEP COUNT rather than a common |dU| conflates "where does
+              it end up" with "how far has it got" -- and jacobi was 17x less
+              converged than direct at step 300, which would have inflated its
+              apparent spread.  tol = 1e-9, cap = 2000.
   REATTACH    lower-wall reattachment against Gartling's benchmark 6.10
               (this repo measures 6.100 with P+Z at N = 7).  A preconditioner
               that changes the PHYSICS is a different and more serious finding
@@ -94,7 +103,7 @@ def make_ic(kind, m):
     raise ValueError(kind)
 
 
-def run_one(pre, ic, cap=300, tol=1e-11, cg_tol=1e-10):
+def run_one(pre, ic, cap=2000, tol=1e-9, cg_tol=1e-10):
     m, st = build()
     def wrapped(state, b, fu, fv, M_inv, mw, pin_p=False, max_iter=5000,
                 tol=1e-6, cgsfac=0.0, precond=None):

@@ -339,15 +339,79 @@ The amplitude was chosen without checking it sat in a stable basin -- the same
 mistake as the `minchan` trip amplitude. It is excluded from the spread, so the
 comparison above is like-for-like over the same three initial conditions.
 
-### 6.4 T3, T4 — not yet run
+### 6.4 T3 — Gartling BFS: the iteration never converges, and that is the result
 
----
+Gartling Re = 800 with the Dong outlet, 44 elements at N = 7 (9048 global DOF),
+steady form, 4 initial conditions x 3 preconditioners, 12-way parallel on the
+DGX Spark. Raw: `scratch/pmg_t3_gartling_*.npz`.
+
+**All twelve configurations ran to the step cap. None converged.** Raising the
+cap from 300 to 2000 -- 5.5x the wall time -- returned results **identical to
+every printed digit**. The extra 1700 steps changed nothing.
+
+**It is not a limit cycle.** `OUTFLOW_BC_STUDY.md` sec 6 documents a period-2
+orbit for a related failure, and that was the first diagnosis; it is wrong here.
+Measured with `scratch/pmg_t3_drift.py`:
+
+| | `\|U(k)-U(k-1)\|` | `\|U(k)-U(k-2)\|` | ratio |
+|---|---|---|---|
+| Jacobi | 3.461e-08 | 6.922e-08 | **0.5x** |
+| Direct | 2.079e-09 | 4.158e-09 | **0.5x** |
+
+A period-2 orbit gives `\|U(k)-U(k-2)\| ~ 0`. **Exactly 2x is the signature of
+constant-rate linear drift** -- the iterate sliding along one fixed direction
+forever. That is the soft mode, quantified: the solver cannot pin down the
+component along the near-null direction, so the solution creeps along it at a
+constant rate and the steady test can never fire.
+
+**The drift rate is the cleanest measure this study has produced:**
+
+| preconditioner | drift per step | vs Jacobi | reattachment spread | wall |
+|---|---|---|---|---|
+| Jacobi | 3.461e-08 | 1x | **0.186** (3.0%) | ~7150 s |
+| PMG2 + Chebyshev | — | — | 0.086 (1.4%) | ~5900 s |
+| **PMG2 + Direct** | **2.079e-09** | **17x** | **0.082 (1.3%)** | **~2750 s** |
+
+**And it moves a benchmarked physical quantity.** Lower-wall reattachment against
+Gartling's 6.10:
+
+| IC | Jacobi | Chebyshev | Direct |
+|---|---|---|---|
+| `zero` | 6.2778 | 6.1409 | 6.1417 |
+| `uniform` | 6.1879 | 6.1646 | 6.1909 |
+| `inlet` | 6.2895 | 6.2094 | 6.2051 |
+| `pzseed` | 6.1035 | 6.1234 | 6.1234 |
+| **spread** | **0.186** | 0.086 | **0.082** |
+
+**Under Jacobi the reattachment length depends on the initial condition by 3% of
+its own value.** That is far more consequential than T2's 1e-06 field spread --
+it is the benchmark quantity moving. Both PMG2 variants more than halve it.
+
+**Verdict.** T3 reconfirms the T2 ordering on a case where the soft mode bites,
+and adds two things T2 could not show: a **17x reduction in drift rate**, and a
+**2.6x wall-time win** (2750 s against 7150 s) that Poiseuille did not exhibit.
+The direct coarse solve is better on iterations, on wall time, and on the
+physics.
+
+**What it does not show.** No configuration reaches a fixed point, so "converged
+state" is not defined for this case and the T2-style spread is not computable
+(`common = []`). Reducing drift 17x is not eliminating it. **The underlying
+problem is the formulation's soft direction, and a better coarse solve slows the
+symptom rather than removing the cause** -- the same relationship
+`ROW7_WEIGHT` has to the omega cluster in 3D
+([FOSLS_2D_PLAN.md](./FOSLS_2D_PLAN.md) sec F2).
+
+### 6.5 T4 — not yet run
 
 ## 7. Open items
 
-* **T2 is done and supports the mechanism** (§6.3), but on a benign problem.
-  **T3 (Gartling) must reconfirm the ordering before the default changes** --
-  Poiseuille's 1.3e-06 spread is real but small.
+* **T2 and T3 both support the mechanism** (§6.3, §6.4). T3 adds a 17x drift
+  reduction and a 2.6x wall-time win. **The case for making
+  `coarse_solver='direct'` the default is now reasonable** -- pending T4 and a
+  decision on the `O(elements)` assembly cost.
+* **No T3 configuration converges.** The Gartling + Dong steady iteration drifts
+  at a constant rate along the soft direction. That is a FORMULATION issue, not
+  a preconditioner one, and it deserves its own investigation.
 * **A `noisy`-class initial condition needs a stable-basin check first.** All
   three preconditioners diverge on it; two at the identical step.
 * **`DirectCoarse` assembly is `O(elements)`** — element-local probing, or an
