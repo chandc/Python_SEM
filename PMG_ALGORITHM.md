@@ -285,19 +285,59 @@ Three things this settles:
    [FOSLS_2D_PLAN.md](./FOSLS_2D_PLAN.md) §F2g found for AMG under
    `p`-refinement.
 
-### 6.3 T2 — path dependence
+### 6.3 T2 — path dependence: **the ordering is confirmed**
 
-**In progress.** Twelve configurations (4 initial conditions × 3
-preconditioners), driven to `|dU|∞ < 1e-11` or a 600-step cap. The measure is
-the maximum pairwise spread of the converged states:
+Twelve configurations (4 initial conditions x 3 preconditioners), driven to
+`|dU|inf < 1e-11` or a 400-step cap, run 12-way parallel on the DGX Spark's CPU
+cores. Raw: `scratch/pmg_path_dependence_*.npz`,
+`scratch/pmg_path_dependence_spark.log`.
 
-$$
-\text{spread} \;=\; \max_{a,b}\;\bigl\| U^{(a)}_\infty - U^{(b)}_\infty \bigr\|_\infty
-$$
+| IC | Jacobi | + Chebyshev coarse | + **Direct** coarse |
+|---|---|---|---|
+| `zero` | conv@173 | conv@159 | **conv@143** |
+| `uniform` | conv@159 | conv@190 | **conv@144** |
+| `parabolic` | conv@214 | conv@106 | **conv@26** |
+| `noisy` | **NaN@67** | **NaN@67** | diverged (`|dU|~1e43`) |
 
-A large spread means the solver left the soft outflow mode unresolved and each
-trajectory parked wherever its transient happened to end. Expectation: Jacobi
-largest, Chebyshev-coarse intermediate, Direct smallest.
+**Spread of the converged states** — `max_{a,b} ||U_a - U_b||_inf` over the three
+initial conditions that converged for every preconditioner:
+
+| preconditioner | max pairwise spread | vs Jacobi |
+|---|---|---|
+| Jacobi | 1.257e-06 | 1x |
+| PMG2 + Chebyshev(10) | 1.548e-07 | **8.1x** |
+| **PMG2 + Direct** | **1.074e-08** | **117x** |
+
+**Monotone, in the predicted order.** Resolving the coarse problem exactly
+reduces path dependence by **117x against Jacobi and 14x against the polynomial
+coarse solve**. The spread is five orders of magnitude above the per-step
+convergence criterion (1e-11), so these are genuinely different converged states,
+not numerical noise on the stopping test.
+
+**The `parabolic` row is the clearest single signal.** That initial condition is
+essentially the exact solution, so a solver that resolves the system should
+recognise it at once. Direct does — **26 steps against Jacobi's 214, 8.2x
+fewer**. The diagonal preconditioner leaves something unresolved that then has to
+relax away over hundreds of time steps, which is the mechanism `precond.py`
+describes.
+
+**But the magnitudes are small, and that matters for how much to claim.** A
+1.3e-06 spread on a field of O(1) is not the dramatic path dependence that would
+produce visibly different flow. The ~8e3x soft direction was measured on the
+**Chan mesh**, not on Poiseuille, and Poiseuille is a benign case chosen as a
+gate precisely because its answer is known. T3 (Gartling) is where the effect
+should be larger and where this ordering needs to be reconfirmed before the
+default is changed.
+
+**The `noisy` initial condition was a test-design error.** A 0.3-amplitude random
+velocity perturbation drives the Dong outlet into a regime where the
+**formulation** fails, not the solver: Jacobi and Chebyshev both reach NaN at
+**exactly step 67**, and two very different preconditioners failing at the same
+step is the signature of a problem-level blow-up. Direct did not overflow but
+diverged all the same (`|dU| ~ 1e43` at step 125, ~300 s/step, killed at 10.4 h).
+The amplitude was chosen without checking it sat in a stable basin -- the same
+mistake as the `minchan` trip amplitude. It is excluded from the spread, so the
+comparison above is like-for-like over the same three initial conditions.
 
 ### 6.4 T3, T4 — not yet run
 
@@ -305,8 +345,11 @@ largest, Chebyshev-coarse intermediate, Direct smallest.
 
 ## 7. Open items
 
-* **T2 must finish** before any claim about the correctness benefit. §6.1–6.2
-  measure speed only, and speed was never the argument for `PMG2`.
+* **T2 is done and supports the mechanism** (§6.3), but on a benign problem.
+  **T3 (Gartling) must reconfirm the ordering before the default changes** --
+  Poiseuille's 1.3e-06 spread is real but small.
+* **A `noisy`-class initial condition needs a stable-basin check first.** All
+  three preconditioners diverge on it; two at the identical step.
 * **`DirectCoarse` assembly is `O(elements)`** — element-local probing, or an
   AMG V-cycle, is needed before this is usable on large meshes.
 * **The default remains `coarse_solver='chebyshev'`.** Nothing here yet
