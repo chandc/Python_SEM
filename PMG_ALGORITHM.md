@@ -401,29 +401,43 @@ symptom rather than removing the cause** -- the same relationship
 `ROW7_WEIGHT` has to the omega cluster in 3D
 ([FOSLS_2D_PLAN.md](./FOSLS_2D_PLAN.md) sec F2).
 
-### 6.5 T4 — not yet run
+### 6.5 T4 — not yet run; the case is characterised
 
-## 7. Open items
+T4 (the preconditioner comparison under genuine backflow) has **not** been run.
+What exists is a characterisation of the case itself, from the saved fields --
+`scratch/plot_short_streamlines.py`, figure `scratch/short_bfs_streamlines.png`.
 
-* **T2 and T3 both support the mechanism** (§6.3, §6.4). T3 adds a 17x drift
-  reduction and a 2.6x wall-time win. **The case for making
-  `coarse_solver='direct'` the default is now reasonable** -- pending T4 and a
-  decision on the `O(elements)` assembly cost.
-* **No T3 configuration converges.** The Gartling + Dong steady iteration drifts
-  at a constant rate along the soft direction. That is a FORMULATION issue, not
-  a preconditioner one, and it deserves its own investigation.
-* **A `noisy`-class initial condition needs a stable-basin check first.** All
-  three preconditioners diverge on it; two at the identical step.
-* **`DirectCoarse` assembly is `O(elements)`** — element-local probing, or an
-  AMG V-cycle, is needed before this is usable on large meshes.
-* **The default remains `coarse_solver='chebyshev'`.** Nothing here yet
-  justifies changing it; T2 might.
-* **Dong OBC is East-edge only.**
-* **Neither coarse solver makes `PMG2` `p`-robust** (§6.2 item 3). The
-  literature route for that is low-order-refined preconditioning — see
-  [FOSLS_2D_PLAN.md](./FOSLS_2D_PLAN.md) §F2h(ii), which also records that AMG
-  is *not* `p`-robust on the LOR operator and that Pazner uses ILU-smoothed
-  geometric multigrid instead.
+Short-domain Armaly BFS, Re = 389, ER 1.94, 72 elements at N = 10, step at
+`x = 0`, outlet at `x = 5`. The validated reference is
+[ARMALY_VALIDATION.md](./ARMALY_VALIDATION.md)'s long-domain P+Z result,
+**`x_r/S = 8.145`**, within 1.2% of Armaly's experiment — so `x_r ≈ 7.7`, **past
+this domain's outlet**. The recirculation crosses the boundary and every outflow
+condition is asked to handle reversed flow.
+
+| outflow condition | `x_r/S` | vs 8.145 | outlet backflow | min `u` | max `|u|` |
+|---|---|---|---|---|---|
+| free | 3.66 | **−55%** | 56.8% | −1.128 | **2.3175** |
+| P+Z | 5.17 | −36% | 6.8% | −0.069 | 1.5000 |
+| Dong, switch disarmed | >5.32 | closest | 20.5% | −0.153 | 1.5000 |
+| **Dong, switch armed** | **>5.32** | **closest** | **18.2%** | **−0.102** | 1.5000 |
+
+**Free outflow is visibly corrupted** — a spurious secondary vortex near
+`x ≈ 3.7–5`, the `u = 0` line kinking upward and out of the top of the domain,
+and `max|u| = 2.32` against a physical 1.5, a 55% overshoot. It truncates the
+bubble to 45% of its true length.
+
+**Dong is the only condition that does not artificially reattach.** Both variants
+carry the bubble past the outlet, which is what the reference says should happen,
+and the armed switch cuts peak outlet backflow 33% against disarmed — the `Θ₀`
+term doing the job it exists for.
+
+Two caveats: *"no reattachment in domain"* only bounds `x_r/S > 5.32`, which is
+consistent with 8.145 but does not measure it; and the armed run finished
+`WALLCAP` at 547 steps (`|dU| = 1.1e-10`), near-converged rather than converged.
+
+**This is why T4 is the right next test.** `obc_D0 = 2 ≠ 0` here, so unlike T3 the
+coarse OBC-propagation fix is live; and the outlet sits in reversed flow, which
+is where a preconditioner that resolves the soft mode should matter most.
 
 ---
 
