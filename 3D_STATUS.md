@@ -2860,11 +2860,21 @@ fields/8 rows with row weights). **Running the 3D code on the same cavity at
 `scratch/pmg3d_cavity_kz0.py`, Ghia Re=1000, 4×4 elements, halving ladder,
 `DirectCoarse`, numba, manufactured RHS:
 
-| `c` | regime | Jacobi growth | **PMG growth** | ratio N=6→20 | wall vs Jacobi |
+| `c` | ⇔ Δt | Jacobi growth | **PMG growth** | ratio N=6→20 | wall vs Jacobi |
 |---|---|---|---|---|---|
-| **1** | steady | 2.84× | **1.19×** | 14.6× → **35.0×** | 0.88× → **2.24×** |
-| 20 | — | 5.10× | 3.47× | 6.8× → 9.9× | 0.40× → 0.56× |
-| **525** | production | 6.75× | **8.05×** | 7.3× → 6.1× | 0.35× (loss) |
+| **1** | 6.0 — steady | 2.84× | **1.19×** | 14.6× → **35.0×** | 0.88× → **2.24×** |
+| 20 | 0.30 | 5.10× | 3.47× | 6.8× → 9.9× | 0.40× → 0.56× |
+| **525** | 1.14e−02 | 6.75× | **8.05×** | 7.3× → 6.1× | 0.35× (loss) |
+
+> **`c = 525` is a test constant, not the production value** — it is inherited
+> from `pmg_sweep.py` / `bench_numba_solve.py`, paired with ν = 1/180. Real
+> values are **higher**: the `k_z=0` cavity march runs `c = 2486 / 2759 / 3449`
+> (one per RKW3 stage at `dt = 1.74e−03`), and the minimal channel at
+> `dt = 8e−4` would be `c ≈ 7500` — **6.6× and 14×** beyond the sweep's top row.
+> The trend is monotone in `c`, so PMG's degradation at true production `c` is
+> *worse* than the 0.35× measured, and the conclusion holds a fortiori. But the
+> sweep never reached production `c`, and the earlier "production" label on this
+> row was wrong.
 
 **At `c=1` p-multigrid IS N-independent in this formulation** — 1.19× growth,
 essentially the 2D cavity's 1.05× — the ratio *widens* to 35×, and it wins on
