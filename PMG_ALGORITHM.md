@@ -676,6 +676,52 @@ a power law barely fits because the data is constant with scatter. `its/N` *fall
 
 **The clean statement: Jacobi grows like N^1.25; the ladder does not grow.**
 
+#### Cost per iteration — the deepening ladder is nearly free
+
+A flat iteration count is not by itself flat *work*: the ladder gets deeper as
+`p` grows (3 levels at N=8, 5 at N=30), so each iteration does more. Measured:
+
+| N | gDOF | levels | CG/step | ms/iter | ms/iter per MDOF |
+|---|---|---|---|---|---|
+| 8 | 4356 | 3 | 32.4 | 5.2 | 1190 |
+| 16 | 16900 | 4 | 31.9 | 12.8 | 757 |
+| 24 | 37636 | 5 | 34.1 | 28.2 | 751 |
+| 30 | 58564 | 5 | 37.1 | 40.3 | **688** |
+
+Over N = 8 → 30: **13.4× the DOF, 1.67× the levels, 1.15× the iterations, 7.77×
+the per-iteration cost, 7.08× the wall.** The extra levels cost essentially
+nothing — coarse levels are small — and the per-iteration cost *per DOF* falls.
+
+Flat iterations × sublinear per-iteration cost puts total wall at
+**~DOF^0.75** over this range, i.e. close to optimal complexity for a system
+whose condition number squares.
+
+> **Read the sublinear exponent with suspicion.** Per-iteration cost measures
+> **DOF^0.80**, which is *below* work-proportional — and a matvec-bound method
+> cannot genuinely beat O(DOF), since every DOF must be touched. The likely cause
+> is that the small cases are **numpy/Python overhead-bound**: at N=8 the arrays
+> are small enough that per-`einsum` overhead dominates, and it amortises by
+> N=30. A compiled implementation should bring the exponent back to ~1.0, giving
+> total wall ~DOF^1.0 — still good, but not 0.75. **Quote "flat iterations"
+> confidently; treat the sublinear wall scaling as provisional.**
+
+#### What would break this: `h`, not `p`
+
+Every p-independence measurement here — §6.6, §6.7, §6.8 — is at a **fixed
+element count** (4 or 16). Under `h`-refinement two things move against the
+method at once:
+
+1. **The coarsest problem grows.** `DirectCoarse` scales with the element count,
+   so the direct solve stops being free — §6.8's build share (24% → 8.4%) falls
+   with `p` but would *rise* with `h`.
+2. **The coarse space shrinks relative to the fine space.** p-multigrid coarsens
+   in `p` only; it does nothing about `h`.
+
+Classical theory then wants an **`h`-cycle underneath the p-ladder** — which is
+exactly where AMG on the `p_c = 2` operator returns, as Pazner's coarse solver
+`R₀` does (§F2h(ii)). That operator is low-order and sparse, so the O(p^{2d})
+density that defeats AMG at high order does not arise there.
+
 #### Accuracy: both profiles, and a floor
 
 RMS against Ghia Tables I and II, **identical across all four configurations at
