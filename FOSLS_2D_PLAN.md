@@ -896,3 +896,73 @@ against the matrix-free path to mean anything.
 the standard one. It is *not* a way to make AMG work at high order — the author
 who developed it reports AMG is not p-robust on the LOR operator and uses
 ILU-smoothed geometric multigrid instead.
+
+### F5 — `w_con`: weighting the continuity row. **Two competing optima**
+
+FOSLS also suggests weighting the constraints. §F1b measured `c₂/c₁` to be
+*invariant* under rescaling ω — a change of **variables** maps `Aq = λHq` to
+`(DAD)q̃ = λ(DHD)q̃` and cannot move the ratio — and recorded that only a change
+to the **rows** or to the **system** could. `w_con` is a row change, so unlike
+F1b it genuinely moves the number.
+
+Implemented in `lssem2d/lssem.py` (`ls_wcon`, numpy backend; the numba kernels
+take `(a_mass, a_flux)` explicitly and raise rather than silently drop it):
+
+$$
+J = \int \Bigl[\, w_{\text{mom}}^{2}\,(N_1^2+N_2^2) \;+\; \boxed{w_{\text{con}}^{2}}\,(\nabla\!\cdot\!u)^2 \;+\; (\omega + u_y - v_x)^2 \,\Bigr]
+$$
+
+**Gated first** (`scratch/fosls_wcon_gate.py`): `A` stays symmetric to **1e-16**
+and SPD at every weight; `w_con=None` is bit-identical to `w_con=1`; and only the
+continuity row scales (|L|ratio 1.000 / 1.000 / **5.000** / 1.000 at `w_con=5`).
+
+#### Conditioning wants `w_con = 1`
+
+| `w_con` | `c₁` | `c₂` | `c₂/c₁` | `√(c₂/c₁)` | CG its |
+|---|---|---|---|---|---|
+| 0.2 | 1.75e−05 | 1.000 | 5.71e+04 | 239 | 3204 |
+| 0.5 | 5.96e−05 | 1.000 | 1.68e+04 | 130 | 2165 |
+| **1.0** | **6.42e−05** | **1.000** | **1.56e+04** | **125** | **1737** |
+| 2 | 6.43e−05 | 4.00 | 6.22e+04 | 249 | 2601 |
+| 5 | 6.44e−05 | 25.0 | 3.88e+05 | 623 | 5859 |
+| 10 | 6.44e−05 | 100.0 | 1.55e+06 | 1246 | 11145 |
+| 50 | 6.44e−05 | 2499.6 | 3.88e+07 | 6229 | 43466 |
+
+**`w_con = 1` — what the code already does — is a genuine interior minimum.**
+Above 1, `c₂` grows exactly as `w_con²` while `c₁` saturates, so `c₂/c₁ ∝ w_con²`.
+Below 1, `c₂` stays pinned at 1 but `c₁` collapses and the ratio rises again.
+CG iteration counts confirm it independently — minimum 1737 at `w_con=1`, rising
+both ways.
+
+#### Divergence wants `w_con > 1`
+
+Driven Poiseuille (parabolic inlet, free outlet), fixed problem, only the
+weighting varying:
+
+| `w_con` | 0.2 | 0.5 | **1.0** | 2 | 5 | 10 | 50 |
+|---|---|---|---|---|---|---|---|
+| rel `div u` | 3.50e−08 | 1.57e−08 | **5.93e−09** | 4.07e−09 | 4.93e−11 | 8.55e−11 | 4.73e−13 |
+| err vs exact | 5.02e−07 | 1.98e−07 | **8.73e−08** | 8.00e−08 | 7.14e−10 | 1.75e−09 | 2.08e−10 |
+
+**Divergence falls monotonically as `w_con` rises**, and accuracy follows it —
+which is what L5 would predict, since `div u` is only ever *penalised*.
+
+**Caveat on the large numbers.** `cg_tol = 1e-10` and the steady test is `1e-11`,
+so the `w_con ≥ 5` rows sit at or below the solve floor, and they are
+non-monotonic (5 beats 10) — the signature of reading noise, not physics. Only
+the `0.2 → 2` range is safely above the floor. **Do not quote the 74,000×.**
+
+#### Verdict
+
+**`w_con` is a real knob with two competing optima**, unlike the ω rescaling F1b
+refuted. Conditioning is minimised at 1; divergence keeps improving above it.
+The trade at `w_con = 5` is roughly **120× less divergence for ~6× more total
+work** — worth it for accuracy-critical steady runs, not for the time-stepper.
+
+**Keep the default at 1.** Nothing here justifies changing it, and the case
+tested (Poiseuille) is one whose exact solution is divergence-free *and* exactly
+representable, so it flatters up-weighting. The regime L5 actually cares about —
+`minchan_001`'s 1.1e−01 relative divergence in a 3D turbulent channel — is
+untested and is where this should be measured next.
+
+**Also still untested:** a first-order-system change, the other lever F1b named.

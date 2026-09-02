@@ -24,7 +24,9 @@ def ls_coeffs(state):
     momentum residual is exactly `w_mom * N(u)` regardless of w_mass.  The
     continuity and vorticity rows carry weight 1, so the steady functional is
 
-        J = int[ w_mom^2 (N_1^2 + N_2^2) + (div u)^2 + (om + u_y - v_x)^2 ]
+        J = int[ w_mom^2 (N_1^2 + N_2^2) + w_con^2 (div u)^2 + (om + u_y - v_x)^2 ]
+
+    with w_con = 1 unless set; see ls_wcon().
 
     WHAT THE TWO PARAMETERS MEAN
       w_mom             NUMERICAL.  The least-squares weight of momentum against
@@ -87,6 +89,36 @@ def ls_coeffs(state):
     # to fac1.  The other grouping round-trips through a division and loses an ulp.
     s = float(w_m)/dtl
     return f1*s, float(w_f), s
+
+
+def ls_wcon(state):
+    """Least-squares weight on the CONTINUITY row.  1.0 when unset.
+
+    The steady functional becomes
+
+        J = int[ w_mom^2 (N_1^2 + N_2^2) + w_con^2 (div u)^2 + (om + u_y - v_x)^2 ]
+
+    WHY THIS IS A THIRD DEGREE OF FREEDOM, not a respelling of w_mom.  Dividing
+    J through by w_con^2 gives (w_mom/w_con, 1, 1/w_con) -- the VORTICITY row
+    moves too, so (w_mom, w_con) cannot be collapsed onto w_mom alone.
+
+    AND IT IS THE ONE LEVER F1b LEFT OPEN.  FOSLS_2D_PLAN sec F1b measured the
+    ellipticity constant c2/c1 to be INVARIANT under rescaling omega -- a change
+    of VARIABLES maps A q = lambda H q to (DAD) q~ = lambda (DHD) q~ and cannot
+    move the ratio.  It recorded that only a change to the ROWS, which alters the
+    answer, or to the first-order SYSTEM could.  w_con is a row change.
+
+    WHAT IT SHOULD BUY.  Lesson L5 of this project is that div u is only
+    PENALISED in a least-squares formulation, never enforced -- minchan_001 ran
+    for 14 h carrying relative divergence of 1.1e-01.  Raising w_con buys
+    divergence at the expense of the momentum and vorticity residuals, and (this
+    is the part to measure, not assume) at some cost in conditioning.
+
+    NUMPY BACKEND ONLY -- the numba kernels take (a_mass, a_flux) as explicit
+    arguments and would silently drop w_con.  apply_L/apply_LT raise instead.
+    """
+    w = getattr(state, 'w_con', None)
+    return 1.0 if w is None else float(w)
 
 
 def ls_pseudo(state):
@@ -182,7 +214,8 @@ def ls_pseudo_p(state):
 
 class SolverState:
     """Holds mesh, operator matrices, and cached linearisation data for the LSSEM solver."""
-    def __init__(self, mesh, D, nu, dt, fac1=1.0, w_mom=None, w_mass=None, dtau=None):
+    def __init__(self, mesh, D, nu, dt, fac1=1.0, w_mom=None, w_mass=None, dtau=None,
+                 w_con=None):
         self.mesh = mesh
         self.D = D
         self.nu = nu
@@ -195,6 +228,9 @@ class SolverState:
         # dt_eff = dt*w_mom/w_mass, so set w_mass = w_mom for time-accurate runs.
         self.w_mom = w_mom
         self.w_mass = w_mass
+        # Least-squares weight on the CONTINUITY row; see ls_wcon().  None => 1.0,
+        # bit-identical to the previous behaviour.
+        self.w_con = w_con
         # Pseudo-time step from Chan (1996); see ls_pseudo() for the contract.
         # None => the dtau -> inf limit, i.e. no pseudo-time term (the default,
         # and what the F90 baseline does).  dtau = 1 reproduces the 1996 F77 code.
@@ -355,7 +391,11 @@ def _apply_L_numpy(state, U, fu, fv):
     # kappa_p*p out of the RESIDUAL (solver._drop_pseudo); it is unconditional
     # here because apply_L is also the operator applied to the increment.
     a_p = ls_pseudo_p(state)
-    su2[...] = (a_p * p + u_x + v_y) * wq
+    # w_con scales the CONTINUITY row of the least-squares system.  1.0 unless
+    # set, so this is bit-identical by default.  apply_LT must pre-scale the
+    # matching component by the same factor or the operator stops being symmetric.
+    w_con = ls_wcon(state)
+    su2[...] = w_con * (a_p * p + u_x + v_y) * wq
     su3[...] = (om + u_y - v_x) * wq
     
     su = state.su_out
@@ -379,13 +419,21 @@ def _apply_LT_numpy(state, su, fu, fv):
     np.copyto(su4, su[..., 3])
 
     # Exact transpose of the row-weighted apply_L.  Row m of the new operator is
-    # R_new = S R_old with S = diag(a_flux, a_flux, 1, 1), so L_new^T = L_old^T . S:
-    # pre-scale the two momentum components and the rest of this routine is unchanged.
+    # R_new = S R_old with S = diag(a_flux, a_flux, w_con, 1), so
+    # L_new^T = L_old^T . S: pre-scale the matching components and the rest of
+    # this routine is unchanged.
     # inv_dt below is a_mass/a_flux, so inv_dt * a_flux = a_mass as required.
     a_mass, a_flux, _ = ls_coeffs(state)
     a_mass = a_mass + ls_pseudo(state)      # matches the Fortran's (dt+fac1)
     su1 *= a_flux
     su2 *= a_flux
+    # The continuity component.  su3_scaled aliases the CALLER's su[..., 2] and
+    # must not be mutated; su3 is our own copy (state.su2_c), so scale that and
+    # repoint.  su3 is otherwise unused in this routine.
+    _w_con = ls_wcon(state)
+    if _w_con != 1.0:
+        su3 *= _w_con
+        su3_scaled = su3
 
     dfu_dx, dfu_dy = state.dfu_dx, state.dfu_dy
     dfv_dx, dfv_dy = state.dfv_dx, state.dfv_dy
@@ -425,8 +473,8 @@ def _apply_LT_numpy(state, su, fu, fv):
     a_p = ls_pseudo_p(state)
     if a_p != 0.0:
         # transpose of the kappa_p*p entry added to the continuity row in apply_L.
-        # su3_scaled is su[...,2] (the continuity residual), unscaled -- correct,
-        # because the continuity row carries weight 1, not a_flux.
+        # su3_scaled carries w_con and NOT a_flux -- correct, because apply_L
+        # multiplies the whole continuity row, a_p*p included, by w_con.
         c2[...] += a_p * su3_scaled
     
     # c_4
@@ -474,6 +522,12 @@ def _check_ac_backend(state):
         raise NotImplementedError(
             "artificial compressibility (state.dtau_p) is implemented in the numpy "
             "backend only; the numba kernels would silently drop the term. "
+            "Call lssem2d.set_backend('numpy').")
+    if ls_wcon(state) != 1.0 and _IMPL_L is not _apply_L_numpy:
+        raise NotImplementedError(
+            "the continuity weight (state.w_con) is implemented in the numpy "
+            "backend only; the numba kernels take (a_mass, a_flux) as explicit "
+            "arguments and would silently drop it. "
             "Call lssem2d.set_backend('numpy').")
 
 

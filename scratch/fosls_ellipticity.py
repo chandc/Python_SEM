@@ -112,11 +112,12 @@ def assemble_h1(state):
                          shape=(ng*NV, ng*NV)).tocsr(), g
 
 
-def ellipticity(N, ex, ey, nu=1/100., dt=1.0, w_mom=None, w_mass=None, pin_p=True):
+def ellipticity(N, ex, ey, nu=1/100., dt=1.0, w_mom=None, w_mass=None, pin_p=True,
+                w_con=None):
     m = build_channel(2.0, 1.0, ex, ey, N, bcs=(1, 1, 1, 2))
     m.compute_global_indices()
     st = SolverState(m, diff_matrix(N), nu=nu, dt=dt, fac1=1.0,
-                     w_mom=w_mom, w_mass=w_mass)
+                     w_mom=w_mom, w_mass=w_mass, w_con=w_con)
     n = N + 1
     fu = np.zeros((m.nelem, n, n)); fv = np.zeros((m.nelem, n, n))
     st.update_linearisation(fu, fv)
