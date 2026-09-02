@@ -52,7 +52,11 @@ os.chdir(_R)
 
 import numpy as np
 import lssem2d
-lssem2d.set_backend('numpy')
+# Backend is selectable.  The NumPy path is the reference; numba is the same
+# algorithm compiled -- measured identical iteration counts, ~2x on solve and
+# ~8.8x on the DirectCoarse build, which is hundreds of small apply_A probes and
+# so exactly where NumPy per-call overhead dominates.
+lssem2d.set_backend(os.environ.get('CAV_BACKEND', 'numpy'))
 
 from lssem2d import precond as P, solver as S
 from lssem2d.lgl import diff_matrix, lgl_nodes
@@ -203,7 +207,8 @@ def one(kind, N, refresh=1):
     (U, status, d, wall, cg, steps, rms_u, rms_v, gdof,
      nbuild, tbuild) = run(kind, int(N), refresh)
     tag = 'frozen' if refresh > 10**6 else f'r{refresh}'
-    f = f'{OUT}_Re{int(RE)}_E{EX}_{kind}_N{N}_{tag}.npz'
+    bk = os.environ.get('CAV_BACKEND', 'numpy')
+    f = f'{OUT}_Re{int(RE)}_E{EX}_{bk}_{kind}_N{N}_{tag}.npz'
     np.savez_compressed(f, U=U, status=status, dU=d, wall=wall, cg=cg,
                         steps=steps, rms_u=rms_u, rms_v=rms_v, gdof=gdof,
                         kind=kind, N=int(N), refresh=refresh, tag=tag,

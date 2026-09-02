@@ -898,13 +898,90 @@ the AMG V-cycle setup becomes **cheaper than the factorisation** (46.1 s vs
 51.2 s) and AMG wins on wall time despite needing 15% more iterations. The trend
 is monotone, so beyond 8×8 AMG should widen its lead.
 
-**Practical rule:** use `coarse_solver='direct'` while the coarse problem is
-small (≲1000 DOF, i.e. below ~8×8 elements at `p_c = 2`), and switch to
-`'amg'` above it. The crossover here sits at ~1000 coarse DOF.
+**Practical rule (NumPy backend):** use `coarse_solver='direct'` while the
+coarse problem is small (≲1000 DOF, below ~8×8 elements at `p_c = 2`), and
+switch to `'amg'` above it.
+
+> **Superseded by §6.10 on the numba backend.** That crossover is an artefact of
+> NumPy's per-call overhead: `DirectCoarse`'s probing assembly compiles while
+> pyamg's setup does not, so under numba **direct wins at every size tested**,
+> including 8×8. The complexity argument still holds — direct factorisation
+> scales with the element count and must eventually lose — but the crossing lies
+> beyond 8×8 elements once the backend is compiled.
 
 **All three preconditioners agree on the answer** at every point in both sweeps
 (`rms_u` identical to 4–5 digits), so this is a cost comparison, not a
 correctness one.
+
+### 6.10 The same sweep on the **numba** backend — two earlier conclusions reversed
+
+Every measurement up to §6.9 ran on NumPy, because the benchmark scripts called
+`lssem2d.set_backend('numpy')` — a habit carried over from the FOSLS work, not a
+constraint. `PMG2` runs on numba unchanged: `Chebyshev4` calls `apply_A`, which
+dispatches through `_IMPL_L` like everything else. Repeating the whole §6.9 sweep
+with `CAV_BACKEND=numba`:
+
+| mesh | N | gDOF | jac its | lad its | amg its | numpy jac/lad/amg (s) | **numba jac/lad/amg (s)** | best |
+|---|---|---|---|---|---|---|---|---|
+| 2×2 | 12 | 2,500 | 527.3 | 37.7 | 36.6 | 21.6 / 39.0 / 41.4 | **9.0** / 12.9 / 14.6 | jac |
+| 4×4 | 8 | 4,356 | 602.8 | 32.4 | 33.0 | 36.1 / 41.1 / 44.3 | 12.6 / **12.0** / 14.2 | **lad** |
+| 4×4 | 12 | 9,604 | 883.5 | 28.8 | 29.0 | 60.2 / 44.7 / 47.7 | 29.3 / **17.3** / 19.1 | lad |
+| 4×4 | 16 | 16,900 | 1383.0 | 32.0 | 32.5 | 176.6 / 84.6 / 89.2 | 116.7 / **44.2** / 47.8 | lad |
+| 6×6 | 12 | 21,316 | 1442.9 | 27.7 | 30.0 | 228.9 / 113.9 / 120.2 | 153.5 / **56.4** / 68.3 | lad |
+| 4×4 | 20 | 26,244 | 1878.2 | 34.0 | 35.5 | 317.1 / 129.9 / 135.5 | 283.9 / **94.7** / 100.0 | lad |
+| 4×4 | 24 | 37,636 | 2422.7 | 34.1 | 34.4 | 470.1 / 189.3 / 197.6 | 499.3 / **168.4** / 176.5 | lad |
+| 8×8 | 12 | 37,636 | 2010.3 | 26.5 | 30.6 | 413.3 / 169.7 / 164.7 | 291.5 / **99.4** / 110.2 | lad |
+
+Numba speedup **median 1.81×, max 3.43×**, and `rms_u` agrees between backends to
+**5.6e−06 relative** — the same answer throughout.
+
+*(Jacobi's iteration counts move ~1% between backends — 602.8 vs 605.8 at N=8.
+The fused kernel accumulates in a different order than einsum+BLAS, and over ~900
+iterations the rounding diverges; `bench_numba_solve.py` documents this and
+asserts only `|Δits| ≤ 2`. The p-multigrid counts are identical, having an order
+of magnitude fewer accumulations.)*
+
+#### Reversal 1 — the crossover moved toward p-multigrid, not Jacobi
+
+§6.9 predicted a compiled matvec would move the crossover **in Jacobi's
+favour**, reasoning that p-multigrid's advantage is iteration *count*, so
+cheapening every iteration helps whoever does more of them. **That was wrong.**
+Under NumPy Jacobi won to 9,604 DOF; under numba it wins only the smallest case,
+and p-multigrid takes over from **4,356 DOF**.
+
+The speedup is not uniform, and that is the whole explanation:
+
+| | min | median | max |
+|---|---|---|---|
+| jac | 0.94× | **1.50×** | 2.86× |
+| lad | 1.12× | **1.97×** | 3.43× |
+| amg | 1.12× | 1.81× | 3.12× |
+
+`DirectCoarse`'s build is *hundreds of small `apply_A` probes* — precisely where
+NumPy per-call overhead dominates — and it accelerates **1.4–3.7×**. Jacobi has
+no build to accelerate.
+
+#### Reversal 2 — the AMG-vs-direct crossover was a NumPy artefact
+
+§6.9 found AMG overtaking direct at ~1000 coarse DOF (8×8: 164.7 s vs 169.7 s)
+and recommended `coarse_solver='amg'` above that. **Under numba the ordering
+reverses**: 99.4 s vs 110.2 s at 8×8, direct winning by 1.11×, and by 1.21× at
+6×6. **Direct now wins at every size tested.**
+
+The cause is asymmetric acceleration: `DirectCoarse`'s probing assembly is our
+own code and compiles; **pyamg's setup is pure Python/SciPy and does not**. So
+§6.9's rule was measuring an overhead artefact, not a complexity crossover. The
+complexity argument still stands — direct factorisation scales with the element
+count and must eventually lose — but **the crossing is beyond 8×8 elements on a
+compiled backend**, not at ~1000 coarse DOF.
+
+#### One regression worth recording
+
+**Jacobi at 4×4 N=24 is *slower* on numba** — 499.3 s vs 470.1 s, 0.94×, the only
+regression in 24 configurations. At N=24 the element blocks are 625 nodes and
+NumPy's BLAS-backed `einsum` beats the fused numba loop, where at low N the
+fusion wins. That is a genuine crossover in the **matvec itself**, and it means
+numba is not unconditionally the right backend at high order.
 
 ---
 
