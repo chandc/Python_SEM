@@ -2892,3 +2892,63 @@ where §7K correctly closed it.
 **Scope:** `k_z=0` only, 4×4 elements, manufactured RHS — an operator-conditioning
 study, not a flow. Where between `c=20` and `c=525` the crossover sits is not
 mapped.
+
+## 7R. The convective term: `lssem2d` and `lssem3d` implement DIFFERENT methods (2026-09-02)
+
+Prompted by "FOSLS's convective terms is implicit through Newton's iteration" —
+which is true of `lssem2d` and **not** of `lssem3d`. The §7Q consistency check
+verified the *operator* (A is exactly the Hessian of the stated functional,
+1.3e−16) but not the *method*, and the two differ:
+
+| | `lssem2d` | `lssem3d` |
+|---|---|---|
+| convection | **implicit, Newton** | **explicit, RKW3** |
+| momentum row | `fu·uₓ + fv·u_y + u·∂ₓfu + v·∂_yfu` | *absent* |
+| implicit operator | **Oseen** — linearised about the current state | **Stokes-like** — no base flow at all |
+| `Δt` | unconstrained (`dt = 1` in the cavity runs) | **CFL-limited**, 1.74e−03 at N=10 |
+
+The 2D row carries the full Newton linearisation: `fu·uₓ + fv·u_y` is the Picard
+part `(U·∇)δu`, and `u·∂ₓfu + v·∂_yfu` is the Newton part `(δu·∇)U`.
+`apply_L0_complex` takes no base-flow argument at all — which is why §7Q found
+the 3D implicit operator time-invariant.
+
+**`lssem3d` is consistent with its own stated design.** `3d_vvp_fourier_expansion.md`
+§5 and `3D_FORMULATION.md` both specify explicit convection, for a structural
+reason: *"a linearised-implicit treatment makes the coefficients z-dependent,
+which is a convolution in `k_z` and recouples every mode."* The scheme is IMEX —
+RKW3 on convection, Crank–Nicolson on the linear operator (Spalart, Moser &
+Rogers 1991). That is a deliberate, documented departure from FOSLS-with-Newton,
+not an oversight.
+
+**But the reason is vacuous at `k_z = 0`.** The convolution argument concerns
+*multi-mode* 3D. The cavity gate runs one mode, so there is nothing to recouple
+and Newton-implicit convection would be admissible — and would remove the CFL
+limit that forces ~115,000 steps to reach steady state. **The 3D code cannot
+currently do it; it is not that the method forbids it.**
+
+### 7R.1 A confound in §7Q, stated
+
+§7Q's 3D runs used `normal_op` with no base flow — the **Stokes** operator —
+while the 2D cavity results it was compared against
+(`PMG_ALGORITHM.md` §6.9/§6.10) are **Oseen** at Re=1000. So the 2D↔3D
+comparison carried that second difference alongside the formulation.
+
+**§7Q's conclusion is unaffected**: §7K and §7Q both use the Stokes operator and
+differ *only* in `c`, so the finding that the pinning is a regime effect rather
+than a formulation property rests on a clean comparison. What the confound
+weakens is the secondary claim that the 3D code at `k_z=0` "is" the 2D cavity —
+it is the same *problem* under a different *linearisation*.
+
+### 7R.2 Consequence for the Ghia gate
+
+The saved `cavity3d_kz0_rkw3.npz` reached **t = 2.0** in 1150 steps at
+`dt = 1.74e−03`, giving `rms_u = 0.1998` against the 2D code's **1.568e−02** on
+the same mesh. That is an unconverged transient, not a solver error: boundary
+values are exact, `max|u| = 1.0` with no overshoot, and the shear is still
+confined near the lid. Reaching the `t ≈ 150–200` the 2D code needs takes
+**~115,000 steps** — 100× the saved run — at ~27 steps/s, i.e. about 90 minutes.
+
+Keeping the explicit treatment, that run is now in progress
+(`CAV3D_NSTEP=200000`, `tmax=250`, numba). The alternative — a Newton-implicit
+steady driver at small `c`, preconditioned by the §7Q p-ladder — remains
+unbuilt and is the faster route if the gate is to be revisited often.

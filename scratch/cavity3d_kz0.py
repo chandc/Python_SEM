@@ -111,7 +111,11 @@ def rms_both(mesh, U, n):
     return ru, rv
 
 
-def run(cfl_target=0.8, tmax=25.0, kap_frac=1.0, nstep_cap=40000, tol=1e-9):
+def run(cfl_target=0.8, tmax=25.0, kap_frac=1.0, nstep_cap=None, tol=1e-9):
+    # nstep_cap: the default 40000 stops at t = 70 for a CFL-limited dt, well
+    # short of the t ~ 150-200 the 2D code needs to reach steady state.  Raise it
+    # from the environment rather than silently capping a long run.
+    nstep_cap = int(os.environ.get('CAV3D_NSTEP', nstep_cap or 40000))
     n = N+1
     mesh = build_channel(1.0, 1.0, EX, EX, N, bcs=(1, 1, 1, 2))
     D = diff_matrix(N)
