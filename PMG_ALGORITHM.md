@@ -1,8 +1,14 @@
-# The two-level p-multigrid preconditioner (`PMG2`)
+# The p-multigrid preconditioner (`PMG2`)
 
 Reference for `lssem2d/precond.py`. Covers the operator being preconditioned,
-every step of the V-cycle, both coarse-grid solvers, and the measurements taken
-so far.
+every step of the V-cycle, the multilevel recursion, both coarse-grid solvers,
+and the measurements taken so far.
+
+> **`PMG2` is no longer two-level.** The class name is historical. `pc` accepts
+> a **sequence of orders**, so `pc=(4,2)` gives `p → 4 → 2` and
+> `pc=(15,7,3,2)` gives a five-level hierarchy. §6.6 measures why that matters:
+> **only a halving ladder is p-robust** — fixed 2- and 3-level hierarchies
+> degrade almost as badly as Jacobi as the order rises.
 
 Companion documents: [FOSLS_2D_PLAN.md](./FOSLS_2D_PLAN.md) (why the near-null
 space matters), [OUTFLOW_BC_STUDY.md](./OUTFLOW_BC_STUDY.md) (why the soft
@@ -75,6 +81,9 @@ the other direction: the softest mode of the assembled FOSLS operator carries
 
 ## 2. The V-cycle
 
+Shown two-level for legibility. §2.1 gives the recursion that makes it
+multilevel; the per-level steps are identical at every level.
+
 ```mermaid
 flowchart TD
     R["residual r<br/>(fine, order p)"] --> S1
@@ -102,7 +111,42 @@ z   = z + self.smooth(res)               # 7. post-smooth
 Cost per application: **2 fine operator applies** (the two defects) + `2·deg`
 from the two smooths + the coarse solve.
 
-### Why `M⁻¹` must be a fixed linear operator
+### 2.1 The recursion — how depth is built
+
+Step 4 says *"solve `A_c e_c = r_c`"*. It does not say the coarse level must be
+solved cheaply, only that whatever solves it must be a **fixed linear operator**
+(§2.2). A V-cycle is one. So the hierarchy is built by making the coarse solver
+another `PMG2`:
+
+```
+pc = 2          p ─────────────────────────► 2          two levels
+pc = (4, 2)     p ──────► 4 ──────► 2                   three levels
+pc = (15,7,3,2) 30 ─► 15 ─► 7 ─► 3 ─► 2                 five levels  (N=30 ladder)
+                └────┴─────┴─────┴────┴─ DirectCoarse at the bottom only
+```
+
+This works because `PMG2.__call__(r)` **already has the coarse-solver
+signature** — residual in, correction out — so no separate multilevel driver is
+needed. Each level Chebyshev-smooths, restricts, recurses, prolongs, smooths
+again. Only the *bottom* level is ever assembled.
+
+$$
+M^{-1}_{(p)} \;=\; \mathcal{V}\bigl(p,\; M^{-1}_{(p_1)}\bigr), \qquad
+M^{-1}_{(p_k)} \;=\; \mathcal{V}\bigl(p_k,\; M^{-1}_{(p_{k+1})}\bigr), \qquad
+M^{-1}_{(p_{\text{last}})} \;=\; A_{p_{\text{last}}}^{-1}
+$$
+
+**Every level stays a fixed linear operator**, so CG's symmetry requirement holds
+all the way down — the argument in §2.2 applies unchanged at each level.
+
+**Why depth is not optional.** A single `p → 2` jump asks one coarse grid to
+represent everything the fine grid cannot resolve. Heys *et al.* (2005) identify
+this directly: `p/2` coarsening retains only ~25% of points where AMG retains
+~50%, which is why aggressive p-coarsening underperforms. §6.6 measures the
+consequence — over `N = 5…30`, iterations grow **7.90×** for a fixed 2-level
+hierarchy, **5.56×** for 3-level, and **1.41×** for the halving ladder.
+
+### 2.2 Why `M⁻¹` must be a fixed linear operator
 
 `PMG2` is used as a preconditioner inside CG, which requires `M⁻¹` to be a
 **fixed, symmetric, positive-definite linear operator**. Three design choices
@@ -190,6 +234,13 @@ recurrence would stop being valid. Symptoms are stagnation or erratic residuals
 rather than an honest error. If an inner Krylov solve is ever wanted, the outer
 solver must change to **flexible** CG or FGMRES.
 
+### 4.0 A nested `PMG2` — chosen automatically when `pc` is a sequence
+
+Not really a third option so much as the recursion of §2.1: when `pc` has more
+than one entry, the coarse solver is another V-cycle and the *last* entry gets
+whichever leaf solver `coarse_solver` names. This is the configuration §6.6
+finds p-robust.
+
 ### 4.1 `Chebyshev4` (default)
 
 Degree-10 4th-kind polynomial on `A_c`, Jacobi-preconditioned. Cheap, matrix
@@ -215,8 +266,18 @@ the Dong boundary term and the least-squares weights are all in the matrix, with
 no second implementation to drift out of sync. Measured asymmetry: **exactly
 0.00e+00**.
 
+**A singular coarse operator is handled, not an error.** With `pin_p=False` on a
+closed domain the pressure is defined only up to a constant, the coarse operator
+inherits that null mode, and `splu` fails with *"Factor is exactly singular"*.
+That is real, not a bug — a preconditioner does not need the null direction
+resolved. `DirectCoarse` shifts the diagonal by ~1e−12 of its scale and
+continues; measured, the shift is **exactly 0.0 with `pin_p=True`** and 8.9e−12
+without.
+
 Cost is `O(ndof_coarse)` applications of a *small* operator, paid once per
-linearisation. It scales with the **element count, not with `p`**:
+linearisation. It scales with the **element count, not with `p`** — which is why
+§6.6's setup time is flat (0.01 s at N=5, 0.04 s at N=30) across a 31× growth in
+fine-grid DOF:
 
 | mesh | `p_c = 2` coarse DOF | dense `A_c` |
 |---|---|---|
@@ -486,7 +547,38 @@ are the quantity that transfers.
 
 ---
 
-## 8. Conclusion on the direct coarse solve
+## 8. Conclusions
+
+Two separate findings, and the second is the larger one.
+
+### 8.1 Depth is what makes p-multigrid work at high order
+
+**A halving ladder with a direct coarse solve is p-independent to N = 30**
+(§6.6): 71 → 100 iterations across a 6× increase in order and 31× in DOF, i.e.
+**1.41×** growth. Fixed hierarchies are not — 2-level grows **7.90×** and
+3-level **5.56×**, against Jacobi's 9.2×. **Depth, not the coarse solver, is what
+separates a p-robust method from a constant-factor one.**
+
+This resolves the high-order problem [FOSLS_2D_PLAN.md](./FOSLS_2D_PLAN.md) §F2g
+opened. AMG degraded 2.16× over N=4…12 and *both* AmgX schemes stalled outright
+from N=6–8; this holds to N=30. The reason is structural rather than
+parametric: **p-multigrid never assembles the fine operator**, so the O(p^{2d})
+density that defeats AMG (§F2h(ii)) never arises. Only `p_c = 2` is assembled,
+and its cost scales with elements, not order — setup is flat at 0.01→0.04 s.
+
+**It also makes LOR unnecessary here**, which is stronger than the three earlier
+refutations in §F2/F2e/F2g: those established LOR was not *needed for
+convergence*; this exhibits a method that is p-robust without it.
+
+**Scope, and it is narrow.** One 2×2 mesh, Stokes (zero linearisation),
+manufactured RHS, lid-driven-cavity masking — an operator-conditioning study,
+correct for comparing preconditioners but not a flow computation.
+**h-independence at high p is untested**: §F2 tested `h` only for AMG at N=4, so
+the two axes have never been crossed. And only iteration counts were recorded,
+not solve wall times — the ladder does more work per iteration than a 2-level
+cycle, so the wall-clock ranking could differ.
+
+### 8.2 The direct coarse solve
 
 **It is the better choice on every axis measured, and the evidence is
 consistent across two problems and three independent measures.**
@@ -528,3 +620,7 @@ cases** once T4 confirms it under genuine backflow, and convert the assembly to
 element-local probing (as `scratch/fosls_assemble.py` does, `O(1)` in mesh size)
 before using it on large meshes. Keep `Chebyshev4` as the fallback where
 assembly cost would dominate.
+
+**And use a halving ladder, not a fixed depth, whenever `N > 8`** (§8.1). At
+N=8 the ladder and the 3-level hierarchy coincide; above it they diverge sharply
+— by N=30 the ladder needs 100 iterations against the 3-level's 300.
