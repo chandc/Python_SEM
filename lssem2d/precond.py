@@ -196,6 +196,7 @@ class DirectCoarse:
         # resolved, so shift the diagonal by a relative epsilon and carry on; the
         # shift is ~1e-12 of the diagonal scale and cannot affect a Krylov method
         # whose operator has that direction anyway.
+        self._dense = Ac
         self.shift = 0.0
         try:
             self.lu = spla.splu(sp.csc_matrix(Ac))
@@ -208,6 +209,55 @@ class DirectCoarse:
         rg = rc.reshape(-1, 4)[self.rep].reshape(-1)
         xg = np.zeros_like(rg)
         xg[self.free] = self.lu.solve(rg[self.free])
+        return xg.reshape(self.ngl, 4)[self.flat].reshape(rc.shape)
+
+
+class AMGCoarse(DirectCoarse):
+    """Coarse solve by ONE AMG V-cycle instead of a direct factorisation.
+
+    Same assembly as DirectCoarse -- probing apply_A, correct by construction --
+    but the factorisation is replaced by a single smoothed-aggregation V-cycle.
+    One V-cycle is a FIXED LINEAR OPERATOR, so it remains admissible as a CG
+    preconditioner (see PMG2's contract); an AMG *solve* to a tolerance would not
+    be, for the same reason an inner CG is not.
+
+    WHY BOTHER, when a direct solve is exact.  DirectCoarse costs O(ndof_coarse)
+    to assemble and factorise, and that scales with the ELEMENT count.  Under
+    h-refinement it stops being free -- which is exactly the regime p-multigrid
+    does nothing about, since it coarsens in p alone.  This is the standard
+    remedy: p-ladder down to p_c, then AMG on the low-order operator.  It is what
+    Pazner uses for his coarse solver R_0 (FOSLS_2D_PLAN sec F2h(ii)).
+
+    THE NEAR-NULL SPACE IS NOT OPTIONAL.  FOSLS_2D_PLAN sec F2 measured it: with
+    pyamg's default single all-ones vector the iteration count grows almost
+    exactly like Jacobi (2.28x vs 2.40x under h-refinement).  One constant PER
+    FIELD is what makes it h-independent.  The DOF layout here is node-major with
+    4 fields interleaved, so field v occupies indices where idx % 4 == v.
+    """
+
+    name = "amgcoarse"
+
+    def __init__(self, state, fu, fv, pin_p=False, **amg_kw):
+        import pyamg
+        import scipy.sparse as sp
+        super().__init__(state, fu, fv, pin_p)
+        Ac = self._dense                      # kept by DirectCoarse for reuse
+        nf = Ac.shape[0]
+        gd = np.nonzero(self.free)[0]
+        B = np.zeros((nf, 4))
+        for v in range(4):
+            B[gd % 4 == v, v] = 1.0           # one constant per FIELD
+        kw = dict(B=B, max_coarse=20, smooth='energy')
+        kw.update(amg_kw)
+        self.ml = pyamg.smoothed_aggregation_solver(sp.csr_matrix(Ac), **kw)
+        self.levels = len(self.ml.levels)
+        self.opcx = float(self.ml.operator_complexity())
+        self._M = self.ml.aspreconditioner()
+
+    def __call__(self, rc):
+        rg = rc.reshape(-1, 4)[self.rep].reshape(-1)
+        xg = np.zeros_like(rg)
+        xg[self.free] = self._M.matvec(rg[self.free])
         return xg.reshape(self.ngl, 4)[self.flat].reshape(rc.shape)
 
 
@@ -316,6 +366,9 @@ class PMG2:
                                self._map_pin(pin_p), pc=_rest, deg=deg,
                                optimised=optimised, coarse_deg=coarse_deg,
                                coarse_solver=coarse_solver)
+        elif str(coarse_solver).lower() in ('amg', 'amgcoarse'):
+            self.coarse = AMGCoarse(self.sc, self.fuc, self.fvc,
+                                    self._map_pin(pin_p))
         elif str(coarse_solver).lower() in ('direct', 'lu', 'exact'):
             self.coarse = DirectCoarse(self.sc, self.fuc, self.fvc,
                                        self._map_pin(pin_p))

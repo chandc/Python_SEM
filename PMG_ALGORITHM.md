@@ -291,6 +291,45 @@ place of the factorisation — which is what Pazner uses for his coarse solver
 `R₀`, and where [FOSLS_2D_PLAN.md](./FOSLS_2D_PLAN.md) §F2's near-null-space
 result would apply.
 
+### 4.3 `AMGCoarse` — one pyamg V-cycle, and its three required settings
+
+Same assembly as `DirectCoarse` (probing `apply_A`, correct by construction), but
+the factorisation is replaced by a single **smoothed-aggregation V-cycle**.
+
+**Why have it at all, when a direct solve is exact.** `DirectCoarse` costs
+`O(ndof_coarse)` to assemble and factorise, and that scales with the **element
+count**. Under `h`-refinement it stops being free — exactly the regime
+p-multigrid does nothing about, since it coarsens in `p` alone (§6.8). This is
+the standard remedy: p-ladder down to `p_c`, then AMG on the low-order operator.
+It is what Pazner uses for his coarse solver `R₀` ([FOSLS_2D_PLAN.md](./FOSLS_2D_PLAN.md) §F2h(ii)).
+
+```python
+pyamg.smoothed_aggregation_solver(csr_matrix(Ac), B=B, max_coarse=20,
+                                  smooth='energy')          # pyamg 5.3.0
+```
+
+**None of these three settings is a default, and each was established by
+measurement.** Deviating from any one of them degrades the method to roughly
+Jacobi or worse:
+
+| setting | why it is required | evidence |
+|---|---|---|
+| **`B` = 4 field constants** | pyamg's default is a *single* all-ones vector, which cannot represent a mode constant in one field and zero in the others. It coarsens a 4-field system as though it were scalar. | §F2: default `B` grows **2.28×** under h-refinement against Jacobi's 2.40× — i.e. barely better than no AMG. One constant per field gives **1.40×**, and with energy prolongation **1.21×**. |
+| **`smooth='energy'`** | Plain (unsmoothed) aggregation cannot handle high order. | §F2g: AmgX's plain aggregation **stalls from N=6** and classical from N=8 — 20000 iterations without reaching tolerance — while pyamg's energy-minimised SA converges at every order to N=12. |
+| **one V-cycle, via `aspreconditioner()`** | A single V-cycle is a **fixed linear operator**, so it stays admissible as a CG preconditioner. An AMG *solve to a tolerance* would not be — its polynomial depends on the right-hand side, exactly the objection to an inner CG (§2.2). | §2.2 |
+
+The DOF layout is node-major with 4 fields interleaved, so field `v` occupies
+indices where `idx % 4 == v` — that is how `B` is built.
+
+`max_coarse=20` and the whole call are deliberately **identical to §F2's
+configuration**, so the two studies are directly comparable.
+
+> **"AMG" here means this pyamg configuration, not AMG generically.** §F2f tested
+> **NVIDIA AmgX 2.5.0** on the GB10 — a different library with different
+> coarsening — and it went badly: *both* its aggregation and classical schemes
+> stalled outright above N=6–8 where pyamg kept converging. Results from one
+> should not be read as results for the other.
+
 ---
 
 ## 5. Test cases
