@@ -653,6 +653,29 @@ Jacobi's 5.26%, on a 58,564-DOF Re=1000 cavity with convection. At N=30 that is
 **86× fewer iterations and 3.00× less wall**, and **the wall speedup keeps
 growing**: 0.88× → 2.10× → 2.77× → 3.00×.
 
+#### How the counts scale: `its ∝ N^a`
+
+| | exponent `a` | R² | `its/N` |
+|---|---|---|---|
+| Jacobi — Ghia Re=1000 | **1.26** | 0.9990 | 75.7 → 106.2 |
+| Jacobi — Stokes (§6.6) | **1.21** | 0.9974 | 95.0 → 145.5 |
+| ladder — Ghia | **0.09** | 0.61 | — |
+| ladder — Stokes | **0.17** | 0.82 | — |
+
+**Jacobi is ~N^1.25 — mildly superlinear, not linear.** "Linear in N" is a fair
+rule of thumb but under-predicts: over N = 8…30 it gives 3.75× where the measured
+growth is 5.26×, a 40% underestimate. The fit is tight (R² = 0.999). The two
+datasets agree to within 0.05 in the exponent despite being different physics on
+different meshes (Stokes/4 elements vs Re=1000/16), which makes the
+characterisation robust. A naive SEM argument would give `√cond ~ N^1.5`; the
+measurement sits below that.
+
+**For the ladder the exponent is ~0.1, and the low R² is itself the evidence** —
+a power law barely fits because the data is constant with scatter. `its/N` *falls*
+3–4× across the range, which is what a constant over a growing N does.
+
+**The clean statement: Jacobi grows like N^1.25; the ladder does not grow.**
+
 #### Accuracy: both profiles, and a floor
 
 RMS against Ghia Tables I and II, **identical across all four configurations at
