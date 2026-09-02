@@ -2958,7 +2958,44 @@ values are exact, `max|u| = 1.0` with no overshoot, and the shear is still
 confined near the lid. Reaching the `t ≈ 150–200` the 2D code needs takes
 **~115,000 steps** — 100× the saved run — at ~27 steps/s, i.e. about 90 minutes.
 
-Keeping the explicit treatment, that run is now in progress
-(`CAV3D_NSTEP=200000`, `tmax=250`, numba). The alternative — a Newton-implicit
-steady driver at small `c`, preconditioned by the §7Q p-ladder — remains
-unbuilt and is the faster route if the gate is to be revisited often.
+### 7R.3 M2 GATE PASSED (2026-09-02)
+
+The march completed keeping the explicit treatment: **143,714 steps to t = 250**
+at `dt = 1.74e−03`, 95 min on one Mac core, numba, `c = 2486/2759/3449` per RKW3
+stage.
+
+| | 3D `k_z=0` | 2D, same mesh | |
+|---|---|---|---|
+| RMS u | **7.1198e−03** | 1.568e−02 | **2.20× better** |
+| RMS v | **9.0990e−03** | 2.079e−02 | **2.28× better** |
+
+**The gate is passed, not merely met.** The saved run's `rms_u = 0.1998` was
+purely an unconverged transient at t = 2.0 — a 100× shortfall — exactly as
+diagnosed in §7R.2. Nothing was wrong with the solver.
+
+Vortex structure (`scratch/plot_cavity3d_kz0.py`, figure
+`scratch/cavity3d_kz0_profiles.png`) — primary plus **both** bottom corner
+vortices:
+
+| vortex | ours | Ghia (1982) | offset |
+|---|---|---|---|
+| primary | (0.5333, 0.5639) | (0.5313, 0.5625) | 0.0024 |
+| BL1 | (0.0861, 0.0750) | (0.0859, 0.0781) | 0.0031 |
+| BR1 | (0.8667, 0.1139) | (0.8594, 0.1094) | 0.0086 |
+
+`ψ_min = −0.114305` against Ghia's `−0.117929`, **3.1% low** — against the 2D
+N=30 study's 0.13%, which is the resolution difference: N=10 on 6×6 (61×61)
+here versus N=30 on 4×4 (121×121) there. Not a discrepancy between the codes.
+
+**Jacobi behaved exactly as §7Q predicts.** `cg/step` held flat at **23–26 across
+all 143,714 steps** and four orders of magnitude of `|dU|`, in the mass-dominated
+regime where §7Q measured p-multigrid at 0.35× wall. The error split also
+inverts relative to the 2D N=30 study — interior 7.9e−03 vs near-wall 4.6e−03,
+where N=30 gave 1.3e−03 vs 5.5e−03 — because at N=10 interior discretisation
+error dominates, so this run is **not** in the regime where the Botella–Peyret
+question (`PMG_ALGORITHM.md` §6.8) arises.
+
+The alternative — a Newton-implicit steady driver at small `c`, preconditioned by
+the §7Q p-ladder — remains unbuilt and is the faster route if the gate is to be
+revisited often: it would replace 143,714 CFL-limited steps with a few hundred
+linear solves.
