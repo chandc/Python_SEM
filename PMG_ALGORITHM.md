@@ -591,16 +591,88 @@ iterations than Jacobi** and 3.3× fewer than 2-level.
 | **speedup** | **0.49×** | **0.85×** | 1.17× | 1.33× | **2.01×** |
 
 **43× fewer iterations buys only 2.01× wall time**, and the ladder *loses* below
-N ≈ 10. The cause is the per-step rebuild: `DirectCoarse` re-assembles and
-re-factorises at every Newton step — ~200 factorisations per run — which §6.6's
-single solve never paid. The gap is widening with N (0.49 → 2.01×), so the
-crossover is real and the ladder is the right choice at high order, but **the
-iteration ratio badly overstates the practical gain.**
+N ≈ 10. The gap widens with N (0.49 → 2.01×), so the crossover is real and the
+ladder is right at high order, but **the iteration ratio badly overstates the
+practical gain.**
+
+> **Correction (§6.8).** This section originally attributed the modest wall gain
+> to the per-step rebuild — *"~200 factorisations per run"*. **That diagnosis was
+> wrong.** §6.8 measures the build cost directly at **24% / 14% / 10% / 8.4%** of
+> wall for N = 8/16/24/30 — a *falling* share, because `DirectCoarse` scales with
+> the element count, not with `p`. The real cost is that each ladder iteration is
+> intrinsically expensive: several levels, each with Chebyshev applies.
 
 **This is the strongest evidence in this document**, because unlike T1–T3 and
 §6.6 it is a benchmarked flow with published reference data, an independent
 prior result to check against, and a correctness check that all four
 preconditioners agree.
+
+### 6.8 Freezing the factorisation, and p to 30
+
+§6.7 blamed the per-step rebuild for the modest wall-clock gain, so the obvious
+remedy is to stop rebuilding. `refresh` controls it: `1` rebuilds every Newton
+step, `k` every `k` steps, and *frozen* builds once. A frozen preconditioner is
+built on a **snapshot** `SolverState`, not the live one — `apply_A` takes `fu`/`fv`
+explicitly but reads `dfu_dx` from the *state*, so holding one while the other
+keeps being re-linearised would give an operator frozen in half and live in the
+other. CG only needs `M⁻¹` fixed *within* a solve, so refreshing between solves
+is legitimate either way.
+
+Ghia Re=1000, 4×4 elements (16), N = 8…30. CG/step — wall:
+
+| N | gDOF | Jacobi | **ladder `r1`** | `r25` | **frozen** |
+|---|---|---|---|---|---|
+| 8 | 4356 | 605.8 — 30.3 s | 32.4 — 34.6 s | 37.7 — **30.8 s** | 51.1 — 40.7 s |
+| 16 | 16900 | 1383.2 — 146.0 s | **31.9 — 69.4 s** | 40.2 — 75.7 s | 54.5 — 105.0 s |
+| 24 | 37636 | 2422.9 — 442.5 s | **34.1 — 159.9 s** | 45.9 — 180.9 s | 62.0 — 234.6 s |
+| 30 | 58564 | 3186.1 — 735.6 s | **37.1 — 245.0 s** | 49.7 — 267.4 s | 67.3 — 327.8 s |
+| **growth 8→30** | | **5.26×** | **1.14×** | | |
+
+#### Freezing is a consistent loss
+
+**Rebuilding every step wins at every order except N=8.** Freezing raises
+iterations **+58% / +71% / +82% / +81%**, which costs far more than the
+factorisations save. Frozen is **1.18× to 1.51× slower** than `r1`.
+
+**And it refutes §6.7's diagnosis.** The build cost is:
+
+| N | 8 | 16 | 24 | 30 |
+|---|---|---|---|---|
+| build | 8.2 s | 9.8 s | 16.3 s | 20.5 s |
+| **share of wall** | **24%** | **14%** | **10%** | **8.4%** |
+
+**The share falls with order**, because `DirectCoarse` scales with the *element*
+count (fixed at 16), not with `p`, while the solve grows with `p`. So the rebuild
+was never dominant, and freezing helps least exactly where the ladder matters
+most. The real cost is the intrinsic expense of a multilevel iteration.
+
+#### The ladder is p-independent to N=30 on a real flow
+
+**CG/step 32.4 → 31.9 → 34.1 → 37.1 across N = 8…30 — 1.14× growth** against
+Jacobi's 5.26%, on a 58,564-DOF Re=1000 cavity with convection. At N=30 that is
+**86× fewer iterations and 3.00× less wall**, and **the wall speedup keeps
+growing**: 0.88× → 2.10× → 2.77× → 3.00×.
+
+#### Accuracy: both profiles, and a floor
+
+RMS against Ghia Tables I and II, **identical across all four configurations at
+each N** (4–5 digits) — freezing changes the iteration count, not the answer:
+
+| N | 8 | 16 | 24 | 30 |
+|---|---|---|---|---|
+| `rms_u` (x=0.5) | 4.5740e−02 | 7.5928e−03 | 3.3045e−03 | **3.2096e−03** |
+| `rms_v` (y=0.5) | 6.6528e−02 | 7.5242e−03 | 5.0727e−03 | **6.6584e−03** |
+
+**Convergence stops after N=24.** `rms_u` moves only 3.30e−03 → 3.21e−03 and
+`rms_v` gets *worse*, 5.07e−03 → 6.66e−03. That is an accuracy **floor**, not
+p-convergence, and it is **not the solver** — all four configurations agree to
+five digits. Candidates: the 16-element mesh, the `dt=1` steady weighting, or the
+`1e-8` steady tolerance. **These should not be quoted as benchmark agreement
+until that is run down.**
+
+*(Ghia Table I was verified against the repo's stored `cavity_re1000_data.npz`
+— max difference 5e−05, its 4-dp rounding. Table II is transcribed from the same
+source and has no independent check here.)*
 
 ---
 
@@ -633,11 +705,14 @@ step: the ladder grows **1.40×** over N=6…16 against Jacobi's 4.70×, essenti
 the Stokes result. All four preconditioners converge to the same answer (RMS
 identical to 4–5 digits), and the RMS matches an independent prior run.
 
-**But the wall-clock gain is far smaller than the iteration gain.** At N=16, 43×
-fewer iterations buys **2.01×** wall time, and the ladder *loses* below N ≈ 10 —
-the per-step rebuild of `DirectCoarse` costs ~200 factorisations per run. Use a
-ladder above N ≈ 10; below it, Jacobi is cheaper despite needing 20× the
-iterations.
+**The wall gain is smaller than the iteration gain, but it grows.** §6.8 to
+N=30: **86× fewer iterations, 3.00× less wall**, with the speedup rising 0.88× →
+2.10× → 2.77× → 3.00×. Use a ladder above N ≈ 10; below it Jacobi is cheaper
+despite needing 20× the iterations.
+
+**Freezing the coarse factorisation does not help** (§6.8) — it is 1.18–1.51×
+*slower*, because it costs +58–82% iterations to save a build that is only
+8–24% of wall and *falling* with `p`.
 
 **Still untested: the h × p cross.** §6.6 is one 2×2 mesh and §6.7 one 4×4;
 §F2 tested `h` only for AMG at N=4. Whether flat-in-p survives mesh refinement is
