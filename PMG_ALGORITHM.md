@@ -545,6 +545,63 @@ the right thing for a preconditioner study, but it is not a flow computation.
 and solve wall times were not recorded — only iteration counts, which per §F2f
 are the quantity that transfers.
 
+### 6.7 Ghia Re=1000 cavity — p-independence survives real convection
+
+§6.6 is an operator study: Stokes, zero linearisation, manufactured RHS. This is
+the real thing. **Ghia, Ghia & Shin (1982) lid-driven cavity, Re = 1000**, 1×1,
+moving lid, 4×4 elements, `dt=1`, `pin_p=True`, steady tol 1e−8 — with genuine
+nonlinear convection, so `fu`/`fv` change every Newton step and **the
+preconditioner is rebuilt every step**. That per-step rebuild is a cost §6.6
+never paid. `scratch/pmg_ghia_cavity.py`.
+
+| N | gDOF | Jacobi | 2-lvl | 3-lvl | **ladder** | RMS vs Ghia |
+|---|---|---|---|---|---|---|
+| 6 | 2500 | 294.2 | 28.3 | 19.5 | **22.8** | 2.4087e−01 |
+| 8 | 4356 | 605.8 | 53.9 | 32.4 | **32.4** | 4.5740e−02 |
+| 10 | 6724 | 733.2 | 60.5 | 35.7 | **31.1** | 3.0528e−02 |
+| 12 | 9604 | 893.6 | 70.4 | 39.2 | **28.8** | 2.0159e−02 |
+| 16 | 16900 | 1383.2 | 105.8 | 57.3 | **32.0** | 7.5927e−03 |
+| **growth 6→16** | | **4.70×** | **3.74×** | **2.94×** | **1.40×** | |
+
+*(CG iterations per Newton step.)*
+
+**The §6.6 ordering holds under convection.** The ladder is flat — 22.8 → 32.0,
+**1.40×**, essentially the 1.41× measured for Stokes — while Jacobi grows 4.70×
+and the fixed hierarchies 3.74× / 2.94×. At N=16 the ladder needs **43× fewer
+iterations than Jacobi** and 3.3× fewer than 2-level.
+
+**Three correctness checks, all passed.**
+
+1. **RMS is identical across all four preconditioners** at every N (to 4–5
+   digits). They converge to the *same* answer — the preconditioner changes cost,
+   not physics. This is the check that matters: a preconditioner which moves the
+   converged state is a different solver, not a faster one.
+2. **RMS matches an independent prior run** — 4.5740e−02 here against the stored
+   4.5708e−02 at 4×4/N=8 in `cavity_ghia_res.npz`.
+3. **`lad` ≡ `p3` at N=8** (32.4 both), since `ladder(8) = (4,2)`. And
+   steps-to-steady barely move across preconditioners (172/172/165/171 at N=6),
+   so outer Newton convergence is unaffected.
+
+#### Wall time: the crossover is at N ≈ 10
+
+| N | 6 | 8 | 10 | 12 | 16 |
+|---|---|---|---|---|---|
+| Jacobi | 9.5 s | 29.9 s | 39.8 s | 50.1 s | 135.1 s |
+| **ladder** | 19.4 s | 35.1 s | 34.0 s | 37.6 s | **67.3 s** |
+| **speedup** | **0.49×** | **0.85×** | 1.17× | 1.33× | **2.01×** |
+
+**43× fewer iterations buys only 2.01× wall time**, and the ladder *loses* below
+N ≈ 10. The cause is the per-step rebuild: `DirectCoarse` re-assembles and
+re-factorises at every Newton step — ~200 factorisations per run — which §6.6's
+single solve never paid. The gap is widening with N (0.49 → 2.01×), so the
+crossover is real and the ladder is the right choice at high order, but **the
+iteration ratio badly overstates the practical gain.**
+
+**This is the strongest evidence in this document**, because unlike T1–T3 and
+§6.6 it is a benchmarked flow with published reference data, an independent
+prior result to check against, and a correctness check that all four
+preconditioners agree.
+
 ---
 
 ## 8. Conclusions
@@ -570,13 +627,21 @@ and its cost scales with elements, not order — setup is flat at 0.01→0.04 s.
 refutations in §F2/F2e/F2g: those established LOR was not *needed for
 convergence*; this exhibits a method that is p-robust without it.
 
-**Scope, and it is narrow.** One 2×2 mesh, Stokes (zero linearisation),
-manufactured RHS, lid-driven-cavity masking — an operator-conditioning study,
-correct for comparing preconditioners but not a flow computation.
-**h-independence at high p is untested**: §F2 tested `h` only for AMG at N=4, so
-the two axes have never been crossed. And only iteration counts were recorded,
-not solve wall times — the ladder does more work per iteration than a 2-level
-cycle, so the wall-clock ranking could differ.
+**Confirmed on a real flow.** §6.7 repeats this on the **Ghia Re=1000 cavity**
+with genuine nonlinear convection and the preconditioner rebuilt every Newton
+step: the ladder grows **1.40×** over N=6…16 against Jacobi's 4.70×, essentially
+the Stokes result. All four preconditioners converge to the same answer (RMS
+identical to 4–5 digits), and the RMS matches an independent prior run.
+
+**But the wall-clock gain is far smaller than the iteration gain.** At N=16, 43×
+fewer iterations buys **2.01×** wall time, and the ladder *loses* below N ≈ 10 —
+the per-step rebuild of `DirectCoarse` costs ~200 factorisations per run. Use a
+ladder above N ≈ 10; below it, Jacobi is cheaper despite needing 20× the
+iterations.
+
+**Still untested: the h × p cross.** §6.6 is one 2×2 mesh and §6.7 one 4×4;
+§F2 tested `h` only for AMG at N=4. Whether flat-in-p survives mesh refinement is
+the obvious next measurement.
 
 ### 8.2 The direct coarse solve
 
