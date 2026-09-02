@@ -966,3 +966,53 @@ representable, so it flatters up-weighting. The regime L5 actually cares about �
 untested and is where this should be measured next.
 
 **Also still untested:** a first-order-system change, the other lever F1b named.
+
+### F5b — `w_con` against a 3-level p-multigrid: it makes the preconditioner *worse*
+
+F5 measured `w_con` against Jacobi. The open question was whether a real
+preconditioner absorbs the `w_con²` conditioning penalty — if so, up-weighting
+continuity would be cheap and the divergence gain nearly free.
+
+Hierarchy **N → 4 → 2 with a direct solve at the coarsest**, i.e. what
+`solver_pmg2.f90` runs. `PMG2` now nests (`pc=(4,2)`), which works because
+`__call__(r)` already has the coarse-solver signature; every level stays a fixed
+linear operator, so CG's symmetry requirement holds all the way down.
+N=8, 4×4 elements, steady, `pin_p=True`, tol 1e−8.
+
+| `w_con` | Jacobi | pmg 2-level | **pmg 3-level** | 3-level advantage |
+|---|---|---|---|---|
+| 0.2 | 2791 | 136 | 78 | 35.8× |
+| 0.5 | 2068 | 127 | 68 | 30.4× |
+| **1.0** | 1937 | 126 | **68** | **28.5×** |
+| 2 | 3286 | 369 | 154 | 21.3× |
+| 5 | 8063 | 1882 | 819 | 9.8× |
+| 10 | 15650 | 6383 | 3046 | 5.1× |
+| **growth 1→10** | **8.1×** | **50.7×** | **44.8×** | |
+
+**The hypothesis is refuted, and backwards.** The multigrid rows grow *faster*
+than Jacobi — 44.8× and 50.7× against 8.1× — so p-multigrid does not absorb the
+penalty, it is hurt more by it. **The preconditioner's advantage collapses from
+28.5× to 5.1×.** Raising `w_con` turns the formulation into a stiff penalty
+problem, and standard multigrid is known to degrade on those: the coarse space
+cannot represent a nearly-enforced constraint.
+
+**So F5's trade gets worse, not better, once a real preconditioner is used.**
+This strengthens the F5 verdict rather than softening it: **keep `w_con = 1`.**
+
+#### The positive result in the same run
+
+**3-level + direct coarse reaches 68 iterations at `w_con = 1` — 28.5× fewer
+than Jacobi, and 1.85× fewer than the 2-level version** (126). Depth pays, and
+the margin persists across the whole sweep.
+
+More striking: **68 is about half the `√(c₂/c₁) ≈ 125` ceiling**. That is not a
+contradiction — the bound governs CG preconditioned by `H = block-diag(K+M)`, and
+a p-multigrid V-cycle is simply a better approximation to `A` than `H` is. But it
+does mean the F1 estimate is a bound on *that* preconditioner, not a floor for
+every preconditioner, which is worth recording since F2 treated 113–138 as
+"achieving the ceiling".
+
+**Caveat:** the `c₂/c₁` column in the raw output is computed at N=6, 3×3 while
+the iteration counts are N=8, 4×4. F1 and F2e established the constant is
+h-saturating and roughly p-stable, so it transfers as an indication — but the two
+columns are not the same discretisation and should not be read as a matched pair.

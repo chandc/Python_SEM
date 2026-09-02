@@ -188,7 +188,20 @@ class DirectCoarse:
             cols[:, k] = out.reshape(-1, 4)[self.rep].reshape(-1)[self.free]
 
         self.asym = float(np.abs(cols - cols.T).max() / max(np.abs(cols).max(), 1e-300))
-        self.lu = spla.splu(sp.csc_matrix(0.5*(cols + cols.T)))
+        Ac = 0.5*(cols + cols.T)
+        # The coarse operator inherits any null space the FINE one has -- with
+        # pin_p=False on a closed domain the pressure is defined only up to a
+        # constant, and splu then fails with "Factor is exactly singular".  That
+        # is real, not a bug.  A preconditioner does not need the null direction
+        # resolved, so shift the diagonal by a relative epsilon and carry on; the
+        # shift is ~1e-12 of the diagonal scale and cannot affect a Krylov method
+        # whose operator has that direction anyway.
+        self.shift = 0.0
+        try:
+            self.lu = spla.splu(sp.csc_matrix(Ac))
+        except RuntimeError:
+            self.shift = 1e-12*float(np.abs(np.diag(Ac)).max())
+            self.lu = spla.splu(sp.csc_matrix(Ac + self.shift*np.eye(Ac.shape[0])))
         self.ndof = gd_free.size
 
     def __call__(self, rc):
@@ -201,7 +214,7 @@ class DirectCoarse:
 class PMG2:
     """Two-level p-multigrid V-cycle used as a CG preconditioner.
 
-    fine order p, coarse order pc:
+    fine order p, coarse order pc (or a SEQUENCE of orders for >2 levels):
       pre-smooth (Chebyshev)  ->  restrict residual  ->  coarse solve (CG)
       ->  prolong correction  ->  post-smooth (Chebyshev)
 
@@ -214,6 +227,14 @@ class PMG2:
 
     def __init__(self, state, fu, fv, M_inv, pin_p=False, pc=2, deg=6,
                  optimised=True, coarse_deg=10, coarse_solver='chebyshev'):
+        # pc may be a SEQUENCE to build a deeper hierarchy: pc=(4, 2) gives
+        # p -> 4 -> 2, i.e. three levels, which is what solver_pmg2.f90 runs
+        # (p = 10 -> 4 -> 2).  The recursion works because __call__(r) already
+        # has exactly the coarse-solver signature -- residual in, correction out
+        # -- so a PMG2 built on the coarse state IS a valid coarse solver.
+        _rest = ()
+        if isinstance(pc, (tuple, list)):
+            pc, _rest = int(pc[0]), tuple(pc[1:])
         self.smooth = Chebyshev4(state, fu, fv, M_inv, pin_p, deg=deg,
                                  optimised=optimised)
         self.state, self.fu, self.fv, self.pin_p = state, fu, fv, pin_p
@@ -287,7 +308,15 @@ class PMG2:
         #   'direct'               assemble + factorise -- actually inverts it,
         #                          including the soft modes a polynomial cannot
         #                          reach.  See DirectCoarse.
-        if str(coarse_solver).lower() in ('direct', 'lu', 'exact'):
+        if _rest:
+            # Deeper hierarchy: the coarse level is itself a V-cycle.  It is a
+            # fixed linear operator as long as its own coarse solver is, so the
+            # CG symmetry requirement is preserved all the way down.
+            self.coarse = PMG2(self.sc, self.fuc, self.fvc, self.Mic,
+                               self._map_pin(pin_p), pc=_rest, deg=deg,
+                               optimised=optimised, coarse_deg=coarse_deg,
+                               coarse_solver=coarse_solver)
+        elif str(coarse_solver).lower() in ('direct', 'lu', 'exact'):
             self.coarse = DirectCoarse(self.sc, self.fuc, self.fvc,
                                        self._map_pin(pin_p))
         else:
