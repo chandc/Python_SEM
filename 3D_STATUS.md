@@ -2841,3 +2841,54 @@ dU, iters, resid = PAR.pcg(b, D, mesh.facx, mesh.facy, kz, NU, c,
 `workers=1` is a bitwise passthrough to the serial version, so it can be left on
 in a reference run. Call `PAR.shutdown()` to release the thread pool. **It does
 nothing for a single-mode (`k_z` = 0) run** — see §3.4.
+
+## 7Q. §7K's pinning is a REGIME effect, not a property of the formulation (2026-09-02)
+
+§7K closed the preconditioner chapter on a measured result: PMG's iteration ratio
+**pinned at 7.3–7.4×**, growing in lockstep with Jacobi, at 0.28–0.48× wall.
+§7K.2 diagnosed it mechanistically — the softest modes are **rough** (pressure
+roughness ~1300, ω 2300–9000), inverting multigrid's slow=smooth premise — and
+concluded *"no polynomial-coarsening multigrid can be N-independent here, **at
+any implementation quality**."*
+
+Meanwhile `PMG_ALGORITHM.md` §6.9 measured the 2D cavity: a halving p-ladder is
+**flat, 1.05×** over N=8…24. Those two differ in *two* variables at once — the
+problem (channel vs cavity) and the formulation (4 fields/4 rows vs 14 real
+fields/8 rows with row weights). **Running the 3D code on the same cavity at
+`k_z=0` changes only the formulation**, so it separates them.
+
+`scratch/pmg3d_cavity_kz0.py`, Ghia Re=1000, 4×4 elements, halving ladder,
+`DirectCoarse`, numba, manufactured RHS:
+
+| `c` | regime | Jacobi growth | **PMG growth** | ratio N=6→20 | wall vs Jacobi |
+|---|---|---|---|---|---|
+| **1** | steady | 2.84× | **1.19×** | 14.6× → **35.0×** | 0.88× → **2.24×** |
+| 20 | — | 5.10× | 3.47× | 6.8× → 9.9× | 0.40× → 0.56× |
+| **525** | production | 6.75× | **8.05×** | 7.3× → 6.1× | 0.35× (loss) |
+
+**At `c=1` p-multigrid IS N-independent in this formulation** — 1.19× growth,
+essentially the 2D cavity's 1.05× — the ratio *widens* to 35×, and it wins on
+wall time from N=8 (2.24× at N=16). At `c=525` it reproduces §7K exactly.
+
+**So the pinning is the mass-dominated regime, not the operator's field count,
+row structure or row weights.** §7K measured at production `c` and its closure is
+correct *for the time-stepper*. §7K.2's "at any implementation quality" is too
+broad as written: it holds at production `c` and fails at `c=1`. The rough-mode
+diagnosis is most likely a property of the **mass-dominated** operator rather
+than of VVP-FOSLS as such — untested, and the obvious follow-up is to re-measure
+mode roughness at `c=1`.
+
+**This is F1's scoping, independently reproduced in 3D.**
+[FOSLS_2D_PLAN.md](./FOSLS_2D_PLAN.md) §F1 concluded: *"At production Δt the mass
+term dominates… so AMG has little to offer the TIME-STEPPER. Its payoff is
+confined to the STEADY solver."* That was measured in 2D on the ellipticity
+constant; §7Q shows the same boundary governs p-multigrid in 3D.
+
+**Consequence.** The 2D p-multigrid work — halving ladder, `DirectCoarse`,
+`AMGCoarse`, §4.3's near-null-space settings — **does transfer to 3D, but only to
+a steady solver.** It has nothing to offer the channel time-stepper, which is
+where §7K correctly closed it.
+
+**Scope:** `k_z=0` only, 4×4 elements, manufactured RHS — an operator-conditioning
+study, not a flow. Where between `c=20` and `c=525` the crossover sits is not
+mapped.
