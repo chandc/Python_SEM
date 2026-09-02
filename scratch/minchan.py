@@ -70,6 +70,7 @@ from lssem3d import (backend, operator as OP, solver3d as S3, bc as BC,
                      fourier as FR, timestep as T, convect as CV, deriv as DV,
                      device as DEV)
 import channel3d as C
+from minchan_stats import PlaneStats
 
 RE_TAU = 180.0
 DELTA = 1.0                        # half-height; channel is y in [0, 2]
@@ -501,6 +502,14 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
            f'dt={dt:g}  backend={name}  Lx+={wu["Lx_plus"]:.0f} Lz+={wu["Lz_plus"]:.0f}')
     print(hdr, flush=True); log.write(hdr + '\n'); log.flush()
 
+    # PROFILE STATISTICS.  The scalar log alone cannot demonstrate DNS -- the
+    # deliverable is U+(y+) and the u/v/w rms and <uv> profiles against KMM.
+    # Accumulated on the same cadence as the diagnostics and checkpointed with
+    # the state, so a restart continues the average instead of resetting it.
+    stats = PlaneStats(s, nz)
+    if resume:
+        stats.load(z)
+
     hist, t0 = [], time.perf_counter()
     for i in range(step0, nstep):
         U, Nprev, it = advance(s_run, U, Nprev, dt, Minv)
@@ -510,6 +519,7 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
         if (i + 1) % 10 == 0 or i == step0:
             Uh = DEV.to_host(U)
             ut, ub, rw_ = u_tau(s, Uh), bulk(s, Uh), rms_w(s, Uh)
+            stats.accumulate(Uh, t=(i + 1)*dt, utau=ut)
             cf = cfl(s, Uh, dt)
             ke, eps = energy(s, Uh)
             Pf, visc, conv, divrms = momentum_budget(s, Uh)
@@ -527,9 +537,13 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
         if (i + 1) % every == 0:
             Uh = DEV.to_host(U)
             Nh = DEV.to_host(Nprev)
+            # The running statistics ride WITH the checkpoint, so a restart
+            # resumes the average rather than silently starting a new one.
             _atomic_savez(f'{out}/checkpoint_{i+1:07d}.npz', U=Uh, step=i+1,
-                          Nprev_re=Nh.real, Nprev_im=Nh.imag, t=(i+1)*dt)
+                          Nprev_re=Nh.real, Nprev_im=Nh.imag, t=(i+1)*dt,
+                          **stats.state())
             _atomic_savez(f'{out}/diag.npz', hist=np.array(hist))
+            stats.save(f'{out}/stats.npz', s['nu'], dt, (i+1)*dt)
     log.write(f'done, {nstep} steps, {time.perf_counter()-t0:.0f}s\n'); log.close()
 
 
