@@ -321,7 +321,9 @@ def to_device(s, U):
     if name == 'cupy':
         import cupy as cp
         t = lambda a: cp.asarray(np.ascontiguousarray(a, dtype=np.float64))
-    elif name == 'torch':
+    elif name in ('torch', 'cuda'):
+        # the fused-CUDA backend also carries torch tensors, so it takes the
+        # torch path; without this branch `dev` including 'cuda' would raise.
         import torch
         from lssem3d import kernels_torch as KT
         dev = KT.device()
@@ -458,7 +460,12 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
     backend.set_backend(name)
 
     s = setup(N, ex, ey, nz)
-    dev = name in ('torch', 'cuda')
+    # 'cupy' BELONGS HERE.  Omitting it selected the cupy KERNELS while leaving
+    # `dev` False, so to_device() was never called, the state stayed NumPy, and
+    # every cupy kernel rejected it with "Unsupported type <class
+    # 'numpy.ndarray'>".  The backend appeared to be selected and the run could
+    # not take a single step.
+    dev = name in ('torch', 'cuda', 'cupy')
     step0 = 0
     if resume:
         z = np.load(resume)
@@ -497,11 +504,11 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
     hist, t0 = [], time.perf_counter()
     for i in range(step0, nstep):
         U, Nprev, it = advance(s_run, U, Nprev, dt, Minv)
-        if not bool(np.all(np.isfinite(U.cpu().numpy() if dev else U))):
+        if not bool(np.all(np.isfinite(DEV.to_host(U)))):
             log.write('BLEWUP\n'); log.close()
             raise SystemExit('non-finite state -- aborting')
         if (i + 1) % 10 == 0 or i == step0:
-            Uh = U.cpu().numpy() if dev else U
+            Uh = DEV.to_host(U)
             ut, ub, rw_ = u_tau(s, Uh), bulk(s, Uh), rms_w(s, Uh)
             cf = cfl(s, Uh, dt)
             ke, eps = energy(s, Uh)
@@ -518,8 +525,8 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
             hist.append(((i+1)*dt, ut, ub, rw_, cf, it, ke, eps,
                          Pf, visc, conv, divrms))
         if (i + 1) % every == 0:
-            Uh = U.cpu().numpy() if dev else U
-            Nh = Nprev.cpu().numpy() if dev else Nprev
+            Uh = DEV.to_host(U)
+            Nh = DEV.to_host(Nprev)
             _atomic_savez(f'{out}/checkpoint_{i+1:07d}.npz', U=Uh, step=i+1,
                           Nprev_re=Nh.real, Nprev_im=Nh.imag, t=(i+1)*dt)
             _atomic_savez(f'{out}/diag.npz', hist=np.array(hist))

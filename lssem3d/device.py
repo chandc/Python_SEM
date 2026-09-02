@@ -61,6 +61,26 @@ def is_cupy(a):
     return cupy is not None and isinstance(a, cupy.ndarray)
 
 
+def to_host(a):
+    """Bring `a` back to NumPy, whatever device namespace it is in.
+
+    The counterpart to to_device(), and it was missing: every other helper here
+    is backend-agnostic, so callers that needed a host copy wrote the torch form
+    `a.cpu().numpy()` inline.  That is silently wrong under cupy -- and hard to
+    spot, because cupy.ndarray is ALSO named "ndarray", so the failure reads
+    "'ndarray' object has no attribute 'cpu'" as though a plain NumPy array had
+    arrived.  scratch/minchan.py carried three such call sites and could not
+    checkpoint a cupy run.
+
+    Handles complex arrays; both backends transfer them directly.
+    """
+    if is_cupy(a):
+        return cupy.asnumpy(a)
+    if is_tensor(a):
+        return a.cpu().numpy()
+    return a
+
+
 def xp(a):
     """The array namespace `a` belongs to."""
     if is_tensor(a):
