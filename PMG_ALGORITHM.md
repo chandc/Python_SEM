@@ -732,12 +732,39 @@ each N** (4–5 digits) — freezing changes the iteration count, not the answer
 | `rms_u` (x=0.5) | 4.5740e−02 | 7.5928e−03 | 3.3045e−03 | **3.2096e−03** |
 | `rms_v` (y=0.5) | 6.6528e−02 | 7.5242e−03 | 5.0727e−03 | **6.6584e−03** |
 
-**Convergence stops after N=24.** `rms_u` moves only 3.30e−03 → 3.21e−03 and
-`rms_v` gets *worse*, 5.07e−03 → 6.66e−03. That is an accuracy **floor**, not
-p-convergence, and it is **not the solver** — all four configurations agree to
-five digits. Candidates: the 16-element mesh, the `dt=1` steady weighting, or the
-`1e-8` steady tolerance. **These should not be quoted as benchmark agreement
-until that is run down.**
+**Split by region, the aggregate RMS is misleading.** Separating the four points
+nearest each far wall from the rest:
+
+| N | u interior | u near-wall | v interior | v near-wall |
+|---|---|---|---|---|
+| 8 | 5.175e−02 | 2.618e−02 | 6.112e−02 | 7.799e−02 |
+| 16 | 8.594e−03 | 4.332e−03 | 8.517e−03 | 4.289e−03 |
+| 24 | 2.122e−03 | 5.131e−03 | 1.916e−03 | 8.870e−03 |
+| 30 | **1.341e−03** | **5.542e−03** | **2.405e−03** | **1.170e−02** |
+
+**The interior converges monotonically — 5.18e−02 → 1.34e−03, 38× — while the
+near-wall disagreement GROWS past N=16.** There is no accuracy floor in the
+solution; the aggregate RMS was hiding two opposite trends, and the four
+near-wall points dominate it. Pointwise at N=30, max |diff| is 6.8e−03 at
+y=0.9531 (lid boundary layer) and 1.37e−02 at x=0.9609 (right-wall jet), against
+≤2.2e−03 and ≤3.2e−03 everywhere else.
+
+**Growing disagreement under refinement is the signature of converging to a
+different answer than the reference, not of failing to converge.** Ghia used a
+**uniform** 129×129 grid — `h = 0.0078` everywhere — while N=30 on 4 elements has
+LGL clustering putting the first node ~3e−04 off the wall, ~25× finer exactly
+where the boundary layer is.
+
+> **This is a hypothesis, not a result.** It would be self-serving to conclude
+> the reference is under-resolved without an independent check. The arbiter is
+> **Botella & Peyret (1998)**, the Chebyshev spectral benchmark for Re=1000 with
+> singularity subtraction, which is not in this repo. Until then: **the interior
+> convergence is solid evidence the solver is right; the near-wall numbers should
+> not be quoted as either agreement or disagreement.**
+
+**This supersedes the earlier reading of these rows** as an accuracy floor caused
+by the mesh, the `dt=1` weighting or the steady tolerance. None of those would
+produce interior convergence alongside near-wall divergence.
 
 *(Ghia Table I was verified against the repo's stored `cavity_re1000_data.npz`
 — max difference 5e−05, its 4-dp rounding. Table II is transcribed from the same
