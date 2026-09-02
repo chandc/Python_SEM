@@ -844,6 +844,44 @@ the h-scale as the mesh refines. Jacobi meanwhile grows 3.76× / 4.00×.
 **AMG and direct are interchangeable on iterations** — within 5% everywhere
 except 8×8 (26.5 vs 30.6, 15%).
 
+#### Summary — every configuration, iterations and wall together
+
+Ghia Re=1000 cavity, converged to `|dU| < 1e−8`. Ordered by problem size; bold is
+the fastest of the three.
+
+| mesh | N | gDOF | Jacobi its | Jacobi s | pMG+direct its | pMG+direct s | pMG+AMG its | pMG+AMG s | best speedup | `rms_u` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 2×2 | 12 | 2,500 | 527.1 | **21.6** | 37.7 | 39.0 | 36.6 | 41.4 | 0.55× | 7.847e−02 |
+| 4×4 | 8 | 4,356 | 605.8 | **36.1** | 32.4 | 41.1 | 33.0 | 44.3 | 0.88× | 4.574e−02 |
+| 4×4 | 12 | 9,604 | 893.6 | 60.2 | 28.8 | **44.7** | 29.0 | 47.7 | 1.35× | 2.016e−02 |
+| 4×4 | 16 | 16,900 | 1383.2 | 176.6 | 31.9 | **84.6** | 32.5 | 89.2 | 2.09× | 7.593e−03 |
+| 6×6 | 12 | 21,316 | 1435.9 | 228.9 | 27.7 | **113.9** | 29.4 | 120.2 | 2.01× | 7.790e−03 |
+| 4×4 | 20 | 26,244 | 1902.9 | 317.1 | 34.0 | **129.9** | 35.5 | 135.5 | 2.44× | 4.283e−03 |
+| 4×4 | 24 | 37,636 | 2422.9 | 470.1 | 34.1 | **189.3** | 34.4 | 197.6 | 2.48× | 3.305e−03 |
+| 8×8 | 12 | 37,636 | 1981.3 | 413.3 | 26.5 | 169.7 | 30.6 | **164.7** | 2.51× | 4.499e−03 |
+
+**Jacobi wins the two smallest cases; p-multigrid wins from 9,604 DOF up**,
+reaching 2.5×. Jacobi's iteration count spans 527 → 2423 (**4.6×**) while
+p-multigrid stays inside **26.5–37.7** across a 15× range of problem size *and*
+both refinement directions.
+
+**The last two rows are the same 37,636 DOF reached two different ways** — a
+direct `h`-versus-`p` comparison at equal cost:
+
+* **4×4 at N=24** (p-refined): 189.3 s, `rms_u` = 3.305e−03
+* **8×8 at N=12** (h-refined): 169.7 s, `rms_u` = 4.499e−03
+
+**p-refinement buys 1.36× better accuracy for 12% more time.** At equal DOF,
+spending on order beats spending on elements here — the expected spectral
+advantage on a smooth interior, and consistent with §6.8's finding that the
+residual error is concentrated in the corner singularities, not the interior.
+
+> **Two caveats on the wall column.** It is single-threaded NumPy, and the
+> crossover near 5–10k DOF is implementation-specific. A compiled matvec would
+> move it, most likely in **Jacobi's** favour: p-multigrid's advantage is in
+> iteration *count*, not in cost per iteration, so making every iteration cheaper
+> helps the method that does more of them.
+
 #### Where the coarse solve cost goes — and the predicted crossover
 
 | mesh | coarse DOF | direct build | share | AMG build | share | **amg/lad wall** |
