@@ -59,7 +59,9 @@ from lssem2d.lgl import diff_matrix, lgl_nodes
 from lssem2d.lssem import SolverState
 from lssem2d.mesh import build_channel
 
-RE, DT, EX = 1000.0, 1.0, 4
+RE = float(os.environ.get('CAV_RE', 1000.0))
+DT = float(os.environ.get('CAV_DT', 1.0))
+EX = int(os.environ.get('CAV_EX', 4))
 
 # Ghia, Ghia & Shin (1982) Table II -- v on the horizontal centreline y = 0.5.
 GHIA_X = np.array([1.0000, 0.9688, 0.9609, 0.9531, 0.9453, 0.9063, 0.8594,
@@ -68,7 +70,8 @@ GHIA_X = np.array([1.0000, 0.9688, 0.9609, 0.9531, 0.9453, 0.9063, 0.8594,
 GHIA_V = np.array([0.00000, -0.21388, -0.27669, -0.33714, -0.39188, -0.51550,
                    -0.42665, -0.31966, 0.02526, 0.32235, 0.33075, 0.37095,
                    0.32627, 0.30353, 0.29012, 0.27485, 0.00000])
-MAXSTEP, STEADY = 300, 1.0e-8
+MAXSTEP = int(os.environ.get('CAV_MAXSTEP', 300))
+STEADY = 1.0e-8
 OUT = f'{_SC}/pmg_ghia_cavity'
 _PCG = S.pcg_solve
 
@@ -137,7 +140,8 @@ def run(kind, N, refresh=1):
     m.compute_global_indices()
     st = SolverState(m, diff_matrix(N), nu=1.0/RE, dt=DT, fac1=1.0)
     n = N + 1
-    pc = {'p2': 2, 'p3': (4, 2), 'lad': ladder(N)}.get(kind)
+    pc = {'p2': 2, 'p3': (4, 2), 'lad': ladder(N),
+          'amg': ladder(N)}.get(kind)
     tot, nbuild, tbuild, cache, calls = [0], [0], [0.0], [None], [0]
 
     def wrapped(state, b, fu, fv, M_inv, mw, pin_p=False, max_iter=5000,
@@ -146,10 +150,11 @@ def run(kind, N, refresh=1):
             if cache[0] is None or (calls[0] % refresh) == 0:
                 t0 = time.perf_counter()
                 snap = snapshot(state, fu, fv)
-                cache[0] = P.make('pmg2', snap, snap.fu_c if hasattr(snap, 'fu_c')
-                                  else np.ascontiguousarray(fu),
+                cache[0] = P.make('pmg2', snap, np.ascontiguousarray(fu),
                                   np.ascontiguousarray(fv), M_inv, pin_p,
-                                  pc=pc, deg=4, coarse_solver='direct')
+                                  pc=pc, deg=4,
+                                  coarse_solver=('amg' if kind == 'amg'
+                                                 else 'direct'))
                 tbuild[0] += time.perf_counter() - t0
                 nbuild[0] += 1
             calls[0] += 1
@@ -198,7 +203,7 @@ def one(kind, N, refresh=1):
     (U, status, d, wall, cg, steps, rms_u, rms_v, gdof,
      nbuild, tbuild) = run(kind, int(N), refresh)
     tag = 'frozen' if refresh > 10**6 else f'r{refresh}'
-    f = f'{OUT}_{kind}_N{N}_{tag}.npz'
+    f = f'{OUT}_Re{int(RE)}_E{EX}_{kind}_N{N}_{tag}.npz'
     np.savez_compressed(f, U=U, status=status, dU=d, wall=wall, cg=cg,
                         steps=steps, rms_u=rms_u, rms_v=rms_v, gdof=gdof,
                         kind=kind, N=int(N), refresh=refresh, tag=tag,

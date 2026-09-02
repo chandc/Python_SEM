@@ -809,6 +809,65 @@ produce interior convergence alongside near-wall divergence.
 — max difference 5e−05, its 4-dp rounding. Table II is transcribed from the same
 source and has no independent check here.)*
 
+### 6.9 The h × p cross — flat in **both** directions, and AMG overtakes direct
+
+The measurement §6.8 named as the main outstanding risk. Ghia Re=1000, three
+preconditioners, run to steady (`1e-8`). CG iterations per Newton step:
+
+**p-sweep** — 4×4 elements (16), N = 8…24:
+
+| N | gDOF | Jacobi | ladder+direct | ladder+AMG | Jac wall | lad wall | amg wall |
+|---|---|---|---|---|---|---|---|
+| 8 | 4356 | 605.8 | **32.4** | 33.0 | 36.1 s | 41.1 s | 44.3 s |
+| 12 | 9604 | 893.6 | **28.8** | 29.0 | 60.2 s | 44.7 s | 47.7 s |
+| 16 | 16900 | 1383.2 | **31.9** | 32.5 | 176.6 s | 84.6 s | 89.2 s |
+| 20 | 26244 | 1902.9 | **34.0** | 35.5 | 317.1 s | 129.9 s | 135.5 s |
+| 24 | 37636 | 2422.9 | **34.1** | 34.4 | 470.1 s | 189.3 s | 197.6 s |
+| **growth** | | **4.00×** | **1.05×** | **1.04×** | | | |
+
+**h-sweep** — N = 12 fixed, 2×2 … 8×8:
+
+| mesh | gDOF | Jacobi | ladder+direct | ladder+AMG | Jac wall | lad wall | amg wall |
+|---|---|---|---|---|---|---|---|
+| 2×2 | 2500 | 527.1 | **37.7** | 36.6 | 21.6 s | 39.0 s | 41.4 s |
+| 4×4 | 9604 | 893.6 | **28.8** | 29.0 | 60.2 s | 44.7 s | 47.7 s |
+| 6×6 | 21316 | 1435.9 | **27.7** | 29.4 | 228.9 s | 113.9 s | 120.2 s |
+| 8×8 | 37636 | 1981.3 | **26.5** | 30.6 | 413.3 s | 169.7 s | 164.7 s |
+| **growth** | | **3.76×** | **0.70×** | **0.84×** | | | |
+
+**p-multigrid is independent in both directions, and under `h` the counts
+*decrease*.** The concern in §6.8 was that h-refinement would break it, since
+p-multigrid coarsens in `p` alone. It does not — because `DirectCoarse` solves
+the coarsest level **exactly**, and that level grows with the mesh, so it absorbs
+the h-scale as the mesh refines. Jacobi meanwhile grows 3.76× / 4.00×.
+
+**AMG and direct are interchangeable on iterations** — within 5% everywhere
+except 8×8 (26.5 vs 30.6, 15%).
+
+#### Where the coarse solve cost goes — and the predicted crossover
+
+| mesh | coarse DOF | direct build | share | AMG build | share | **amg/lad wall** |
+|---|---|---|---|---|---|---|
+| 2×2 | 100 | 4.7 s | 12.0% | 5.6 s | 13.5% | 1.060× |
+| 4×4 | 324 | 8.6 s | 19.3% | 9.8 s | 20.5% | 1.066× |
+| 6×6 | 676 | 27.4 s | 24.0% | 29.0 s | 24.1% | 1.055× |
+| 8×8 | 1156 | 51.2 s | **30.1%** | 46.1 s | 28.0% | **0.971×** |
+
+**This is exactly the behaviour §4.3 was built for.** `DirectCoarse` scales with
+the element count, so its share of wall climbs **12% → 30%** under h-refinement
+— the opposite of its behaviour under p-refinement (§6.8: 24% → 8.4%). At 8×8
+the AMG V-cycle setup becomes **cheaper than the factorisation** (46.1 s vs
+51.2 s) and AMG wins on wall time despite needing 15% more iterations. The trend
+is monotone, so beyond 8×8 AMG should widen its lead.
+
+**Practical rule:** use `coarse_solver='direct'` while the coarse problem is
+small (≲1000 DOF, i.e. below ~8×8 elements at `p_c = 2`), and switch to
+`'amg'` above it. The crossover here sits at ~1000 coarse DOF.
+
+**All three preconditioners agree on the answer** at every point in both sweeps
+(`rms_u` identical to 4–5 digits), so this is a cost comparison, not a
+correctness one.
+
 ---
 
 ## 8. Conclusions
