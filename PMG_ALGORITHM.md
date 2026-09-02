@@ -439,6 +439,51 @@ consistent with 8.145 but does not measure it; and the armed run finished
 coarse OBC-propagation fix is live; and the outlet sits in reversed flow, which
 is where a preconditioner that resolves the soft mode should matter most.
 
+### 6.6 High order: p = 5 to 30. **The halving ladder is p-independent**
+
+`scratch/pmg_high_p.py`. 2×2 elements so N=30 is affordable, steady, `w_mom=1`,
+`pin_p=True`, tol 1e−8. `PMG2` now nests, so `pc` may be a sequence.
+
+| N | gDOF | ladder | Jacobi | 2-lvl | 3-lvl | **ladder** | Jac/lad |
+|---|---|---|---|---|---|---|---|
+| 5 | 484 | (2) | 475 | 71 | 54 | **71** | 6.7× |
+| 6 | 676 | (3,2) | 650 | 94 | 63 | **72** | 9.0× |
+| 8 | 1156 | (4,2) | 942 | 130 | 78 | **78** | 12.1× |
+| 10 | 1764 | (5,2) | 1253 | 157 | 99 | **89** | 14.1× |
+| 12 | 2500 | (6,3,2) | 1546 | 193 | 108 | **80** | 19.3× |
+| 16 | 4356 | (8,4,2) | 2132 | 259 | 141 | **82** | 26.0× |
+| 20 | 6724 | (10,5,2) | 2742 | 329 | 177 | **89** | 30.8× |
+| 24 | 9604 | (12,6,3,2) | 3412 | 429 | 222 | **91** | 37.5× |
+| 30 | 14884 | (15,7,3,2) | 4365 | 561 | 300 | **100** | 43.6× |
+| **growth 5→30** | | | **9.2×** | **7.90×** | **5.56×** | **1.41×** | |
+
+**71 → 100 iterations across a 6× increase in order and 31× in DOF.**
+
+**Depth is the whole story.** Fixed 2-level (7.90×) and 3-level (5.56×) both
+degrade badly — they coarsen too fast, exactly the failure Heys *et al.* (2005)
+identify for p/2 schemes, which retain only ~25% of points where AMG retains
+~50%. Only the halving ladder is p-robust.
+
+**Setup stays flat, 0.01 s → 0.04 s**, confirming the design prediction:
+`DirectCoarse` assembles only `p_c = 2`, whose cost scales with the ELEMENT
+count, not with p. The coarse solve at N=30 costs what it costs at N=5.
+
+**Against [FOSLS_2D_PLAN.md](./FOSLS_2D_PLAN.md) §F2g this is the answer to high
+order.** AMG degraded 2.16× over N=4…12 and both AmgX schemes stalled outright
+from N=6–8. This holds to N=30. **Neither LOR nor AMG is needed here** — because
+p-multigrid never assembles the fine operator, so the O(p^{2d}) density that
+defeats AMG (§F2h(ii)) never arises.
+
+Consistency checks: at N=5 `ladder=(2)` so ladder ≡ 2-level (71 = 71); at N=8
+`ladder=(4,2)` so ladder ≡ 3-level (78 = 78).
+
+**Scope.** One 2×2 mesh, Stokes (zero linearisation), manufactured RHS,
+lid-driven-cavity masking. This measures the OPERATOR's conditioning, which is
+the right thing for a preconditioner study, but it is not a flow computation.
+**h-independence at high p is untested here** (F2 tested it only for AMG at N=4),
+and solve wall times were not recorded — only iteration counts, which per §F2f
+are the quantity that transfers.
+
 ---
 
 ## 8. Conclusion on the direct coarse solve
