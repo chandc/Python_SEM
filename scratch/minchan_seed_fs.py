@@ -51,7 +51,7 @@ os.chdir(_R)
 
 import numpy as np
 
-from lssem3d import operator as OP, fourier as FR, deriv as DV
+from lssem3d import operator as OP, fourier as FR, deriv as DV, solver3d as S3
 import channel3d as C
 import minchan as MC
 
@@ -75,8 +75,57 @@ def load_and_convert(src=SRC):
     Uc[..., OP.W_, :] = Ufs[..., 2, :]
     Uc[..., OP.P_, :] = pfs[..., 0, :]
     C._set_vorticity(s, Uc)                    # discrete curl -- see module docstring
+
+    # ASSEMBLE THE DERIVED VORTICITY TO C0.  The SEM derivative is ELEMENT-LOCAL,
+    # so curl u is multi-valued at element interfaces even when u is continuous:
+    # measured relative jumps of 7.8e-02 / 4.6e-01 / 8.1e-02 in (om_x, om_y, om_z)
+    # against 8.1e-05 in u, over the 22.8% of nodes that are shared.  A SEM state
+    # must lie in the C0 space, so a DERIVED field has to be projected back into
+    # it -- direct stiffness summation divided by multiplicity, which is the
+    # discretisation's own averaging and not an ad-hoc smoothing.
+    # Without this the omega definition rows carry a large share of J that is an
+    # artefact of the representation rather than of the field.
+    for sl in (OP.OX_, OP.OY_, OP.OZ_):
+        Uc[..., sl, :] = _assemble_c0(s, Uc[..., sl, :])
+
     U = np.concatenate([Uc.real, Uc.imag], axis=-2)
     return s, U*s['mask'], t0, Uc
+
+
+def _assemble_c0(s, f, weighted=True):
+    """Project a multi-valued nodal field onto the C0 SEM space.
+
+    THE DISCRETISATION-CONSISTENT PROJECTION is L2 with the SEM mass matrix:
+    find omega in the C0 space minimising ||omega - curl u||_L2, i.e.
+
+        M omega = int (curl u) phi  ->  omega = gs(wq * curl u) / gs(wq)
+
+    GLL quadrature makes the mass matrix DIAGONAL, so this collapses to a
+    QUADRATURE-WEIGHTED average of the copies at each shared node.  Simple
+    multiplicity averaging (gs(f)/gs(1), what make_continuous does) is the
+    unweighted special case and is only correct when the two elements meeting at
+    a node carry equal weight -- false wherever the mesh is graded, which for a
+    channel is every wall-normal interface.
+
+    Why project at all: the SEM derivative is ELEMENT-LOCAL, so curl u is
+    multi-valued at interfaces even when u is C0 -- measured relative jumps
+    7.8e-02 / 4.6e-01 / 8.1e-02 in (om_x, om_y, om_z) against 8.1e-05 in u.  A
+    state outside the C0 space is not one the assembled operator can represent:
+    make_continuous's own docstring notes the assembled operator ANNIHILATES the
+    discontinuous part.
+    """
+    m = s['m']
+    if not weighted:
+        re = S3.make_continuous(m, f.real[..., None, :])[..., 0, :]
+        im = S3.make_continuous(m, f.imag[..., None, :])[..., 0, :]
+        return re + 1j*im
+    w = m.wq[..., None, None]                     # (nelem, n, n, 1, 1)
+    den = S3.gs(m, np.broadcast_to(w, f.shape[:3] + (1, f.shape[-1])).copy())
+    out = []
+    for part in (f.real, f.imag):
+        num = S3.gs(m, (part[..., None, :]*w))
+        out.append((num/np.where(np.abs(den) < 1e-300, 1.0, den))[..., 0, :])
+    return out[0] + 1j*out[1]
 
 
 def divergence(s, Uc):

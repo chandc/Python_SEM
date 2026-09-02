@@ -51,9 +51,45 @@ Fractional step stores 4 complex fields; FOSLS carries 7 as 14 split-real:
 | `P_` | direct copy |
 | **`OX_, OY_, OZ_`** | **derived — discrete curl** (`channel3d._set_vorticity`) |
 
-The curl must be **discrete, not analytic**: FOSLS carries vorticity as
-independent unknowns whose definition rows `R₁–R₃` are least-squares residuals.
-Verified exact — `|R_ωx| = |R_ωy| = 0.000e+00` before masking.
+The curl must be **spectral, not finite-difference** — `DV.ddx` contracts the
+same LGL matrix `D = diff_matrix(N)` that `apply_L` uses, so `R₁–R₃` vanish to
+machine zero element-locally (verified: `|R_ωx| = |R_ωy| = 0.000e+00`).
+
+### 3.1 …and it must then be projected back to C⁰
+
+**The SEM derivative is element-local**, so `curl u` is multi-valued at element
+interfaces even when `u` is continuous. Measured relative jumps over the 22.8% of
+nodes that are shared:
+
+| field | relative interface jump |
+|---|---|
+| u | 8.1e−05 (C⁰, as it should be) |
+| ω_x | 7.8e−02 |
+| **ω_y** | **4.6e−01** |
+| ω_z | 8.1e−02 |
+
+A state outside the C⁰ space is not one the assembled operator can represent —
+`make_continuous`'s own docstring records that the assembled operator
+*annihilates* the discontinuous part. Worse, the CG iterates are all assembled
+and therefore continuous, so a discontinuous component in the **initial
+condition** is never removed: it would be carried for the life of the run.
+
+The discretisation-consistent projection is **L² with the SEM mass matrix**:
+
+$$M\,\omega = \int (\nabla\times u)\,\phi \quad\Longrightarrow\quad \omega = \frac{\mathcal{G}(w_q\,\nabla\times u)}{\mathcal{G}(w_q)}$$
+
+GLL quadrature makes that mass matrix **diagonal**, so it collapses to a
+*quadrature-weighted* average of the copies at each shared node. Simple
+multiplicity averaging is the unweighted special case, correct only where the
+two elements meeting at a node carry equal weight.
+
+**On this mesh they do** — `hy = 0.1111` for all 18 elements, `hx = 0.5236` for
+all 6, so it is uniform and the two agree to all digits (J = 5.1415e+00 both).
+Near-wall resolution comes from GLL clustering, not grading: `y₁⁺ = 1.00`. The
+weighted form is implemented anyway, because a graded mesh at higher `Re_τ`
+would need it.
+
+After projection all three ω interface jumps are **exactly 0.000e+00**.
 
 ## 4. Gates on the converted field
 
@@ -64,22 +100,35 @@ Verified exact — `|R_ωx| = |R_ωy| = 0.000e+00` before masking.
 | `U_bulk` | 15.890 | KMM ≈ 15.6 (1.9% high) |
 | **`rms_w`** | **0.8887** | `minchan_002` relaminarised below ~0.135 — **6.6× above** |
 | strong-form `‖div u‖/‖u‖` | 9.89e−02 | see §5 |
-| **J** | 2.809 | see §5 |
+| **J** | 5.142 | see §4.1 and §5 |
 
 ### 4.1 The J breakdown, against a control
 
-| | J | continuity | ω_x | ω_y |
+| ω projection | J | continuity | ω_y | ω interface jump |
 |---|---|---|---|---|
-| **imported** | 2.809 | 48.4% | 9.5% | 41.8% |
-| `minchan.py`'s **own** IC | 0.242 | **50.5%** | 2.1% | **44.4%** |
+| element-local (none) | 2.809 | 48.4% | 41.8% | 4.6e−01 |
+| **mass-weighted L²** | **5.142** | **26.5%** | **47.7%** | **0.0** |
+| `minchan.py`'s **own** IC, unprojected | 0.242 | 50.5% | 44.4% | — |
 
-**The row distribution is essentially identical**, so the imported field is
-structurally no worse than what the driver itself produces. J is 11.6× larger
-only because the field is genuinely turbulent (`rms_w` 0.889 vs ~0.13).
+**Projecting raises J from 2.81 to 5.14, and that is the honest number.** The
+element-local curl satisfies `R₁–R₃ = 0` exactly *element-locally*, which is why
+it scores lower — but it scores that on a state which is not in the solution
+space. 5.14 is the functional value of the state the solver will actually carry.
 
-The ω-row share is **not** an import artefact: `_set_vorticity` is exact, and the
-residual appears only after masking, because velocities are zeroed at no-slip
-walls while ω is left free by design (`bc.py`). Present in both fields.
+Against the control, the imported field is **structurally no worse** than what
+the driver itself produces: `minchan.py`'s own IC shows the same row
+distribution (continuity ~50%, ω_y ~44%) at 1/12 the magnitude, because it is
+laminar-plus-trip rather than turbulent.
+
+The ω-row share is **not** an import artefact. It is intrinsic to VVP-FOSLS:
+velocities are zeroed at no-slip walls while ω is left free by design
+(`bc.py`), so `curl(masked u) ≠ ω` at the walls in *any* initial condition.
+
+> **`minchan.py`'s own `initial_state` does not project either.** It calls
+> `_set_vorticity` and returns without assembling ω, so every prior FOSLS
+> minimal-channel run started from a state carrying a discontinuous vorticity.
+> Whether that contributed to `minchan_001`/`002` is untested, but it is worth
+> recording as a difference between this seed and those runs.
 
 ## 5. The divergence, and why it is not `minchan_001` again
 
@@ -111,4 +160,5 @@ The imported field is fully turbulent, so CFL is tighter than for a laminar star
 ## 7. Status
 
 **Set up; not yet launched.** IC written to
-`scratch/fs_seed/minchan_ic_from_fs.npz`.
+`scratch/fs_seed/minchan_ic_from_fs.npz`, with ω projected onto C⁰ by the
+mass-weighted L² projection (§3.1).
