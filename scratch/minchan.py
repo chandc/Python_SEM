@@ -471,10 +471,15 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
 
     Minv_host = _precond(s, dt)
     if dev:
-        import torch
         s_run, U = to_device(s, U)
         Minv = [DEV.to_device(q, U) for q in Minv_host]
-        Nprev = torch.as_tensor(np.ascontiguousarray(Nprev), device=U.device)
+        # BACKEND-AGNOSTIC, for the same reason to_device() itself is.  This line
+        # used to call torch.as_tensor directly, so a cupy run moved the state
+        # and the preconditioner to the device and left Nprev on the host --
+        # every kernel then met a mixed pair and cupy raised
+        # "TypeError: Unsupported type <class 'numpy.ndarray'>".  DEV.to_device
+        # dispatches on `like` and handles both backends, complex included.
+        Nprev = DEV.to_device(Nprev, U)
     else:
         s_run, Minv = s, Minv_host
 
