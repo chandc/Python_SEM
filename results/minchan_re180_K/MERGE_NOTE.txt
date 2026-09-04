@@ -1,0 +1,1 @@
+note: seg3 duplicates seg2 (freezing segment hadn't checkpointed); merge = seg1 + seg2 + live run only
