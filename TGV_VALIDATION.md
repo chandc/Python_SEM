@@ -383,3 +383,91 @@ Our two runs sit inside the published family rather than merely near it.
 
 **The same-$Re$ test remains the $Re$ = 800 run** against Gourianov (§8.2), in
 flight at $88^3$.
+
+---
+
+## Re = 800, 88³ LSSEM VVP vs Gourianov et al. (2022) DNS
+
+Run: `scratch/tgv3d_re800_88.log`, `scratch/tgv_diag_re800_88.npz`.
+Mac, 53.8 h, 2220 steps to t = 12.570 (t/T₀ = 2.0, T₀ = L_box/u₀ = 2π).
+Reference: `reference/gourianov_fig3b_tgv_re800.csv`, digitised from
+arXiv:2106.05782v3 Fig. 3b — 256³, 8th-order FD + RK2 + Chorin projection.
+Figure: `scratch/tgv_re800_vs_gourianov.png`.
+
+Both curves are ε·T₀/E₀ against t/T₀, with ε = 2νΩ.
+
+| t/T₀ | ours | Gourianov | rel. |
+|---|---|---|---|
+| 0.25 | 0.0603 | 0.0604 | −0.2% |
+| 0.50 | 0.1163 | 0.1158 | +0.4% |
+| 0.75 | 0.2809 | 0.2805 | +0.1% |
+| 1.00 | 0.4234 | 0.4189 | +1.1% |
+| 1.20 | 0.5128 | 0.4997 | +2.6% |
+| 1.42 | 0.6183 | 0.5882 | +5.1% |
+| 1.65 | 0.5059 | 0.4986 | +1.5% |
+| 2.00 | 0.3083 | 0.2994 | +3.0% |
+
+Peak: ours 0.6184 at t/T₀ = 1.418 (t = 8.91, Ω = 1220.1);
+theirs 0.5885 at t/T₀ = 1.425.  **+5.1% in amplitude, −0.007 in timing.**
+Mean |rel. err| over the overlap 1.7%, max 6.2% at t/T₀ = 1.92.
+
+**The E₀ ambiguity is settled empirically.** The paper states E₀ = u₀²/2, but
+TGV carries mean kinetic energy density u₀²/8 — a factor of 4. Our
+E₀/V = 0.12495 ≡ u₀²/8, and normalising by the *actual* initial kinetic
+energy puts our t→0 value within 0.2% of their 0.0472. So the digitised
+curve uses the actual initial KE, not the stated u₀²/2. Normalise the same
+way or every comparison is off by 4×.
+
+**The error is where the resolution meter says it is.** The energy–enstrophy
+balance −dE/dt / 2νΩ dips to 0.9338 at t = 9.08 — right at the dissipation
+peak — and recovers to 0.9801 by the end. That ~7% internal shortfall is the
+same size and at the same time as the +5.1% overshoot against DNS. 2νΩ is
+biased high exactly when the smallest scales are marginally resolved, and the
+balance ratio predicts the discrepancy without needing the reference data.
+Away from the peak (t/T₀ ≲ 1) agreement is ≤1%.
+
+---
+
+## Re = 800: both 88³ solutions vs Brachet et al. (1983), 256³ spectral DNS
+
+Reference: `reference/brachet_fig7_tgv_re800.csv` (digitised Fig. 7, R = 800;
+peak eps = 0.01197 at t = 8.90).  eps = 2*nu*Omega_1, volume-mean units.
+Figure: `scratch/tgv_re800_vs_brachet.png`.
+
+| | peak eps | at t | vs Brachet | mean rel err (t 0-10) |
+|---|---|---|---|---|
+| Brachet 256³ | 0.01197 | 8.90 | — | — |
+| VVP LSSEM 88³ | 0.01230 | 8.91 | +2.7%, +0.01 | 1.2% |
+| RK3-CN FS 88³ | 0.01169 | 8.69 | −2.4%, −0.21 | 1.1% |
+
+Both 88³ solutions bracket the DNS: VVP high (2nuOmega reads high where
+resolution is marginal — its balance dips to 0.934 at the crest), RK3-CN low
+(splitting dissipation clips the crest, balance 1.031 there).  Peak *timing*:
+VVP is essentially exact (+0.01); the projection path leads by −0.21.  Away
+from the peak (t < 7) both agree with Brachet to ~1%, which is the
+digitisation noise floor.  Consistent with the Gourianov comparison
+(peaks 0.01170 vs Brachet 0.01197, the two DNS references themselves 2.3%
+apart).
+
+---
+
+## Re = 800 at 160³ (RK3-CN substage, skew) — resolved DNS
+
+Run: Spark GB10, 29.88 h, dt = 0.00311883, 4030 steps to t = 12.569.
+Log: `scratch/fs_tgv_re800_160.log`.  Figure: `scratch/tgv_re800_160_final.png`.
+Grid chosen for k_max·eta = 1.62 at peak dissipation (TGV_VALIDATION criterion).
+
+Peak eps = 0.01172 at t = 8.985.  Energy balance within [0.9988, 1.0076] for
+the ENTIRE run — the 88³ runs deviated 3–7% at the crest.
+
+|  | mean rel err (t 0–10) | peak diff |
+|---|---|---|
+| vs Gourianov 256³ FD | **0.22%** | **+0.12%** |
+| vs Brachet 1983 256³ spectral (digitised) | 0.80% | −2.13% |
+
+The falsifiable prediction from the 88³ analysis is confirmed: the peak lands
+inside the published band with balance ≈ 1 throughout, proving the 88³
+discrepancies (VVP +5% amplitude; projection −0.3 timing) were resolution,
+not formulation.  Agreement with Gourianov (0.22%) is an order tighter than
+the two references agree with each other (2.3%) — the Brachet gap is
+dominated by its digitisation.

@@ -1,0 +1,32 @@
+# Backward-facing step, ER = 2.0, 2D steady laminar reference data.
+# Re convention: Re_D = rho*u_avg*D/mu with D = 2h_inlet (= Re_H at ER 2);
+# lengths normalized by STEP height.  Identical conventions to our BFS gate.
+# Source: transcribed 2026-08-29 from arXiv:2507.16509 (FV/LM MHD-BFS
+# benchmark paper), whose Table 1 is its own hydrodynamic baseline and
+# Table 2 reprints the Re=800 cross-author comparison including
+# Erturk (2008) Comput. Fluids 37:633 (closed access; cavityflow.com dead).
+# xr = lower-wall reattachment; xs/xrs = upper-wall separation/reattachment.
+#
+# Table 1 (arXiv:2507.16509 own results, uniform-grid FV):
+Re,xr_h,xs_h,xrs_h,upper_bubble_h
+100,3.00,,,
+200,4.95,,,
+300,6.75,,,
+400,8.10,9.00,11.55,2.55
+500,9.30,9.30,14.70,5.40
+600,10.05,9.90,17.25,7.35
+700,10.95,10.35,19.65,9.30
+800,11.55,10.80,21.90,11.10
+#
+# Table 2 (Re = 800 cross-author, same normalization):
+# author,xr_h,upper_bubble_h
+# Rogers & Kwak,11.48,11.07
+# Barton,11.51,11.52
+# Erturk (2008),11.834,11.077
+# Kim & Moin (1985),11.90,11.50
+# Lee & Mateescu (1998),12.00,11.00
+# Guj & Stella,12.05,10.60
+# Grigoriev & Dargush,12.18,11.24
+# Keskar & Lyn,12.19,11.25
+# Gartling (1990),12.20,11.26
+# Gresho et al.,12.20,11.26
