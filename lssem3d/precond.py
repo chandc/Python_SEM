@@ -176,6 +176,12 @@ class _Level:
                      else BC.build_mask(mesh, nk, pin_p=pin_p, nz=nz))
         self.A = lambda v: S3.normal_op(v, self.D, mesh.facx, mesh.facy, kz, nu,
                                         c, mesh, self.mask, mesh.wq, kap, rw)
+        # Same operator WITHOUT the gather-scatter: elements stay decoupled, so
+        # one probe returns every element's local block at once.  DirectCoarseE
+        # uses this; nothing else should.
+        self.A_un = lambda v: S3.normal_op(v, self.D, mesh.facx, mesh.facy, kz,
+                                           nu, c, None, self.mask, mesh.wq,
+                                           kap, rw)
         diag = S3.jacobi_diagonal_analytic(self.shape, self.D, mesh.facx,
                                            mesh.facy, kz, nu, c, mesh,
                                            self.mask, mesh.wq, kap, rw)
@@ -284,6 +290,92 @@ class DirectCoarse:
         return z*self.lev.mask
 
 
+class DirectCoarseE(DirectCoarse):
+    """DirectCoarse with ELEMENT-LOCAL assembly -- same operator, O(p^2*nvar)
+    probes instead of O(global dofs).
+
+    DirectCoarse builds each mode's matrix by probing the ASSEMBLED operator
+    once per global dof: for the minimal channel's coarse level (13x37 nodes x
+    14 fields x 17 modes) that is ~114,000 full operator applies, which is why
+    the channel has been running with `direct_coarse=False` and a Chebyshev
+    coarse "solve" instead.
+
+    But the unassembled operator M L0^T W L0 M is ELEMENT-BLOCK-DIAGONAL, and
+    the modes never couple.  So a one-hot placed at local node (i,j,f) in EVERY
+    element and EVERY mode comes back carrying that column of every element's
+    and every mode's local block simultaneously.  That is `nloc = (p+1)^2 * 14`
+    probes TOTAL -- 126 at p=2 -- independent of the mesh and of nk.  The local
+    blocks are then assembled sparsely through `gidx` in the ordinary
+    finite-element way and factorised per mode.
+
+    Verified against DirectCoarse: identical action to roundoff (see
+    `scratch/direct_coarse_check.py`).
+    """
+
+    name = 'directE'
+
+    def __init__(self, level):
+        import scipy.sparse as sp
+        import scipy.sparse.linalg as spla
+        self.lev = level
+        m, shape, mask = level.m, level.shape, level.mask
+        nelem, n, _, nvar, nk = shape
+        nloc = n*n*nvar
+
+        # ---- element-local blocks, nloc probes for the whole mesh ----
+        Aloc = np.empty((nelem, nk, nloc, nloc))
+        for col in range(nloc):
+            i, j, f = np.unravel_index(col, (n, n, nvar))
+            v = np.zeros(shape)
+            v[:, i, j, f, :] = 1.0
+            out = level.A_un(v)                       # (nelem,n,n,nvar,nk)
+            Aloc[:, :, :, col] = np.moveaxis(out, -1, 1).reshape(nelem, nk, nloc)
+
+        # ---- global dof numbering: node*nvar + field ----
+        gidx = m.gidx                                  # (nelem, n, n)
+        nnode = int(gidx.max()) + 1
+        ndof = nnode*nvar
+        gd = (gidx[..., None]*nvar
+              + np.arange(nvar)).reshape(nelem, nloc)   # (nelem, nloc)
+        rows = np.repeat(gd, nloc, axis=1).ravel()
+        cols = np.tile(gd, (1, nloc)).ravel()
+
+        self.gd, self.ndof, self.nvar = gd, ndof, nvar
+        self.lu = []
+        for k in range(nk):
+            data = Aloc[:, k].reshape(nelem, nloc*nloc).ravel()
+            A = sp.coo_matrix((data, (rows, cols)), shape=(ndof, ndof)).tocsr()
+            # Prescribed dofs assemble to an empty row/col; give them a unit
+            # diagonal so the factorisation is non-singular.  Their residual is
+            # zero (r is masked), so they solve to zero and the final *mask
+            # keeps them there.
+            d = np.asarray(A.diagonal())
+            dead = np.abs(d) <= 1e-300
+            if dead.any():
+                A = A + sp.diags(dead.astype(float))
+            A = (A + A.T)*0.5
+            self.lu.append(spla.splu(sp.csc_matrix(A)))
+
+        # gather/scatter weights: mw = 1/multiplicity, so summing a dof's copies
+        # and weighting recovers the single assembled value (DirectCoarse does
+        # the same thing via B^T diag(mw)).
+        self.mwl = level.mw.reshape(nelem, n, n, nvar, nk)
+
+    def __call__(self, r):
+        shape = self.lev.shape
+        nelem, n, _, nvar, nk = shape
+        nloc = n*n*nvar
+        rw_ = (r*self.mwl).reshape(nelem, nloc, nk)
+        z = np.empty((nelem, nloc, nk))
+        flat_gd = self.gd.ravel()
+        for k in range(nk):
+            g = np.bincount(flat_gd, weights=rw_[:, :, k].ravel(),
+                            minlength=self.ndof)
+            zk = self.lu[k].solve(g)
+            z[:, :, k] = zk[self.gd]
+        return z.reshape(shape)*self.lev.mask
+
+
 class PMG:
     """Recursive p-multigrid V-cycle, usable as a `pcg` preconditioner.
 
@@ -327,7 +419,8 @@ class PMG:
         # coarsest: SOLVED, not smoothed.  A direct factorisation is also a
         # fixed linear operator, so rule 3 is satisfied a fortiori.
         lc = self.levels[-1]
-        self.coarse = (DirectCoarse(lc) if direct_coarse else
+        self.coarse = ((DirectCoarseE(lc) if str(direct_coarse) == 'element'
+                        else DirectCoarse(lc)) if direct_coarse else
                        Chebyshev4(lc.A, lc.M_inv, lc.shape, deg=coarse_deg,
                                   optimised=optimised))
 

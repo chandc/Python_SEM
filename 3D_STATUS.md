@@ -2999,3 +2999,450 @@ The alternative — a Newton-implicit steady driver at small `c`, preconditioned
 the §7Q p-ladder — remains unbuilt and is the faster route if the gate is to be
 revisited often: it would replace 143,714 CFL-limited steps with a few hundred
 linear solves.
+
+## 7S. Row 7 measured on its own terms: the objection is right, the cost is zero, and deflation is dead (2026-09-02)
+
+`operator.ROW7_WEIGHT = 1e-4` down-weights $R_7 = \nabla\cdot\boldsymbol\omega$,
+and the standing objection to it is a good one: **FOSLS keeps that row precisely
+because it is what supplies $H^1$ coercivity for $\boldsymbol\omega$.** The
+div–curl inequality bounds $\|\nabla\boldsymbol\omega\|$ by
+$\|\nabla\times\boldsymbol\omega\| + \|\nabla\cdot\boldsymbol\omega\|$; the
+momentum rows supply the curl and the definition rows supply $\boldsymbol\omega$
+itself, but nothing else in the system supplies the divergence. At $w_7=10^{-4}$
+its contribution to $\mathcal J$ is scaled by $w_7^2 = 10^{-8}$ — gone. So
+down-weighting really is the opposite of the FOSLS recipe, and §7J had never
+measured what that costs. §F1 measured the ellipticity constant in **2D, which
+has no $R_7$ at all**, so it could not settle this either.
+
+Measured on the Mac (`scratch/fosls3d_row7*.py`, 2×2 elements, $c=525$,
+$\nu=1/180$), so the Spark channel run was undisturbed. Dense generalised
+eigenproblems: $\mathcal A q = \lambda H q$ with $H$ the Fourier-transformed
+$H^1$ inner product $\int(|\nabla_{xy}f|^2 + k_z^2|f|^2 + |f|^2)$, assembled
+through the same global basis as $\mathcal A$ so any assembly error is shared.
+
+### 7S.1 $k_z = 0$ is unrepresentative — do not reason about $R_7$ there
+
+The first run said $c_2/c_1$ was *identical to five digits* across $w_7 \in
+[10^{-4},1]$, and the softest mode was **100% pressure, 0.0000% of its residual
+in row 7**. That is real but it is an artifact of $k_z=0$: there
+$R_7 = \partial_x\omega_x + \partial_y\omega_y$ loses its $\mathrm ik_z\omega_z$
+term, and the softest mode is instead a near-null **pressure** mode, soft because
+$p$ enters only the momentum rows, which carry weight $1/c^2 = 3.63\times10^{-6}$.
+
+The blockquote in `3D_FORMULATION.md` §2 says $R_7$ "involves only
+$\omega_x,\omega_y$ at $k_z=0$". True, and that is exactly the case where it does
+**not** bite. At the channel's real wavenumbers ($L_z = 0.34\pi$,
+$\Delta k_z = 5.88$) the picture inverts and §7J's mechanism is confirmed:
+
+| $k_z$ | $c_2/c_1$ ratio, $w_7{=}10^{-4}$ vs 1 | cond $D^{-1}\mathcal A$ gain | softest mode |
+|---|---|---|---|
+| 0 | 1.000 | 1.4× | 100% $p$ |
+| 5.88 | 1.000 | **92×** | 99.6% $\boldsymbol\omega$ |
+| 11.76 | 1.000 | **141×** | 99.8% $\boldsymbol\omega$ |
+| 23.53 | 1.000 | **269×** | 100% $\boldsymbol\omega$ |
+
+### 7S.2 The coercivity cost of down-weighting is ZERO — measured
+
+The first column is the answer to the objection. **$c_2/c_1$ is unchanged to four
+significant figures at every $k_z$ and every $p$ tested** ($N=4,6,8$:
+$2.14\times10^8$, $5.28\times10^8$, $1.06\times10^9$, identical for $w_7=1$ and
+$10^{-4}$) — while $\|\mathcal A(1)-\mathcal A(10^{-4})\|/\|\mathcal A\| = 0.97$,
+so the operator genuinely changed. The discrete ellipticity ratio is set by other
+modes entirely. FOSLS's coercivity argument is about the *continuous* norm
+equivalence; at this discretisation, in this regime, removing $R_7$ does not move
+the constant. **The theoretical objection is correct and the practical price is
+nil.** `ROW7_WEIGHT = 1e-4` stays.
+
+The real cost of down-weighting was already on the books in §7J and is an
+**accuracy** cost, not a conditioning one: TG temporal order 2.00 → 1.72, error
+floor $3.95\times10^{-8}$ → $4.87\times10^{-8}$, rms $\nabla\cdot\boldsymbol\omega$
+$2.21\times10^{-10}$ → $1.04\times10^{-9}$. That is the trade, and it is the right
+way round.
+
+### 7S.3 Two claims tested — one confirms §7J, one retracts a claim of my own
+
+**(a) Block smoothing fails — CONFIRMING §7J, not correcting it.** §7J already
+listed "Block-Jacobi did nothing (1.10×/1.00×/0.89×) — the cluster is a *global*
+mode, unreachable by anything pointwise" as one of its three failed remedies. An
+independent measurement here reproduces that: the 14×14 point-block
+preconditioner recovers **2%**:
+
+| $k_z$ | pt-Jacobi $w_7{=}1$ | **block** $w_7{=}1$ | pt-Jacobi $10^{-4}$ |
+|---|---|---|---|
+| 5.88 | 4.147e+03 | 4.065e+03 | 4.489e+01 |
+| 11.76 | 1.719e+03 | 1.681e+03 | 1.218e+01 |
+| 23.53 | 1.120e+03 | 1.094e+03 | 4.163e+00 |
+
+The stiffness survives *any* node-local preconditioner, so it is intrinsic to
+$\mathcal A$, not to the diagonal. $R_7$ adds a term whose null space is every
+discretely divergence-free $\boldsymbol\omega$ — the operator gains large
+eigenvalues off that space while it keeps small ones on it. That is a constraint
+structure, fixable only by a method with a global coarse space.
+
+**(b) Deflation is dead — and the error being corrected is MINE, not §7J's.**
+§7J reported two separate facts: a softest-mode table (ranks 0–1 at
+$\lambda\approx8.3\times10^{-7}$, 100% in $\omega_x,\omega_y$) and a 10.5× speed-up
+from $w_7$ itself (11132 → 1063 iterations). In the 2026-09-02 session I welded
+them into a claim §7J never made — that *deflating those two modes* would buy
+10.5× — and proposed restoring $w_7=1$ on that basis. It would not. The soft set
+is a **subspace**, a constant 13% of the dof:
+
+| $N$ | dof | soft modes | % of dof | deflate 2 | deflate all |
+|---|---|---|---|---|---|
+| 4 | 512 | 72 | 14.1% | 1.2× | 19.0× |
+| 6 | 1104 | 146 | 13.2% | 1.1× | 60.3× |
+| 8 | 1920 | 251 | 13.1% | 1.1× | 163.8× |
+
+("soft" = below $\lambda_{\min}$ at $w_7=10^{-4}$.) Deflating two modes buys
+**1.1×**, and the soft set grows with the mesh, so no fixed-size deflation space
+works. The plan to "restore $w_7=1$ and deflate" is withdrawn. §7J's own reading
+— that this is a structural defect of the row, fixed by the weight — stands.
+
+### 7S.4 Consequence for the DNS cost gap
+
+The 3.4× gap against fractional step does **not** have a row-7 lever behind it.
+Row 7 is already weighted correctly, block smoothing does not help, and deflation
+does not scale.
+
+**The lever is the preconditioner — see §7T.** An earlier draft of this section
+said the lever was "§7O's measurement that 84% of GPU wall clock is host
+dispatch". That is a misattribution twice over. The 84% is from
+`CUPY_BACKEND.md` Phase 4 and was measured on a **Colab A100**, where
+`normal_op` took 11.45 ms at every size from 0.53 M to 6.17 M dof — a flat curve
+across a 12× range in work, which is what a dispatch-bound loop looks like.
+§7O's GB10 measurements say the opposite about **Spark**: the kernels there are
+"elementwise and bandwidth-bound, at 141.8 GB/s", with PyTorch matvecs at
+1.1–5.3 ms. Spark's CPU and GPU also share memory, so there is no host-device
+copy to hide.
+
+The consequence runs the *other* way from what that draft implied: on a
+bandwidth-bound machine, cutting the ITERATION COUNT converts directly into wall
+clock, because each iteration costs real memory traffic rather than launch
+latency. That makes p-multigrid worth **more** on Spark than on the Mac, not
+less. `lssem3d/cupy_graph.py` remains unwired and is a Colab-A100 fix, not a
+Spark one — and it is blocked there anyway (cuBLAS cannot be stream-captured).
+
+Raw data: `scratch/fosls3d_row7{,_trend,_kz,_block,_count}.npz`.
+
+### 7S.5 The knee predicted a decade of free accuracy. Measured on the channel, it was WRONG — keep $10^{-4}$
+
+A dense small-mesh sweep of cond$(D^{-1}\mathcal A)$ vs $w_7$ ($N=6$, 2×2,
+point-Jacobi) showed a knee: relative to the $10^{-4}$ floor, $w_7=10^{-3}$ cost
+only 1.04×/1.03×/1.00× at $k_z$=5.88/11.76/23.53. That predicted **≤4%
+conditioning, ≈2% in CG iterations** for 10× more row-7 weight, and $10^{-3}$ was
+recommended on that basis.
+
+**Measured on the real solver, the cost is 95%, not 2%.** Channel seed
+(`scratch/fs_seed/seed_ckpt.npz`, $N$=8, 6×18, $N_z$=32), one RKW3 step at
+$dt$=8e−4, tol 1e−8, **point-Jacobi preconditioner — which is what the channel
+actually runs** (`channel3d.make_precond` = `jacobi_diagonal_analytic` +
+`jacobi_inverse`; neither `minchan.py` nor `channel3d.py` mentions multigrid).
+An earlier draft of this section called it "FDM"; that was wrong, and it made
+these iteration counts look inevitable when they are a property of the weakest
+available preconditioner. See §7T:
+
+**Read the CG column carefully:** `channel3d.step` accumulates stage counts with
+`its = max(its, it)`, **not** a sum, so every figure below is the *worst single
+stage of one RKW3 step* — one time step, not a run — and `max_iter` applies per
+stage. Total work per step is ~3× larger. The same applies to the `CG=` field in
+`minchan` run logs.
+
+| $w_7$ | CG its (worst stage, 1 step) | wall/step | rms $\nabla\cdot\boldsymbol\omega$ | relative to $|\boldsymbol\omega|$ | status |
+|---|---|---|---|---|---|
+| 1 | 20000 | 811 s | 3.13e−04 | 1.38e−06 | **capped — not converged** |
+| 1e−2 | 20000 | 765 s | 6.62e−04 | 2.91e−06 | **capped — not converged** |
+| **1e−3** | 11729 | 353 s | 3.32e−03 | 1.46e−05 | converged |
+| **1e−4** | 6025 | 158 s | 1.20e−02 | 5.29e−05 | converged |
+
+$w_7$=1 and 1e−2 both hit `advance`'s per-stage `max_iter=20000` — i.e. at least
+one of their three stages failed to converge at all — so those rows are
+**invalid** — and the "vs $w_7$=1" column of the raw log is meaningless for the
+same reason (all three converged cases differ from the broken reference by an
+identical 1.576e−02, which is the tell).
+
+**The clean comparison, $10^{-3}$ vs $10^{-4}$:** 11729 vs 6025 iterations
+(**1.95×**), constraint violation 1.46e−05 vs 5.29e−05 (**3.6× better**),
+solutions differing by 1.39e−06. Not bit-identical.
+
+**Verdict: $10^{-4}$ stands.** Doubling the solve cost is the wrong direction
+while FOSLS is already 3.4× behind fractional step on the DNS objective, and the
+constraint violation at $10^{-4}$ is 5.3e−05 relative — small in absolute terms.
+$10^{-3}$ remains available at 2× cost *if* $\nabla\cdot\boldsymbol\omega$ at the
+$10^{-5}$ level is ever shown to matter for the channel statistics; that has not
+been established either way.
+
+**Why the proxy failed — a lesson for the next sweep.** cond$(D^{-1}\mathcal A)$
+on a 2×2/$N$=6 dense operator does not predict iteration counts at
+6×18/$N$=8/$N_z$=32, even though both use point-Jacobi — problem size and mode
+count matter as much as the preconditioner. The eigenvalue
+ratio is a property of the operator paired with the preconditioner it was
+measured with; changing either invalidates it. §6.9's "AMG crossover was a NumPy
+artefact" and §7Q's regime finding are the same mistake in different clothes.
+
+**Also established:** neither Taylor–Green configuration can price $w_7$ at all.
+`ic_rotxz` has $\|R_7\| = 1.7\times10^{-14}$ — exactly zero to roundoff, because a
+rotated (x,z) TG has vorticity along $y$ only — and `ic_tgv`'s initial state
+gives a 0.000% row-7 residual share. **The §7E.1 gate reporting "2.00, 2.00,
+2.00, row weights on" is blind to $w_7$ by construction** and must not be cited
+as evidence that down-weighting preserves temporal order. Use the channel.
+
+**API trap:** `momentum_row_weights(c, w7=ROW7_WEIGHT)` binds `ROW7_WEIGHT` as a
+default **at def time**, so monkeypatching `operator.ROW7_WEIGHT` changes nothing
+— silently. Any $w_7$ sweep must wrap the function itself.
+
+Raw data: `scratch/fosls3d_row7_knee.npz`, `scratch/fosls3d_row7_channel.npz`,
+`scratch/row7_channel.log`.
+
+## 7T. The channel runs on point Jacobi, and p-multigrid cannot fix it — the formulation, not the problem (2026-09-02)
+
+Prompted by the objection that 6000 CG iterations in one stage is absurd and that
+p-multigrid should do far better. It does — 8.5× on iterations — and it still
+loses on wall clock, and the reason is structural.
+
+### 7T.1 What `run01` is actually preconditioned with
+
+**Point Jacobi.** `channel3d.make_precond` = `jacobi_diagonal_analytic` +
+`jacobi_inverse`. Neither `scratch/minchan.py` nor `scratch/channel3d.py`
+contains the string `pmg` or `multigrid`. §7S.5's first draft called it "the
+production FDM preconditioner"; that was wrong.
+
+Meanwhile `lssem3d/precond.py` has a `PMG` class that takes the FOSLS operator
+directly and `S3.pcg` has always accepted a callable `M_inv`. The reason it was
+never wired in is **plumbing, not mathematics**: on numpy/numba `channel3d.stage`
+routes to `PAR.pcg`, which parallelises across Fourier modes by slicing
+`M_inv[..., s]` (`parallel.py:103`) — fine for a diagonal, impossible for a
+callable V-cycle. On a device backend that path is skipped entirely, so **on
+Spark's `cuda` backend PMG needs no change at all.**
+
+### 7T.2 Channel, p=8, one stage, tol 1e−8, consistent RHS `b = A x_true`
+
+| preconditioner | CG its | solve | build |
+|---|---|---|---|
+| **Jacobi** (production) | **3436** | 156 s | 0.1 s |
+| PMG (8,4,2) chebyshev coarse | **402** | 287 s | 0.9 s |
+| PMG (8,4,2) DIRECT coarse | 441 | 312 s | 4.3 s |
+| PMG (8,4) DIRECT | 434 | 389 s | 66.9 s |
+| PMG (8,6,4,2) DIRECT | 405 | 346 s | 5.0 s |
+
+**8.5× fewer iterations, 2× more wall clock.** A `deg=6` V-cycle costs ~12 fine
+applies plus ~12 at p=4 (≈0.31× the work) ≈ **16 operator-applies per CG
+iteration** against Jacobi's 1: 441×16 ≈ 7000 vs 3436×1. The measured 2.0× wall
+ratio is exactly that arithmetic, so it carries to a bandwidth-bound GPU too.
+
+### 7T.3 `DirectCoarseE` — an exact coarse solve that is actually affordable
+
+`DirectCoarse` probes the ASSEMBLED operator once per global dof: ~114,000 full
+applies for the channel's coarse level, which is why `direct_coarse=False` was
+the only usable setting there. But the unassembled operator is
+**element-block-diagonal** and the modes never couple, so a one-hot at local node
+(i,j,f) in *every element and every mode at once* returns all of their columns
+simultaneously — `(p+1)²·14` probes TOTAL (126 at p=2), independent of mesh size
+and of `nk`. Blocks are then assembled sparsely through `gidx` and factorised per
+mode. Implemented as `precond.DirectCoarseE`, selected by
+`PMG(direct_coarse='element')`, with `_Level.A_un` exposing the unassembled
+operator.
+
+Verified identical to the reference at every point measured — 110/110, 214/214,
+349/349 CG — at up to **~100× less build time** (p=20: 0.67 s vs 78 s).
+
+**But it buys nothing here.** At p=8 the exact solve is *worse* than Chebyshev
+(441 vs 402); at p≥12 it wins by only 2–3% (222 vs 228, 372 vs 379, 496 vs 512).
+The coarse grid is not where this problem's difficulty lives. (An exact solve can
+lose because `coarsen_mesh` **rediscretises** rather than forming the Galerkin
+product `RAP`, so "exact" is exact for an operator that is not the Galerkin
+coarse operator.)
+
+### 7T.4 THE DISCRIMINATOR: 3D Ghia cavity Re=1000 at k_z=0
+
+§7K found the channel ratio pinned while 2D §6.9 found the cavity flat — two
+variables at once, PROBLEM and FORMULATION. `scratch/pmg3d_cavity_kz0.py` runs
+the 3D code on the 2D cavity, changing only the formulation. 4×4 elements,
+c=525, tol 1e−8:
+
+| N | gDOF | Jacobi | PMG | ratio |
+|---|---|---|---|---|
+| 6 | 5163 | 950 | 131 | 7.3× |
+| 8 | 8651 | 1432 | 204 | 7.0× |
+| 12 | 18315 | 2808 | 448 | 6.3× |
+| 16 | 31563 | 4981 | 791 | 6.3× |
+| 20 | 48395 | 6410 | 1043 | 6.1× |
+| **growth** | | **6.75×** | **7.96×** | |
+
+**PMG grows FASTER than Jacobi** — against 2D's ladder 1.05× / Jacobi 4.00× on
+the same problem.
+
+> **THIS SECTION'S ORIGINAL CONCLUSION WAS WRONG.** It read "it is the FOSLS
+> formulation, not the channel", and cited the c=525 vs c=5405 agreement as
+> ruling out §7Q's regime effect. Both 525 and 5405 are ALREADY in the degraded
+> regime, so that comparison proved nothing. **See §7U: the controlling variable
+> is `c`, and 2D does exactly the same thing at matched `c`.** The cavity ran at
+> c=525, so it never was a formulation discriminator.
+
+### 7T.5 One hypothesis measured and killed
+
+The natural explanation — that the slow error is neither high-frequency (the
+smoother's job) nor low-order-polynomial (the coarse grid's job), so it falls
+between them — is **wrong**. Decomposing onto the eigenvectors of $D^{-1/2}AD^{-1/2}$
+and applying a full V-cycle to each: **0 of 118 sampled eigenvectors survive**,
+reduction factors 1e−4 to 0.05, ω-dominated and pressure-dominated alike. The
+V-cycle handles every eigendirection it is shown. (Bounding $\|v - MAv\|$ on
+eigenvectors does not bound $\|I-MA\|$, since $I-MA$ is not diagonalised by $A$'s
+eigenvectors — so this kills the hypothesis without fully explaining the counts.)
+
+Also killed: a shared Chebyshev ρ across Fourier modes. `estimate_lambda_max`
+reduces over the whole array, mode axis included, but the per-mode spread is only
+**1.28×** (λ_max 3.27→2.55 over 17 modes) because Jacobi normalises each mode to
+O(1). Not worth changing. And the 2D and 3D `Chebyshev4` are the same algorithm
+line for line — same `_BETA4`, `safety=1.3`, `npow=20`.
+
+### 7T.6 Where this leaves the DNS
+
+> **SUPERSEDED BY §7U.** This said p-multigrid is "not the route to
+> N-independence in this formulation — settled on two problems", and proposed a
+> smoothing-degree sweep to convert the 8.5× iteration gain into wall clock.
+> Both are wrong. The formulation is not the cause (§7U.1), and the degree sweep
+> was run and shows total WORK is flat at ~7000 across deg=1…6 (§7U.2) — the
+> V-cycle is a polynomial in `D^-1 A`, and CG already builds the optimal such
+> polynomial, so no degree can win.
+
+Data: `scratch/pmg_pcg_{cheb,direct}.log`, `scratch/coarse_ab{,_p}.log`,
+`scratch/cav3d_c525.log`, `scratch/vcycle_spectrum.log`,
+`scratch/pmg3d_cavity_kz0_c525.npz`, `scratch/direct_coarse_check.py`.
+
+## 7U. p-independence is a `c`-REGIME property that 2D and 3D share — and four proposed fixes, all measured, all rejected (2026-09-03)
+
+Prompted by the objection that ~2000 CG iterations for one Fourier mode is
+absurd and that the count should not grow with `p`. Both are fair. This section
+records what the growth actually is, and four candidate repairs that were built
+and measured rather than argued.
+
+### 7U.1 THE CONTROLLING VARIABLE IS `c`, NOT THE DIMENSION
+
+§7T.4 read the 3D cavity's pinned ratio as proof that the FOSLS formulation
+cannot be p-independent. That was wrong, and the control experiment it needed
+was to run **2D under the same protocol**. §6.9's famous 1.05× is an average of
+CG iterations per BDF step driving to steady state at `dt = 1` — a warm, smooth,
+near-steady RHS at mass coefficient **c = 1**. Every 3D sweep here uses a cold
+manufactured RHS at **c = 5405**. Different experiments.
+
+Run 2D the 3D way (`scratch/p_indep_2d.py`, cold RHS, halving ladder, direct
+coarse, 4×4 cavity, Re=1000):
+
+| | Jacobi growth | ladder growth | ratio |
+|---|---|---|---|
+| **2D, dt=1 (c=1)** | 3.42× | **0.85× — p-INDEPENDENT** | 20× → **82×** |
+| **2D, dt=1.85e−4 (c=5405)** | 4.40× | **4.85× — grows** | pinned 6.6–7.3× |
+| **3D, c=5405** | 5.12× | **5.56× — grows** | pinned 6–8× |
+
+**2D at the channel's `c` is indistinguishable from 3D.** The transition is
+sharp and monotone (`scratch/c_sweep_2d.py`, ladder growth N=8→24):
+
+| c | 1 | 10 | 50 | 200 | 525 | 2000 | 5405 |
+|---|---|---|---|---|---|---|---|
+| growth | **0.85×** | 2.05× | 2.72× | 2.91× | 3.52× | 4.17× | 4.97× |
+| Jac/PMG | 81.6× | 19.4× | 12.6× | 9.3× | 7.9× | 7.4× | 6.4× |
+
+p-independence exists only near c ≈ 1 and is gone by c = 10. **§7Q was right that
+this is a regime effect**; §7T dismissed it by comparing 525 against 5405, both
+of which are already deep in the degraded regime.
+
+The mechanism is in the weighting: `momentum_row_weights` scales momentum rows by
+1/c², so the functional sees $(u + \nabla p/c + \dots)^2$ — pressure enters at
+O(1/c), its block at O(1/c²), which at c=5405 is 3.4e−8. Pressure becomes a
+near-null direction that is not smooth, so no p-coarsening can represent it.
+Same object as the k_z=0 softest mode being 100% pressure at cond 9.0e4 (§7S.1).
+
+`c = 1/(β_k dt)` is set entirely by the timestep, and dt=8e−4 is CFL-limited by
+the **explicit** convective term. Making convection implicit would raise dt,
+lower c, and move toward the regime where the ladder works. That is the only
+identified route to p-independence here, and it is a time-stepper change.
+
+### 7U.2 Four fixes built, measured, rejected
+
+**(a) Exact coarse solve — `DirectCoarseE`.** Built (§7T.3), verified identical
+to the reference at every p, ~100× faster to build. Changes nothing: 441 vs
+Chebyshev's 402 at p=8, 2–3% at p≥12.
+
+**(b) Galerkin coarse operator instead of rediscretised.** `coarsen_mesh`
+rediscretises, and for a normal-equation system $L_c^TW_cL_c \ne P^TL^TWLP$, so
+this looked like the defect. Built both and solved exactly
+(`scratch/galerkin_coarse.py`): **86/86, 168/168, 300/300, 460/469** — no
+difference at all, because the p=2 space is an exact subspace of p=N and the two
+coarse operators differ only by quadrature.
+
+**(c) Cheaper V-cycle (smoothing degree).** Total WORK = its × (applies/cycle+1):
+
+| | Jacobi | deg=1 | deg=2 | deg=3 | deg=4 | deg=6 |
+|---|---|---|---|---|---|---|
+| CG | 3436 | 2049 | 1138 | 814 | 602 | 402 |
+| work | 6872 | 7417 | 7101 | 7212 | 6910 | 6721 |
+
+**Flat at ~7000 across a 6× range in degree.** The V-cycle is a polynomial in
+$D^{-1}A$, and **CG already constructs the optimal polynomial over its Krylov
+space** — so wrapping another around it redistributes work and cannot reduce it.
+No degree wins. This also explains the level-count and coarse-solver
+insensitivity: they are all the same method in disguise.
+
+**(d) Momentum row weight.** `rw[4:7] = w_mom/c²` with `w_mom=1` is inherited
+from 2D ("so their mass coefficient is 1"). On a manufactured single-mode RHS the
+optimum is `w_mom = 100` — **4.28× fewer iterations, identically at c = 525,
+1500, 5405, 15000**, with fitted scaling c^−2.00 matching the default's. Looked
+like a free 4×.
+
+**It is not free — it buys speed by abandoning incompressibility**
+(`scratch/rowweight_accuracy.py`, one real RKW3 step, tol 1e−11):
+
+| w_mom | CG | rms ∇·u | rms ∇·ω | max\|dU\|/\|U\| |
+|---|---|---|---|---|
+| **1 (default)** | 7930 | **2.74e−03** | **1.20e−02** | — |
+| 30 | 3090 (2.57×) | 9.69e−02 (**35×**) | 3.60e−01 (30×) | 8.8e−03 |
+| 100 | 3652 (2.17×) | 2.99e−01 (**109×**) | 1.19e+00 (99×) | 1.9e−02 |
+
+`w_mom` up-weights momentum *relative to the constraint rows*, so the
+least-squares solution satisfies momentum better and continuity worse. The
+iteration count improves because the operator enforces less. On the real 17-mode
+step the gain is only 2.17× anyway, and the optimum shifts (30 beats 100).
+**`w_mom = 1` is correctly scaled; the "100× too small" reading was an iteration
+count mistaken for a figure of merit.** REJECTED.
+
+### 7U.3 What was verified sound
+
+* **The Jacobi preconditioner is exact.** `jacobi_diagonal_analytic` matches the
+  true assembled diagonal to **3.1e−16** at all 2040 dofs, and matches the
+  reference probing implementation identically (`scratch/jacobi_check.py`). The
+  ~2000 iterations is what the operator genuinely costs: cond(D⁻¹A) is 1.7e3–5.4e3
+  on a 2×2/N=6 mesh and grows with the mesh. **cond(A) = cond(L)² is intrinsic to
+  normal equations** — the price of least squares. (LSQR would not help: it is
+  mathematically equivalent to CG on the normal equations.)
+* **The V-cycle is symmetric and positive definite** — asymmetry 5.9e−16,
+  ⟨Mr,r⟩ > 0 (`scratch/pmg_symmetry.py`). CG is valid.
+* **2D and 3D use the same `Chebyshev4`**, line for line — same `_BETA4`,
+  `safety=1.3`, `npow=20`.
+* **A shared Chebyshev ρ across Fourier modes costs nothing**: per-mode λ_max
+  spread is 1.28× (3.27→2.55 over 17 modes), because Jacobi normalises each mode
+  to O(1).
+
+### 7U.4 Mode batching — a real but modest win
+
+`pcg` batches all nk modes and applies `A` to all of them every iteration,
+exiting only when the worst has converged. Measured per-mode (correct masks):
+3430, 2822, 2379, 1958, … 1720, 50 — so k_z=0 is the worst but only **2× above
+typical**, not the 65× an earlier buggy-mask run suggested. Measured wall: one
+batch 117.3 s → **per-mode 58.7 s, 2.00×**. Two groups is *worse* (0.81×), four
+groups a wash (1.05×); only full per-mode splitting pays.
+
+### 7U.5 A measurement trap that invalidated three results before it was caught
+
+`BC.build_mask(mesh, nmode, ..., nz)` zeroes the **entire imaginary half of
+column 0** of the array it is handed (and of the Nyquist column), because at
+k_z=0 those components are unphysical. Handing it a **subset** of modes makes it
+do that to the wrong ones: every single-mode solve at k_z≠0 was silently solving
+a **halved problem**, and every mode-group solve masked the wrong member.
+
+Casualties, all corrected above: the h-sweep (11→41 iterations — void), the
+per-mode table that made k_z=0 look 65× worse than its neighbours, and a
+"12.84× from mode grouping" that is really 2.00×. **Build the mask once for the
+full nk and slice it.**
+
+Data: `scratch/{p_indep_2d,c_sweep_2d,galerkin_coarse,pmg_deg_sweep,jacobi_check,
+pmg_symmetry,rowweight_opt,rowweight_accuracy,mode_group_solve}.py` and their logs.

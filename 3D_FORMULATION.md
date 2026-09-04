@@ -49,13 +49,21 @@ $\boldsymbol{\omega} = \nabla\times\mathbf{u}$ and is retained as an independent
 row.
 
 > **This row must be DOWN-WEIGHTED.** An earlier version of this document said
-> the functional "benefits from it"; that is refuted (3D_STATUS §7J). At weight 1
-> it is the single largest source of ill-conditioning in the system: it is the
-> one row 2D does not have, it involves only $\omega_x,\omega_y$ at $k_z=0$, and
-> it loads their Jacobi diagonal with derivative-squared terms while
-> contributing nothing to $\mathcal{A}$ for divergence-free vorticity. Measured
-> cost: **10.5× the CG iterations** and a conditioning penalty growing with
-> order (139× at $p$=4, 2885× at $p$=10). `operator.ROW7_WEIGHT` = $10^{-4}$.
+> the functional "benefits from it"; that is refuted (3D_STATUS §7J, quantified
+> in §7S). At weight 1 it is the single largest source of ill-conditioning in the
+> system: it is the one row 2D does not have, and it annihilates every discretely
+> divergence-free $\boldsymbol\omega$, so $\mathcal A$ gains large eigenvalues off
+> that subspace while keeping small ones on it. Conditioning penalty at $w_7=1$,
+> measured at the channel's wavenumbers: **92× at $k_z$=5.88, 269× at 23.53**,
+> growing with $k_z$ and with order. `operator.ROW7_WEIGHT` = $10^{-4}$.
+>
+> Two cautions, both from §7S. **(i)** The $k_z=0$ case, where this row involves
+> only $\omega_x,\omega_y$, is the one case where it does *not* bite — the softest
+> mode there is pressure, not vorticity. Do not reason about $R_7$ at $k_z=0$.
+> **(ii)** Down-weighting costs **zero** $H^1$ coercivity: $c_2/c_1$ is unchanged
+> to four figures across $w_7\in[10^{-4},1]$ at every $k_z$ and $p$ measured. The
+> objection that this inverts the FOSLS recipe is correct in theory; the measured
+> price is an *accuracy* one (§7J: TG order 2.00 → 1.72), not a coercivity one.
 
 Everything is first order, which is what permits a single $C^0$ spectral-element
 space for every variable.

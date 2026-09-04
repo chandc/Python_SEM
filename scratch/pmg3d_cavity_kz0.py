@@ -54,7 +54,7 @@ NU = 1.0/RE
 # "the FOSLS formulation pins the ratio" from "the mass-dominated regime does".
 C = float(os.environ.get('CAV3D_C', 525.0))
 TOL, MAXIT = 1e-8, 40000
-ORDERS = (6, 8, 12, 16, 20)
+ORDERS = tuple(int(v) for v in os.environ.get('CAV3D_N', '6,8,12,16,20').split(','))
 OUT = os.path.join(_R, 'scratch', f'pmg3d_cavity_kz0_c{int(float(os.environ.get("CAV3D_C", 525)))}.npz')
 
 
@@ -99,7 +99,8 @@ def main():
         orders = ladder(N)
         try:
             pre = P3.PMG(m, 1, 1, NU, C, kz, kap=0.0, rw=rw, orders=orders,
-                         deg=6, coarse_deg=10, pin_p=True, direct_coarse=True,
+                         deg=6, coarse_deg=10, pin_p=True,
+                         direct_coarse=os.environ.get('CAV3D_DC', 'element'),
                          mask=mask)
             t0 = time.perf_counter()
             _, itp, _ = S3.pcg(b, D, m.facx, m.facy, kz, NU, C, m, mask, pre,
