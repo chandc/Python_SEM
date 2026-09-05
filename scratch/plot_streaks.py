@@ -18,6 +18,7 @@ for _v in ('OMP_NUM_THREADS',): os.environ.setdefault(_v, '4')
 _R = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _R); sys.path.insert(0, os.path.join(_R, 'scratch')); os.chdir(_R)
 import numpy as np
+import semplot
 import matplotlib; matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
@@ -40,29 +41,31 @@ def main():
         X[e] = m.xnod[e][:, None]; Y[e] = m.ynod[e][None, :]
     yp = np.minimum(Y, 2.0 - Y)*RT
 
-    fig, axes = plt.subplots(len(TARGETS), 1, figsize=(11.5, 9.2))
+    fig, axes = plt.subplots(len(TARGETS), 1, figsize=(11.5, 9.2), sharex=True)
     for ax, tgt in zip(axes, TARGETS):
-        sel = np.abs(yp - tgt) < max(2.0, 0.18*tgt)
-        # fluctuation: remove the plane mean at this y+
-        up = u[sel] - u[sel].mean()
-        xs = np.concatenate([X[sel]]*nz)
-        zs = np.concatenate([np.full(sel.sum(), zz) for zz in z])
-        vs = np.concatenate([up[:, k] for k in range(nz)])
-        lim = np.percentile(np.abs(vs), 98)
-        sc = ax.tricontourf(xs*RT, zs*RT, vs, levels=np.linspace(-lim, lim, 33),
-                            cmap='RdBu_r', extend='both')
+        # spectral interpolant on a uniform grid -- NOT tricontourf on the raw
+        # nodal points, which duplicates every interface node and triangulates
+        # GLL clustering into slivers.  See semplot.py.
+        xf, zf, img = semplot.plane(u, m, N, tgt, RT=RT, nz=nz)
+        img = img - img.mean()
+        lim = np.percentile(np.abs(img), 99)
+        sc = ax.pcolormesh(xf*RT, zf*s['lz']*RT, img, cmap='RdBu_r',
+                           vmin=-lim, vmax=lim, shading='gouraud', rasterized=True)
+        ax.contour(xf*RT, zf*s['lz']*RT, img, levels=[-0.5*lim, 0.5*lim],
+                   colors='k', linewidths=0.35, alpha=.45)
         ax.set(ylabel='$z^+$', title=f"$u'^+$ at $y^+\\approx{tgt:.0f}$   "
-                                     f"(rms {vs.std():.2f}, range ±{lim:.2f})")
+                                     f"(rms {img.std():.2f})")
         ax.set_aspect('equal')
         plt.colorbar(sc, ax=ax, fraction=0.020, pad=0.01)
-        # spanwise spacing from the two-point correlation at this height
-        sub = up - up.mean()
-        c = np.array([np.mean(sub*np.roll(sub, k, axis=1)) for k in range(nz//2+1)])
+        # spanwise spacing from the two-point correlation, on the nodal data
+        sel = np.abs(yp - tgt) < max(2.0, 0.18*tgt)
+        up = u[sel] - u[sel].mean(); up = up - up.mean()
+        c = np.array([np.mean(up*np.roll(up, k, axis=1)) for k in range(nz//2+1)])
         c /= c[0]
         dzp = (s['lz']/nz)*np.arange(nz//2+1)*RT
-        neg = np.argmin(c)
-        print(f"  y+={tgt:4.0f}: u' rms {vs.std():5.2f}, R_uu minimum {c[neg]:+.3f} "
-              f"at dz+={dzp[neg]:5.1f}  ->  streak spacing ~{2*dzp[neg]:.0f} wall units")
+        neg = int(np.argmin(c))
+        print(f"  y+={tgt:4.0f}: u' rms {img.std():5.2f}, R_uu min {c[neg]:+.3f} "
+              f"at dz+={dzp[neg]:5.1f}  ->  streak spacing ~{2*dzp[neg]:.0f}")
     axes[-1].set_xlabel('$x^+$')
     fig.suptitle(f"run01 FOSLS-3D minimal channel $Re_\\tau$=180, t={t:.2f} — "
                  f"near-wall streaks  ($L_x^+$={np.pi*RT:.0f}, $L_z^+$={s['lz']*RT:.0f})",

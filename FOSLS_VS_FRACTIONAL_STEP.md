@@ -112,18 +112,40 @@ nothing rescaled, no constant fitted):
 ![streaks](figs_fosls_vs_fs/streaks.png)
 
 Near-wall streaks at three heights: elongated ribbons of alternating u′,
-strongest at y⁺≈12 where u′ peaks. Lz⁺ = 192 holds roughly two streak pairs —
-that is what makes the box "minimal". The vertical striations at x⁺ ≈ 95, 190,
-285 … are element boundaries, expected for a C⁰ field.
+strongest at y⁺≈12 where u′ peaks. Lz⁺ = 192 holds roughly one to two streak
+pairs — that is what makes the box "minimal".
+
+> **Rendering note.** These are produced by EVALUATING THE SPECTRAL INTERPOLANT
+> on a uniform grid (`scratch/semplot.py`), not by triangulating nodal values.
+> An earlier version of this figure used `tricontourf` on the raw element-local
+> array and showed X-shaped artifacts at regular x intervals, which I wrongly
+> described as C⁰ element-boundary features. They were **Delaunay artifacts**:
+> the array repeats every interface node once per owning element — 216 points
+> carrying only 49 distinct x locations, multiplicity up to 8 — and GLL
+> clustering (3.6:1 spacing ratio) turns the triangulation into slivers.
+> Interpolating in y and x by the Lagrange basis and refining z by FFT
+> zero-padding is exact for this discretisation and removes them entirely.
 
 ![omega_x](figs_fosls_vs_fs/omega_x.png)
 
 Streamwise vorticity — a **primary unknown** in FOSLS, not a derivative of u.
-Panel (b) shows the counter-rotating structures hugging the wall below y⁺≈30.
+Panel (a) resolves the elongated quasi-streamwise vortices; panel (b) is the
+x-averaged cross-section.
 Panel (c) is the spanwise correlation: the negative lobe locating the partner
 vortex is **shallow in both the early and late fields** (−0.118 → −0.055) and
 sits outside the canonical 30–50 band. Shallow minima make the *location* noisy,
 so the depth is the trustworthy part — the pairing is weaker than canonical.
+
+![three fields](figs_fosls_vs_fs/three_fields.png)
+
+u′, ω_x and p′ on the SAME plane at y⁺≈15 — all three are primary unknowns, so
+no post-processing stands between them. The low-speed streak at z⁺≈100–140 runs
+the full length of the box; the ω_x vortices sit on its **flanks**, not its axis
+(streak-core |ω_x| = 8.5 against 14.3 overall); and p′ is visibly smoother and
+larger-scale than either, so the pressure carries the correct elliptic character
+even though FOSLS never solves a Poisson equation. corr(p′, |ω_x|) = −0.11 —
+vortex cores are low pressure — and the 20% lowest-speed regions sit at
+p′ = −0.15 against 0.00 overall.
 
 ## 6. Summary
 
