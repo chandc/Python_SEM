@@ -1,6 +1,6 @@
 # FOSLS vs the fractional-step method for DNS — measured on the same problem
 
-*2026-09-04. Evidence from `run01`, the FOSLS-3D minimal channel at Re_τ=180,
+*Updated 2026-09-06 (t=4.32 of 5.0). Evidence from `run01`, the FOSLS-3D minimal channel at Re_τ=180,
 seeded from a converged fractional-step field on an identical mesh. Same
 geometry, same resolution, same Re — only the formulation differs, which is what
 makes the comparison worth anything.*
@@ -57,35 +57,66 @@ consequences (details in `FOSLS_TIME_DEPENDENT.md`):
 The fractional-step method pays one Poisson solve per step instead. **That is
 the ~3.4× cost gap, and it is structural rather than an implementation defect.**
 
-## 3. Small scales: a real effect, but weaker than a single snapshot suggests
+## 3. Small scales: mild damping, and TWO over-readings corrected
 
-**This section corrects an over-reading.** From single snapshots it looked like
-the streaks had *doubled* in width (Δz⁺ 96 → 180) and ω_x had lost 30%. The time
-series in **panel (c)** does not support the first claim:
+**This section has been wrong twice, in the same way both times: reading a trend
+off two snapshots of a flow that oscillates slowly.** Both claims are withdrawn.
 
-| streak spacing Δz⁺ over the run | 96, 84, 76, 120, 113, 105, 113, 85, **180** |
-|---|---|
-| mean 108, sd 29, range 76–180 | canonical ≈ 100 |
+**Withdrawn claim 1 — "the streaks have doubled in width."** From two snapshots
+the spanwise spacing appeared to go Δz⁺ 96 → 180. Across every checkpoint it
+reads
 
-**The spacing oscillates around ~108 — essentially canonical — and the t=2.08
-value of 180 is 5.4 standard deviations above the earlier mean, i.e. a single
-outlier taken at one instant of the bursting cycle, not a trend.** Quoting it as
-"the streaks have doubled" was wrong.
+    96, 84, 76, 120, 113, 105, 113, 85, 180, 156, 120
 
-What does survive:
+mean ≈ 113, sd 29, against the canonical ~100. The 180 was a single outlier 5.4
+sd above the earlier mean. **The spacing oscillates around canonical.**
 
-* **ω_x rms declines from ~35 to ~26** (mean of the last four samples), with
-  large burst-cycle oscillation (range 23.5–36.0). Real, roughly −25%, but not
-  the clean monotone decay a single pair of snapshots implied.
-* **Panel (b): the intra-element Legendre spectrum is only slightly below the
-  fractional-step field**, and only at degrees 6–8. The difference is mild — this
-  is *not* a strongly over-dissipative scheme.
-* u′⁺ sits 5% below canonical while every other stress is within 2–3% (§4).
+**Withdrawn claim 2 — "ω_x rms declined ~25%."** Measured at y⁺≈15–20 over the
+run: 35.0 → 24.6 → 20.0 → **28.2**. It oscillates with the bursting cycle across
+a wide range; the "decline" was two points on a downswing.
 
-So the fair statement is **mild damping of the smallest scales, of order
-20–25% in ω_x, with the streak spacing statistically indistinguishable from
-canonical.** Consistent with least-squares minimisation penalising
-high-frequency content, but far short of the effect a single snapshot suggested.
+What survives is only **panel (b)**: the intra-element Legendre spectrum is
+slightly below the fractional-step field, and only at degrees 6–8. **Mild damping
+of the smallest scales, consistent with least-squares minimisation penalising
+high-frequency content — but far weaker than a single snapshot suggested, and
+not a trend.**
+
+## 3b. Does FOSLS SUSTAIN turbulence? — the trend reversed
+
+At t=2.44 a linear fit to `rms_w` over the post-transient window gave slope
+**−0.037 with a t-statistic of −12.4**, and dissipation falling 7.2%/unit t. That
+looked decisive. **It was wrong**, and the way it was wrong is worth recording:
+an OLS standard error assumes independent samples, and successive `rms_w` values
+are strongly autocorrelated — the fit covered roughly *half* of a slow
+oscillation, so it measured the downswing and reported it as a trend with
+spurious confidence.
+
+With data to t=4.32 the same fit **inverts**:
+
+| fit window | slope | t-stat |
+|---|---|---|
+| t ∈ (0.9, 2.44] — the original fit | **−0.0372** | **−12.4** |
+| t > 0.9 — all data now | **+0.0367** | **+14.2** |
+
+Binned means show the full shape — a dip and a recovery to *above* the start:
+
+| window | rms_w | U_b | eps |
+|---|---|---|---|
+| (0.9, 1.5] | 0.816 | 15.841 | 106.1 |
+| (1.5, 2.0] | 0.778 | 15.857 | 98.5 |
+| (2.5, 3.0] | **0.743** | 15.909 | 104.4 |
+| (3.5, 4.0] | 0.874 | 15.905 | 119.4 |
+| **(4.0, 4.6]** | **0.914** | **15.871** | **120.5** |
+
+`rms_w` reached 0.701 at t=2.70 and 0.967 at t=3.45. **`U_b` is now falling**
+(15.915 → 15.871) while dissipation sits at its run maximum — more drag, more
+dissipation, less mean-flow energy. That is the *opposite* of the laminarising
+signature, in which `U_b` would climb toward the laminar ~60.
+
+**Conclusion: over 4.3 turnovers (~9 bursting cycles) there is no evidence of
+decay, and the strongest turbulence occurs at the END of the run.** What cannot
+be claimed is indefinite sustenance — 4.3 turnovers cannot exclude decay on a
+timescale of tens.
 
 ## 4. What FOSLS gets right: the statistics
 
@@ -94,13 +125,22 @@ high-frequency content, but far short of the effect a single snapshot suggested.
 261 samples to t=2.08, in wall units (u_τ = δ = 1, ν = 1/180 by construction —
 nothing rescaled, no constant fitted):
 
-| | FOSLS | KMM Re_τ=180 | off by |
+| | FOSLS (t=4.32) | KMM Re_τ=180 | off by |
 |---|---|---|---|
-| −⟨u′v′⟩⁺ peak | **0.719 @ y⁺=30.0** | 0.72 @ 30 | **0.1%** |
-| v′⁺ peak | 0.832 | 0.85 | 2.1% |
-| w′⁺ peak | 1.074 | 1.05 | 2.3% |
-| u′⁺ peak | 2.557 | 2.70 | 5.3% |
-| **total-stress balance error** | **0.009** | 0 | — |
+| v′⁺ peak | 0.871 | 0.85 | 2.5% |
+| w′⁺ peak | 1.027 | 1.05 | 2.2% |
+| u′⁺ peak | 2.861 @ y⁺=16.8 | 2.65–2.75 | 4.0% high |
+| −⟨u′v′⟩⁺ peak | 0.776 @ y⁺=33.6 | 0.72 @ 30 | 7.8% high |
+| total-stress balance error | 0.056 | 0 | — |
+
+**The balance error is NOT converging monotonically** — it fell 0.107 → 0.009 by
+t=2.08 and has since risen to 0.056. It tracks the *phase* of the bursting cycle,
+not the sample count: the run has been in a sustained energetic phase since
+t≈3.0, and 542 samples over ~9 cycles is too few for that to cancel. Every
+individual stress has meanwhile oscillated *around* canonical with signs going
+both ways (u′⁺ was 5% low at t=2.4 and is 4% high now), which is the signature of
+converged-but-noisy statistics rather than a biased solution. The MEAN profile
+has been stationary since t≈2.0.
 
 **Panel (d) is the decisive check**: for a fully developed channel
 −⟨u′v′⟩⁺ + dU⁺/dy⁺ = 1 − y/δ **exactly**, with no fitted constants. It closes to
@@ -157,13 +197,21 @@ p′ = −0.15 against 0.00 overall.
 3. **One unified SPD solve** — no splitting error, no fractional-step pressure
    BC ambiguity, no inf–sup condition, CG applies directly (SPD to 5.9e−16).
 4. **Second-order in time, verified** (2.00 over three refinements).
-5. Statistics converge to canonical: stress balance under 1%, shear stress 0.1%.
+5. Statistics reach canonical: every stress within a few percent, oscillating
+   around the reference values with signs both ways; the mean profile is
+   stationary from t≈2.0.
+6. **It sustains turbulence.** Over 4.3 eddy turnovers (~9 bursting cycles) there
+   is no evidence of decay, and the flow is at its most turbulent at the END of
+   the run (§3b).
 
 **Cons**
 
 1. **cond(A) = cond(L)² is intrinsic** — ~3.4× the cost, and seven
    preconditioner strategies failed to close it.
-2. **Mild small-scale damping** — ω_x rms ~−25%, u′⁺ 5% low.
+2. **Mild small-scale damping** — visible only as a slightly steeper
+   intra-element spectrum at Legendre degrees 6–8. Two stronger claims (streaks
+   doubling in width, ω_x rms falling 25%) were made from pairs of snapshots and
+   are **withdrawn**: both quantities oscillate with the bursting cycle (§3).
 3. **The row weights are free parameters that trade accuracy for conditioning.**
    The system is overdetermined (8 rows, 7 unknowns), so *the discrete answer
    depends on the weighting*: `w_mom`=100 bought 4.28× fewer iterations and 109×
@@ -173,12 +221,25 @@ p′ = −0.15 against 0.00 overall.
    fractional-step code uses one) and does not dealias in (x,y) — measured as not
    currently harmful, but missing insurance. z *is* dealiased by the 3/2 rule.
 
-**For DNS specifically:** FOSLS buys pointwise divergence and a directly computed
-vorticity field at the price of ~3.4× cost and mild small-scale damping. If the
+**For DNS specifically:** FOSLS sustains wall turbulence and buys pointwise
+divergence and a directly computed vorticity field, at the price of ~3.4× cost
+and mild small-scale damping. If the
 science depends on derivative quantities — enstrophy, vortex dynamics, SGS
 modelling — that is an attractive trade. If the smallest resolved scales must be
 faithful, or long statistics are needed cheaply, fractional step remains the
 better instrument.
+
+## 7. A methodological note
+
+Three claims in earlier drafts of this document were wrong, all in the same way:
+**a trend was read off two snapshots, or off a linear fit to a fraction of a slow
+oscillation.** The streak width, the ω_x decline, and the "significant decay" of
+`rms_w` (t-statistic −12.4, which inverted to +14.2 with more data) were all
+artifacts of that. The flow varies on a timescale of ~0.5 in `t` for the bursting
+cycle and something longer again for the modulation seen here, so **no trend in
+this run should be believed from fewer than several cycles**, and OLS
+significance tests on autocorrelated samples will happily report decisive-looking
+statistics for effects that are not there.
 
 *Figures regenerated by `scratch/plot_evidence.py`, `scratch/plot_stats.py`,
 `scratch/plot_streaks.py`, `scratch/plot_omegax_now.py`.*
