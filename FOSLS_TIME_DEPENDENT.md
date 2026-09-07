@@ -454,6 +454,24 @@ stability and accuracy study.
 Permits second order (§3.1) and was never run. Superseded in interest by §6.2,
 which gets the conditioning benefit with no accuracy exposure at all.
 
+### 6.7 ADN / operator-preconditioning result (2026-09-07) — re-ranks this list
+
+Measured on the assembled per-mode operator (`ADN_FOSLS.md` §5): the exact
+block preconditioner **(u,ω) together ‖ p** gives κ ≈ 3 and 9–17 CG
+iterations, flat in p (4–12), h (2×2–4×4) and c (1–5405). Splitting u from ω
+gives κ 1.4e4 at large c. After exact vorticity elimination the (u,ω) block
+is an H(div)-type operator whose divergence-free kernel is what defeats every
+pointwise smoother (softest Jacobi mode: ∇·u = 0 to machine precision).
+Consequences for the entries above: §6.2 (pressure-side AC) is demoted — the
+pressure block is not the bottleneck; §6.3's element Schwarz gain was the
+overlap it lacked — **tested in 2D (ADN_FOSLS.md §8): overlapping
+vertex-patch Schwarz + p=2 Galerkin coarse gives 31–42 CG iterations, κ
+15–27, p- and c-independent, vs 1700–5100 for Jacobi; thin overlaps and the
+Hiptmair auxiliary-space sweep do not work on C⁰ GLL.** This is now the head
+of the queue; 3D cost estimate ≈ 31 GB of single-precision patch factors on
+the production channel, ~40–100× less solver work per stage. §6.5 would need
+c ≲ ν p⁴/h² ≈ 10², unreachable. Details, tables and sources in `ADN_FOSLS.md`.
+
 ## 7. Measurement traps that produced wrong answers here
 
 Recorded because each one cost hours and each produced a plausible-looking
