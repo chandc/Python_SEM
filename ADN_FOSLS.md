@@ -17,6 +17,52 @@ two-block preconditioner **(u,ω) | p** gives κ ≈ 3 and 9–17 CG iterations,
 flat from p = 4 to 12 and from c = 1 to 5405; separating u from ω throws it
 away.
 
+## 0. How the vertex-patch preconditioner came about
+
+The method was not derived from ADN theory; two separate bodies of theory
+met, and the measurements joined them. The chain, each link measured:
+
+1. **The symptom.** Every pointwise or per-variable preconditioner we had —
+   Jacobi, node-block, per-field blocks, Jacobi-smoothed p-multigrid,
+   Galerkin and direct coarse solves — needed thousands of CG iterations at
+   the channel's c = 5405, and p-independence held only near c ≈ 1 (§7U of
+   3D_STATUS, FOSLS_TIME_DEPENDENT §3–4). Nothing in the code explained it.
+2. **ADN named the norm.** Agmon–Douglis–Nirenberg theory says which norm a
+   first-order system is coercive in (§1–2). Read with c as a parameter
+   (§3), our functional at large c is equivalent to
+   ‖u‖²_{H(div)} + ‖ω − ∇×u‖²₀ + c⁻²|p|²₁: the pair (u, ω) is coupled by the
+   curl row and controlled only in H(div), the pressure decouples.
+3. **Operator preconditioning turned the norm into a prescription.**
+   Mardal–Winther (§4): the optimal block preconditioner is the Riesz map
+   of that norm — (u, ω) together, p apart — with κ bounded by the ADN
+   constants. Measured on the assembled operator (§5.1): exact (u,ω)‖p
+   gives κ ≈ 3, flat in p, h, c; splitting u from ω gives κ 1.4e4.
+4. **The obstruction was identified.** After exact vorticity elimination
+   the velocity block is M + K_div plus a curl-jump term, and its softest
+   Jacobi mode is exactly divergence-free (§5.3): the kernel of the
+   divergence, ~2/3 of the space, invisible to any node-wise correction.
+   This is the classical H(div) solver problem.
+5. **The H(div) literature supplied the remedy.** That literature is a
+   separate lineage — Schwarz's alternating method, the domain-decomposition
+   theory of Lions, Dryja–Widlund, and its H(div)/H(curl) specialisation by
+   Arnold–Falk–Winther (2000) and Hiptmair (1997): pointwise smoothers cannot
+   reach the divergence-free kernel, overlapping vertex-patch solves can,
+   because the local kernel modes fit inside a patch. Pavarino (1994) had
+   shown for spectral elements that element-sized overlap makes Schwarz
+   p-independent.
+6. **Measurement chose between the two standard remedies** (§8). The nodal
+   Hiptmair auxiliary-space sweep failed on C⁰ GLL (the discrete kernel has
+   no potential representation there); overlapping vertex patches worked,
+   thin overlaps did not, and in hindsight our shelved element-block Schwarz
+   (§6.3 of the parking lot, 6×) was the same method with zero overlap.
+7. **Verified in the production paths** (§10–12): matrix-free 2D
+   `pcg_solve`, time marching at c = 10, 2000 and with a rough field, and
+   the N = 30 cavity, where fine-level patches give 19 iterations and the
+   dense-patch cost model (§13) sets the order at which it pays.
+
+Without step 2 we would have kept tuning pointwise methods; without step 5
+we would have known why they fail but not what to build.
+
 ## 1. ADN ellipticity in one page
 
 Agmon, Douglis & Nirenberg (1959, 1964) treat a system of N equations in N
@@ -469,3 +515,178 @@ variant to measure next: use the patch solve only as the smoother on the
 p = 4 level of the existing PMG ladder (patches 4× smaller in dofs, 16× in
 flops) with Chebyshev on the fine level, and see how much of the
 p-independence survives.
+
+## 11. Time-marching test: 2D Poiseuille start-up, Re = 100 (`scratch/pois2d_vs.py`)
+
+Periodic channel Lx = 2, Ly = 1, 4×4 elements N = 8, body force G = 12ν in
+the x-momentum row (`f_known`), from rest, BDF1 then BDF2, dt = 0.1
+(c = 1/dt = 10), 600 steps to T = 60, production `step_bdf`/`newton_step`
+with the new `state.precond_factory` hook, CG tol 1e−10 abs / 1e−8 rel,
+numpy backend on the Mac. The preconditioner is rebuilt at every step (the
+2D operator carries the linearised convection). Checked against the exact
+transient u(y,t) = 6y(1−y) − Σ 48/(nπ)³ sin(nπy) e^{−νn²π²t}, not only the
+steady parabola. Figure `figs_fosls_vs_fs/pois2d_vs.png`.
+
+| preconditioner | CG it/step mean / max | CG wall | build wall | total | err vs exact(T) |
+|---|---|---|---|---|---|
+| Jacobi | 658 / 787 | 88.5 s | 0 | 90 s | 3.2e−7 |
+| PMG2 ladder (4,2)+direct | 28 / 49 | 80.3 s | 20.3 s | 102 s | 3.2e−7 |
+| vertex-patch Schwarz + p=2 coarse | **23 / 27** | 320 s | 123 s | 444 s | 3.2e−7 |
+
+All three reproduce the transient to 3e−7 and the same profile (they solve
+the same system to the same tolerance, as they must). Iterations: 29× fewer
+than Jacobi, flat across the whole run (27 → 20), and below the ladder's
+(49 → 20). Wall time: **worse by 5×** in this prototype — a dense patch
+solve (25 patches × 1156²) costs ~100× one matrix-free apply at this size,
+and the per-step rebuild (probing + 25 Cholesky factorisations, 0.2 s)
+is as much as Jacobi's entire step. Two things to keep in mind when
+reading that: at c = 10 with ν = 0.01 this case sits in the H¹ regime
+(c* ≈ ν p⁴/h² ≈ 650), where Jacobi needs only ~700 iterations and the
+ladder is already good — the H(div) regime that motivated the method is
+c ≫ c*; and the wall time is a numpy/scipy loop over patches, not a batched
+device solve. The production question is therefore the cost model of §9–10,
+not this number; but this test shows the method is correct inside the
+time-stepping path and that its iteration count does not drift with the
+evolving linearisation.
+
+**Bug found on the way (fixed in the script, not in the library):**
+`step_bdf` updates the history list in place; reassigning it after the call
+duplicated the newest state, BDF2 saw uⁿ = uⁿ⁻¹ and the flow developed at
+2/3 speed (u_c = 0.699 vs 0.923 at t = 10). The BDF1 first step being exact
+gave it away.
+
+### 11.2 The same case at c = 2000 (dt = 5e−4), smooth and rough right-hand sides
+
+c* ≈ ν p⁴/h² ≈ 655 on this mesh, so c = 2000 is on the H(div) side. Start-up
+from rest to T = 1 (2000 steps), vertex-patch factors refreshed every 10
+steps; then 200 steps from a *rough* initial field (parabola + 10 % random
+C⁰ velocity noise), which is what a DNS hands the solver at every step.
+Figures `figs_fosls_vs_fs/pois2d_vs_c2000.png`, `…_rough.png`.
+
+| c = 2000 | Jacobi | PMG2 ladder (4,2) | vertex patch + coarse |
+|---|---|---|---|
+| start-up from rest, 2000 steps: CG it/step mean / max | 650 / 672 | 54 / 94 | **24 / 26** |
+| … wall (numpy prototype) | 294 s | 585 s | 1160 s |
+| … err vs exact transient at T = 1 | 3.5e−7 | 6.0e−7 | 5.0e−8 |
+| rough initial field, 200 steps: CG it/step mean / max | 1177 / 1422 | 150 / 174 | **33 / 36** |
+| … wall (numpy prototype) | 53 s | 148 s | 162 s |
+| … ms per CG iteration | 0.22 | 4.7 | 24 |
+
+Three things this shows.
+
+1. **A smooth right-hand side does not exercise the kernel.** Jacobi needed
+   650 iterations at c = 2000 exactly as at c = 10: the laminar start-up
+   residual is x-independent and smooth, and projects onto few modes. The
+   cold random-RHS harness (§8) and the DNS do not have that luxury.
+2. **With a rough field the ordering is the one the theory predicts.**
+   Jacobi doubles (1177, max 1422), the ladder triples (150, max 174 — it
+   is p-multigrid with pointwise smoothing, blind to the divergence-free
+   kernel), the vertex patch rises 24 → 33 and stays flat over the 200
+   steps as the noise decays: 36× fewer iterations than Jacobi, 4.5× fewer
+   than the ladder, on the load that matters.
+3. **On a CPU in numpy at N = 8 the dense patch cannot win wall time.** One
+   patch application costs 110 Jacobi iterations here (24 ms vs 0.22 ms),
+   because the operator apply on 16 elements is tiny and the 25 dense
+   1156² solves are not. The iteration reduction (36×) does not cover it
+   (net 3× slower). This is the cost model of §9–10, measured: the method
+   pays off only where the operator apply is expensive relative to batched
+   dense solves — the 3D channel on the GPU (per-mode apply ≈ patch apply
+   in flops, 2000–6000 iterations to beat) — and not on a small 2D CPU
+   problem. It also says the p = 4-level smoother variant (§5.1, patches 16×
+   cheaper) is worth measuring before the 3D port.
+
+Refreshing the patch factors every 10 steps instead of every step cost
+nothing in iterations (24 → 24 smooth, 33 rough) and cut the build from
+123 s per 600 steps to 41 s per 2000.
+
+## 12. High order: lid-driven cavity, N = 30, 4×4 elements (`scratch/cavity32k_pmgv.py`, `scratch/pmgv2d.py`)
+
+Re = 32000, time marching from rest, BDF, dt = 2e−3 (c = 500 > c* ≈ 405),
+5 steps, CG absolute tol 1e−8, PMG preconditioners frozen on a snapshot
+linearisation and refreshed every 10 steps. `PMGV` = the PMG2 ladder
+30→15→7→3→2 (direct at p = 2) with the damped additive vertex-patch Schwarz
+as the smoother on every level with p ≤ p_patch and Chebyshev(4) above it.
+
+| preconditioner | CG it/step mean / max | ms per CG iteration | s per step (numpy, M3 Max) |
+|---|---|---|---|
+| Jacobi | 8365 / 11822 | 1.2 | 10 |
+| ladder, Chebyshev all levels | 1994 / 2886 | 20 | 40 |
+| ladder, patch smoother on p ≤ 7 | 2793 (step 1) | 41 | 116 |
+| ladder, patch smoother on p ≤ 15 | 2596 (step 1) | 1000 | 2584 (stopped) |
+| **fine-level vertex patches + p = 2 coarse** | **19 / 25** (25, 20, 18, 17, 15) | 7700 | 157 (+48 s build per refresh) |
+
+u, v, p agree across all methods to 4e−5; ω differs by up to 0.15 at the
+lid corners (where it is singular and O(10²)), which is the ill-conditioning
+converting a 1e−8 residual into a visible vorticity difference — not a
+preconditioner effect.
+
+Reading: (1) **patches on coarse levels only do not work** — the
+divergence-free modes that stall CG have p = 30 content and no smoother
+below the fine level touches them (2886 → 2596 for a 50× cost); §5.1's
+variant is closed. (2) **Fine-level patches work at N = 30 exactly as at
+N = 8**: 19 iterations, falling over the steps, 100× fewer than the ladder
+and 440× fewer than Jacobi. (3) The price is the patch size, (2N+1)²·4 =
+14,884 dofs, 1.77 GB per dense factor, 44 GB for 25 patches, and 7.7 s per
+application in numpy — 6600× a Jacobi iteration — so on this machine the
+wall time is 16× worse than Jacobi even at 440× fewer iterations. The
+O((2N+1)⁴) patch cost makes dense vertex patches a *moderate-order*
+method (N ≲ 12–16); at N = 30 it would need a structured (tensor or
+low-rank) local solver to be competitive, which is not what this prototype
+has.
+
+**Ghia comparison.** Ghia, Ghia & Shin (1982) tabulate Re ≤ 10000 only, and
+5 steps from rest at Re = 32000 is not a developed flow, so no profile
+comparison is possible for that run. The N = 30, 4×4 converged FOSLS
+solution at Re = 1000 (dt = 1, `pmg_ghia_cavity.py`; Jacobi and ladder give
+the same state) matches Ghia's Tables I/II with rms 3.2e−3 in u on x = 0.5
+and 6.7e−3 in v on y = 0.5 (`figs_fosls_vs_fs/ghia_re1000_n30.png`). A
+solver change cannot alter that: any preconditioner that converges to the
+same tolerance reproduces the same steady state.
+
+## 13. Memory and cost scaling of dense vertex patches
+
+(See `LOW_MEMORY_PATCH_SOLVERS.md` for the literature on cheaper patch solves and the measured 8–12× exact reduction by static condensation.)
+
+With F real fields per node (4 in 2D; 14 real = 7 complex per mode in 3D)
+a vertex patch has n_p = (2N+1)²·F dofs. Storing one triangular factor takes
+n_p²/2 entries; applying it costs n_p² flops; factorising n_p³/3.
+
+    memory  ≈  N_vertices × N_modes × ½ [(2N+1)² F]² × bytes
+    apply   ≈  N_vertices × N_modes × [(2N+1)² F]²  flops per CG iteration
+    build   ≈  N_vertices × N_modes × ⅓ [(2N+1)² F]³ flops per (re)factorisation
+
+- **Order N: (2N+1)⁴ ≈ 16 N⁴ for memory and apply, (2N+1)⁶ for the build.**
+  Doubling N costs 16× and 64×. This is the term that makes dense patches a
+  moderate-order method.
+- **Elements: linear** (vertices ≈ elements). Doubling the mesh doubles it.
+- **Fourier modes: linear** in nk = nz/2 + 1; modes never share factors.
+- **Fields: F²**, so the 3D per-mode block is 12× a 2D block at equal N; the
+  complex-Hermitian form (n_p/2 complex entries) halves it against the
+  split-real form the prototype uses.
+- **Against the operator:** the state vector is linear in (N+1)² and in
+  elements, so factors/state ≈ 4 (2N+1)² F, about 5000 at N = 8 in the channel.
+
+Exact numbers, single precision, one value of c (triangular storage;
+the numpy prototype stores the full n_p² array, 2× these):
+
+| case | N | vertices | patch dofs (real) | one factor | total |
+|---|---|---|---|---|---|
+| 2D cavity 4×4 | 8 | 25 | 1156 | 5 MB | 0.1 GB |
+| 2D cavity 4×4 | 30 | 25 | 14,884 | 0.89 GB (double) | 22 GB (double; 44 GB as stored) |
+| 3D channel 6×18, 1 mode | 8 | 114 | 4046 (2023 complex) | 16 MB | 1.9 GB |
+| 3D channel, 17 modes | 8 | 114 | 4046 | 16 MB | **32 GB** |
+| 3D channel, 17 modes | 12 | 114 | 8750 | 77 MB | 148 GB |
+| 3D channel, 17 modes | 16 | 114 | 15,246 | 232 MB | 450 GB |
+
+Three stage values of c multiply the channel figures by 3 if all are kept
+resident (95 GB at N = 8), or cost one refactorisation (≈ 5e12 flop, under
+a second on the GB10) per stage change if only one set is kept.
+
+Reading against the hardware: on the 121 GB Spark the channel is feasible
+at N = 8 (32 GB, or 95 GB fully resident), marginal at N = 12 (148 GB even
+for one c), and out of reach at N = 16. Refining in h instead of p is
+benign: twice the elements at N = 8 is 63 GB. Raising N is what closes the
+door, and only a non-dense local solver (tensor-product or low-rank patch
+factorisation, or a fixed-polynomial inner patch iteration) would reopen it.
+Measured apply cost per CG iteration in the numpy prototype, 2D: 24 ms at
+N = 8 (110 Jacobi iterations), 7.7 s at N = 30 (6600).

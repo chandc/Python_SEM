@@ -114,3 +114,90 @@ def make_coarse(state, fu, fv, M_inv, pin_p, pc=2):
     from lssem2d.precond import PMG2
     pmg = PMG2(state, fu, fv, M_inv, pin_p, pc=pc, coarse_solver='direct')
     return lambda r: pmg._prolong(pmg._coarse_solve(pmg._restrict(r)))
+
+
+class VertexSchwarzCondensed2D(VertexSchwarz2D):
+    """Same preconditioner, statically condensed (exact):
+        per element : factor of the interior block K_II,e and the coupling K_IB,e
+                      (interior nodes couple only to their own element -> shared
+                      by every patch containing e)
+        per patch   : dense Schur complement on the patch's EDGE dofs
+                      S = K_BB - sum_e K_BI,e K_II,e^-1 K_IB,e
+    Apply: z_B = S^-1 (r_B - sum_e K_BI,e K_II,e^-1 r_I,e),  z_I,e = K_II,e^-1 (r_I,e - K_IB,e z_B).
+    """
+    name = 'vschwarz-condensed'
+
+    def __init__(self, state, fu, fv, pin_p=False, coarse=None, verbose=False):
+        t0 = time.time()
+        m = state.mesh; n = m.N + 1; N = m.N
+        self.state, self.fu, self.fv, self.pin_p = state, fu, fv, pin_p
+        self.mask = state.get_global_mask(pin_p=pin_p)
+        mult = gather_scatter(m, np.ones((m.nelem, n, n, NV)))
+        self.mw = 1.0/np.where(mult < 1e-10, 1.0, mult)
+        gid = m.gidx; ng = int(gid.max()) + 1
+        self.g = (gid[..., None]*NV + np.arange(NV)).astype(np.int64); self.ndof = ng*NV
+        self.coarse = coarse
+        blocks = element_blocks(state, fu, fv)
+        free = np.zeros(self.ndof, bool); np.logical_or.at(free, self.g.ravel(), self.mask.ravel() > 0.5); self.free = free
+        gflat = self.g.reshape(m.nelem, -1)
+        loc_int = np.zeros((n, n, NV), bool); loc_int[1:N, 1:N, :] = True; loc_int = loc_int.ravel()
+        # ---- per element: interior factor and interior->edge coupling ----
+        self.eint, self.eedge, self.efac, self.eKIB = {}, {}, {}, {}
+        self.bytes = 0
+        for e in range(m.nelem):
+            ge = gflat[e]; fr = free[ge]
+            I = np.flatnonzero(loc_int & fr); B = np.flatnonzero(~loc_int & fr)
+            K = blocks[e]
+            KII = K[np.ix_(I, I)]; sc = 1.0/np.sqrt(np.diag(KII))
+            self.efac[e] = (sc, sla.cho_factor(KII*sc[:, None]*sc[None, :], lower=True, check_finite=False))
+            self.eKIB[e] = K[np.ix_(I, B)].copy()
+            self.eint[e], self.eedge[e] = ge[I], ge[B]              # global dofs
+            self.bytes += (I.size*(I.size+1)//2 + I.size*B.size)*8
+        def isolve(e, r):
+            sc, cf = self.efac[e]; return sc*sla.cho_solve(cf, sc*r, check_finite=False)
+        self._isolve = isolve
+        # ---- per patch: edge Schur complement ----
+        corners, node_elems = {}, {}
+        for e in range(m.nelem):
+            for (a, b) in ((0, 0), (0, N), (N, 0), (N, N)):
+                corners.setdefault(int(gid[e, a, b]), []).append(e)
+            for gn in np.unique(gid[e]): node_elems.setdefault(int(gn), []).append(e)
+        self.patches = []
+        for es in corners.values():
+            Bp = np.unique(np.concatenate([self.eedge[e] for e in es]))          # edge dofs of patch elements
+            ring = sorted({e2 for e in es for gn in np.unique(gid[e]) for e2 in node_elems[int(gn)]})
+            locB = -np.ones(self.ndof, dtype=np.int64); locB[Bp] = np.arange(Bp.size)
+            S = np.zeros((Bp.size, Bp.size))
+            for e in ring:                                    # K_BB from every element touching the patch edge dofs
+                ge = gflat[e]; li = locB[ge]; k = li >= 0
+                S[np.ix_(li[k], li[k])] += blocks[e][np.ix_(k, k)]
+            emaps = []
+            for e in es:                                      # subtract K_BI K_II^-1 K_IB of the patch's own elements
+                cols = locB[self.eedge[e]]; KIB = self.eKIB[e]
+                X = np.column_stack([isolve(e, KIB[:, j]) for j in range(KIB.shape[1])])
+                S[np.ix_(cols, cols)] -= KIB.T @ X
+                emaps.append((e, cols))
+            S = 0.5*(S + S.T); sc = 1.0/np.sqrt(np.diag(S))
+            self.patches.append((Bp, emaps, sc, sla.cho_factor(S*sc[:, None]*sc[None, :], lower=True, check_finite=False)))
+            self.bytes += Bp.size*(Bp.size+1)//2*8
+        self.setup_time = time.time() - t0
+        self.npatch = len(self.patches); self.maxdofs = max(p[0].size for p in self.patches)
+        if verbose:
+            print(f'  VertexSchwarzCondensed2D: {self.npatch} patches, max edge dofs {self.maxdofs}, '
+                  f'interior dofs/elem {max(v.size for v in self.eint.values())}, stored {self.bytes/1e6:.1f} MB, setup {self.setup_time:.1f}s')
+
+    def __call__(self, r):
+        r = r*self.mask
+        rg = np.bincount(self.g.ravel(), weights=(r*self.mw).ravel(), minlength=self.ndof)
+        zg = np.zeros(self.ndof)
+        for Bp, emaps, sc, cf in self.patches:
+            rB = rg[Bp].copy(); ys = []
+            for e, cols in emaps:
+                y = self._isolve(e, rg[self.eint[e]]); ys.append(y); rB[cols] -= self.eKIB[e].T @ y
+            zB = sc*sla.cho_solve(cf, sc*rB, check_finite=False); zg[Bp] += zB
+            for (e, cols), y in zip(emaps, ys):
+                zg[self.eint[e]] += y - self._isolve(e, self.eKIB[e] @ zB[cols])
+        z = zg[self.g]*self.mask
+        if self.coarse is not None:
+            z = z + self.coarse(r)
+        return z

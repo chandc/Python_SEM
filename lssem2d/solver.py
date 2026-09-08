@@ -332,7 +332,13 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
     # CG_TOLERANCE_FLOOR.md, whose section 5 recommended exactly this argument.
     # The 1996 F77 runs tol=1e-14 (absolute effectively off) with cgsfac=0.01,
     # i.e. purely relative; reproducing that setup needs this to be settable.
-    dU, cg_iters = pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=pin_p, max_iter=cg_max_iter, cgsfac=cgsfac, tol=cg_tol)
+    # Optional preconditioner hook: state.precond_factory(state, fu, fv, M_inv,
+    # pin_p) -> callable z = M(r) (see lssem2d.precond and
+    # scratch/vertex_schwarz2d.py).  Built here, at the SAME linearisation the
+    # CG solves, for the same reason M_inv is.  None keeps the Jacobi default.
+    _pf = getattr(state, 'precond_factory', None)
+    _pre = _pf(state, fu, fv, M_inv, pin_p) if _pf is not None else None
+    dU, cg_iters = pcg_solve(state, b, fu, fv, M_inv, multiplicity_weight, pin_p=pin_p, max_iter=cg_max_iter, cgsfac=cgsfac, tol=cg_tol, precond=_pre)
 
     # 4. Update U, optionally with a backtracking line search.
     #

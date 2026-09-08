@@ -85,6 +85,52 @@ coarse)`, same interface as `PMG2`; benchmark `scratch/vs2d_bench.py`.
 | apply | r·mw → bincount to global → per-patch solve → scatter-add → expand `zg[g]` → ×mask; + coarse term | iteration counts in §1 |
 | coarse | `PMG2(pc=2, coarse_solver='direct')`, use `_prolong(_coarse_solve(_restrict(r)))` | — |
 
+## 3b. Memory and cost scaling (from ADN_FOSLS.md §13)
+
+With F real fields per node (4 in 2D; 14 real = 7 complex per mode in 3D)
+a vertex patch has n_p = (2N+1)²·F dofs. Storing one triangular factor takes
+n_p²/2 entries; applying it costs n_p² flops; factorising n_p³/3.
+
+    memory  ≈  N_vertices × N_modes × ½ [(2N+1)² F]² × bytes
+    apply   ≈  N_vertices × N_modes × [(2N+1)² F]²  flops per CG iteration
+    build   ≈  N_vertices × N_modes × ⅓ [(2N+1)² F]³ flops per (re)factorisation
+
+- **Order N: (2N+1)⁴ ≈ 16 N⁴ for memory and apply, (2N+1)⁶ for the build.**
+  Doubling N costs 16× and 64×. This is the term that makes dense patches a
+  moderate-order method.
+- **Elements: linear** (vertices ≈ elements). Doubling the mesh doubles it.
+- **Fourier modes: linear** in nk = nz/2 + 1; modes never share factors.
+- **Fields: F²**, so the 3D per-mode block is 12× a 2D block at equal N; the
+  complex-Hermitian form (n_p/2 complex entries) halves it against the
+  split-real form the prototype uses.
+- **Against the operator:** the state vector is linear in (N+1)² and in
+  elements, so factors/state ≈ 4 (2N+1)² F, about 5000 at N = 8 in the channel.
+
+Exact numbers, single precision, one value of c (triangular storage;
+the numpy prototype stores the full n_p² array, 2× these):
+
+| case | N | vertices | patch dofs (real) | one factor | total |
+|---|---|---|---|---|---|
+| 2D cavity 4×4 | 8 | 25 | 1156 | 5 MB | 0.1 GB |
+| 2D cavity 4×4 | 30 | 25 | 14,884 | 0.89 GB (double) | 22 GB (double; 44 GB as stored) |
+| 3D channel 6×18, 1 mode | 8 | 114 | 4046 (2023 complex) | 16 MB | 1.9 GB |
+| 3D channel, 17 modes | 8 | 114 | 4046 | 16 MB | **32 GB** |
+| 3D channel, 17 modes | 12 | 114 | 8750 | 77 MB | 148 GB |
+| 3D channel, 17 modes | 16 | 114 | 15,246 | 232 MB | 450 GB |
+
+Three stage values of c multiply the channel figures by 3 if all are kept
+resident (95 GB at N = 8), or cost one refactorisation (≈ 5e12 flop, under
+a second on the GB10) per stage change if only one set is kept.
+
+Reading against the hardware: on the 121 GB Spark the channel is feasible
+at N = 8 (32 GB, or 95 GB fully resident), marginal at N = 12 (148 GB even
+for one c), and out of reach at N = 16. Refining in h instead of p is
+benign: twice the elements at N = 8 is 63 GB. Raising N is what closes the
+door, and only a non-dense local solver (tensor-product or low-rank patch
+factorisation, or a fixed-polynomial inner patch iteration) would reopen it.
+Measured apply cost per CG iteration in the numpy prototype, 2D: 24 ms at
+N = 8 (110 Jacobi iterations), 7.7 s at N = 30 (6600).
+
 ## 4. 3D port, step by step
 
 Each step has a gate; do not proceed on a failed gate. Run everything on the
@@ -193,6 +239,9 @@ statistics accumulator increments against the Jacobi continuation over the
 same window. Only then adopt.
 
 ## 5. Variants to measure after the baseline works (ranked)
+
+**Update 2026-09-08:** static condensation of element interiors is exact and cuts patch memory 8–12× (measured, `LOW_MEMORY_PATCH_SOLVERS.md` §3); build it into step 1 of the port. The 'patch smoother on the p = 4 level only' variant below was tested at N = 30 and does not work (ADN_FOSLS.md §12).
+
 
 1. **Patch smoother on the p = 4 level only** (Chebyshev on the fine level,
    patches 16× cheaper): how much p-independence survives? This is the
