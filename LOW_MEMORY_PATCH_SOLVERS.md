@@ -24,7 +24,7 @@ one of the three.
 | C | **Fast-diagonalisation / sparse patch bases** (Brubeck–Farrell): a tensor-product basis that diagonalises the interior blocks of each cell makes the vertex-star patch matrix as sparse as a low-order stencil; sparse Cholesky with the static-condensation pattern gives time and space optimal in p; non-separable operators handled by a separable surrogate or an auxiliary sparse operator with incomplete Cholesky | (2N+1)⁴ → O(p^d) | exact only for separable operators; otherwise a spectrally-equivalent surrogate | O((N+1)²F) per patch (2D) | affine tensor-product cells (we have them); a separable surrogate of the FOSLS element operator, or its Kronecker-sum structure exploited directly | Brubeck & Farrell, SISC 44 (2022) A2991, arXiv:2107.14758; Brubeck & Farrell, SISC 46 (2024) A1549, arXiv:2211.14284 (de Rham complex, Pavarino/AFW/Hiptmair patches, code on Zenodo 7358044) |
 | D | **Inexact local solves by nested p-multigrid inside each patch** ("multigrid within multigrid"): no patch factors at all, O(p^{d+1}) per local iteration | all three | no (inexact; must be a fixed linear operator to keep CG symmetric) | none beyond the operator | patch-local operator applies (we have them: element blocks are the operator) | arXiv:2510.17785 (2025), "Local solvers for high-order patch smoothers via p-multigrid" |
 | E | **Overlapping Schwarz with FDM local solves on tensor-product surrogates** (Fischer/Lottes; Nek5000 pressure solver): local problems from 1D FE/SE discretizations, solved by fast diagonalisation, O(N³) per patch in 2D; weighting by the inverse counting matrix essential; nonuniform weights (Stiller) cut iterations 1.5–3× | (2N+1)⁴ → N³ | surrogate (Poisson/Helmholtz-type local operator) | O(N²) per patch | a separable local operator — the FOSLS block is not; would need a surrogate whose kernel matches | Fischer, JCP 133 (1997) 84; Lottes & Fischer, J. Sci. Comput. 24 (2005) 45; Stiller, J. Sci. Comput. (2016), arXiv:1512.02390 |
-| F | **Low-order-refined (LOR) preconditioning + AMG**: assemble the sparse Q₁ discretization on the GLL sub-grid, precondition the high-order operator with AMG on it; spectrally equivalent for H¹, and for H(curl)/H(div) with histopolation bases; GPU-ready | all three, O(dofs) | approximate; equivalence proven for de Rham-conforming spaces, not for C⁰ nodal vector FOSLS | O(dofs) sparse | an AMG that handles the H(div) kernel (hypre ADS/AMS) — which again presumes RT/Nédélec structure | Pazner, Kolev & Dohrmann, SISC 45 (2023) A675, arXiv:2203.02465; Pazner, Kolev & Camier, IJHPCA (2023) GPU LOR |
+| F | **Low-order-refined (LOR) preconditioning + AMG**: assemble the sparse Q₁ discretization on the GLL sub-grid, precondition the high-order operator with AMG on it; spectrally equivalent for H¹, and for H(curl)/H(div) with histopolation bases; GPU-ready | all three, O(dofs) | **tested (§3.3): equivalent at c = 1, NOT at c = 5405 — the Q₁ and GLL divergence-free kernels differ; ruled out** | O(dofs) sparse | an AMG that handles the H(div) kernel (hypre ADS/AMS) — which again presumes RT/Nédélec structure | Pazner, Kolev & Dohrmann, SISC 45 (2023) A675, arXiv:2203.02465; Pazner, Kolev & Camier, IJHPCA (2023) GPU LOR |
 | G | **Compressed factors** (block low-rank / HSS / H-matrix on the dense patch factor) | (2N+1)⁴ → ~n log n | approximate (controlled tolerance) | 3–10× below dense | a library (MUMPS BLR, STRUMPACK) | Amestoy et al., SISC 37 (2015) BLR; Ghysels et al. STRUMPACK |
 | H | **Discretisation change** to de Rham-conforming spaces (RT/Nédélec for (u, ω)): then Hiptmair–Xu auxiliary-space and AMS/ADS work with sparse matrices, and C, F become theorems | root cause | — | O(dofs) | a new FOSLS discretisation and re-validation | Hiptmair & Xu, SINUM 45 (2007) 2483; Arnold–Falk–Winther, Numer. Math. 85 (2000) 197 |
 
@@ -169,3 +169,42 @@ step near 19 × (5 + 0.7) ms ≈ 0.1 s against Jacobi's 2.7 s at N = 20
 (~25×), and the build would shrink in proportion. The CPU losses at
 N ≥ 15 are therefore an implementation ceiling of the prototype, not an
 algorithmic one; the GPU channel estimate rests on the same arithmetic.
+
+### 3.3 Option F tested and ruled out (`scratch/lor_fosls_2d.py`)
+
+The Q₁ FOSLS operator on the GLL sub-mesh was built from the same four
+residual rows as the SEM operator (bilinear cells between consecutive GLL
+nodes, 2×2 Gauss quadrature, same dof numbering and mask; 30 nonzeros per
+row against ~700 for the SEM operator, built in < 1 s). Two questions:
+is A_LOR spectrally equivalent to A_SEM, and does AMG on A_LOR precondition
+A_SEM. CG to 1e−10 on the free system, κ from Ritz values:
+
+| c | N | Jacobi | **exact A_LOR⁻¹ solve** (ceiling of any LOR method) | SA-AMG(A_LOR) → A_SEM | SA-AMG(A_LOR) → A_LOR itself |
+|---|---|---|---|---|---|
+| 5405 | 8 | 1736 / 9.5e4 | **1392 / 4.7e4** | 1433 / 5.1e4 | 73 / 73 |
+| 5405 | 12 | 3110 / 4.3e5 | **2911 / 2.2e5** | 3170 / 2.5e5 | 96 / 140 |
+| 5405 | 16 | 5103 / 1.3e6 | **4833 / 6.5e5** | 5199 / 7.8e5 | 112 / 280 |
+| 1 | 8 | 1355 / 1.0e5 | 219 / 630 | 324 / 1.4e3 | 60 / 47 |
+| 1 | 12 | 2155 / 3.5e5 | 206 / 490 | 381 / 2.0e3 | 79 / 85 |
+| 1 | 16 | 2965 / 9.1e5 | 180 / 370 | 422 / 2.5e3 | 91 / 130 |
+
+(iterations / κ). Rayleigh-quotient ratio xᵀA_SEM x / xᵀA_LOR x: 1.00 on a
+smooth field, 2.3 on a random one, at both c.
+
+Reading. At c = 1 the LOR operator is spectrally equivalent to the SEM
+operator (κ of the exact LOR-preconditioned system 370–630, flat or
+falling in N) and AMG on it is a usable if unremarkable preconditioner
+(324–422 iterations against 1355–2965 for Jacobi; the ladder does better).
+At c = 5405 the **exact** LOR solve is almost as bad as Jacobi (κ 4.7e4 →
+6.5e5, growing with N like Jacobi's), so no AMG, however good, can make a
+LOR-based preconditioner work there: the equivalence itself fails. The
+Q₁ discretisation on the sub-cells and the GLL spectral element have
+different discretely divergence-free kernels, and it is exactly those
+modes that dominate the large-c operator (ADN_FOSLS.md §5.3). AMG's own
+quality on the LOR matrix is fine (κ 73–280), which confirms that the
+failure is in the equivalence, not in AMG. This is the LOR analogue of the
+Hiptmair result (§8.2 of ADN_FOSLS): on C⁰ nodal elements the kernel has
+no representation in any other space than its own. Option F is closed; the
+route to sparse, O(dofs) preconditioning of this operator runs through a
+change of discretisation to de Rham-conforming spaces (option H), where
+Pazner–Kolev–Dohrmann's equivalence theorem applies.

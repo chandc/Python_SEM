@@ -340,27 +340,41 @@ def to_device(s, U):
     return s2, t(U)
 
 
-def _precond(s_host, dt, like=None):
-    """Build the Jacobi preconditioner ON THE HOST, then move it.
+# INPUT OPTIONS (run/price keyword arguments, e.g. `run weighting=balanced
+# precond=vschwarz`; see channel3d.make_precond):
+#   weighting  legacy | balanced | unit    momentum-row weighting family
+#   mom_exp    float                       explicit exponent q in w/c^q (overrides)
+#   precond    jacobi | pmg | vschwarz | vschwarz1
+OPTIONS = dict(weighting='legacy', mom_exp=None, precond='jacobi', share_precond=0)
+#   share_precond 0|1   build one patch/PMG preconditioner (middle stage c) for all three stages
+
+
+def _precond(s_host, dt, like=None, precond='jacobi', weighting='legacy', mom_exp=None, share=False):
+    """Build the preconditioner ON THE HOST, then move it.
 
     `jacobi_diagonal_analytic` is closed-form NumPy and is evaluated ONCE per
     dt, not per iteration, so there is nothing to gain from porting it -- and
     handing it tensors just fails (`can't convert cuda:0 device type tensor to
     numpy`).  Build from the host setup, move the result to wherever the state
-    lives.
+    lives.  The patch/PMG preconditioners are callables and stay on the host
+    (they move the residual themselves).
     """
-    Minv = C.make_precond(s_host, dt, 0.0, rowweight=True)
-    return [DEV.to_device(q, like) for q in Minv] if like is not None else Minv
+    Minv = C.make_precond(s_host, dt, 0.0, rowweight=True, precond=precond,
+                          weighting=weighting, mom_exp=mom_exp, verbose=True, share=share)
+    if like is not None:
+        Minv = [DEV.to_device(q, like) if not callable(q) else q for q in Minv]
+    return Minv
 
 
-def advance(s, U, Nprev, dt, Minv, tol=1e-6, max_iter=20000, **kw):
+def advance(s, U, Nprev, dt, Minv, tol=1e-6, max_iter=20000, weighting='legacy',
+            mom_exp=None, **kw):
     """One RKW3/CN step.  `tol` = 1e-6 is the measured policy (3D_STATUS.md
     sec 7F): error unchanged to within 1%, ~40% fewer iterations than 1e-12.
     1e-3 was swept and REJECTED there -- 19-238x the error.
 
     **kw forwards to `channel3d.stage`, notably `warm=` for the warm start."""
     return C.step(s, U, Nprev, dt, 0.0, rowweight=True, Minv=Minv, tol=tol,
-                  max_iter=max_iter, **kw)
+                  max_iter=max_iter, weighting=weighting, mom_exp=mom_exp, **kw)
 
 
 def check(N=8, ex=6, ey=18, nz=32):
@@ -397,7 +411,7 @@ def check(N=8, ex=6, ey=18, nz=32):
     return s, U
 
 
-def price(N=8, ex=6, ey=18, nz=32, dt=None):
+def price(N=8, ex=6, ey=18, nz=32, dt=None, weighting='legacy', mom_exp=None, precond='jacobi', share_precond=0):
     """Time ONE step on the real grid, then cost the run.  GPU_PORT_PLAN.md
     Phase 6: never commit a long run to an extrapolated table."""
     s, U = check(N, ex, ey, nz)
@@ -413,7 +427,8 @@ def price(N=8, ex=6, ey=18, nz=32, dt=None):
     if backend.get_backend() in ('torch', 'cupy'):
         s, U = to_device(s, U)
         print('  state moved to device (%s)' % backend.get_backend())
-    Minv = _precond(s_host, dt, like=U)
+    Minv = _precond(s_host, dt, like=U, precond=precond, weighting=weighting, mom_exp=mom_exp, share=bool(share_precond))
+    print(f'  options: weighting={weighting} mom_exp={mom_exp} precond={precond}')
     # allocate the convective history WHERE THE STATE IS.  np.zeros here left
     # a host array meeting a device Nk in the RK combination, one line deeper
     # than the operator -- the same "Unsupported type numpy.ndarray", with the
@@ -421,9 +436,9 @@ def price(N=8, ex=6, ey=18, nz=32, dt=None):
     _xp = DEV.xp(U)
     Nprev = _xp.zeros(tuple(OP.to_complex(U).shape[:-2]) + (3, s['nk']),
                       dtype=complex)
-    t0 = time.perf_counter(); U1, Nprev, it = advance(s, U, Nprev, dt, Minv)
+    t0 = time.perf_counter(); U1, Nprev, it = advance(s, U, Nprev, dt, Minv, weighting=weighting, mom_exp=mom_exp)
     t1 = time.perf_counter() - t0
-    t0 = time.perf_counter(); U1, Nprev, it = advance(s, U1, Nprev, dt, Minv)
+    t0 = time.perf_counter(); U1, Nprev, it = advance(s, U1, Nprev, dt, Minv, weighting=weighting, mom_exp=mom_exp)
     t2 = time.perf_counter() - t0
     print('  step 1: %.1f s (%d CG)   step 2: %.1f s (%d CG)   backend=%s'
           % (t1, it, t2, it, backend.get_backend()))
@@ -443,7 +458,8 @@ def _atomic_savez(path, **kw):
 
 
 def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
-        resume=None, N=8, ex=6, ey=18, nz=32):
+        resume=None, N=8, ex=6, ey=18, nz=32, weighting='legacy', mom_exp=None,
+        precond='jacobi', share_precond=0):
     """The production minimal-channel run.
 
     OUTPUT ALL GOES TO `out`, which is a BIND MOUNT in the container -- anything
@@ -477,10 +493,10 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
         U = initial_state(s)
         Nprev = np.zeros(OP.to_complex(U).shape[:-2] + (3, s['nk']), dtype=complex)
 
-    Minv_host = _precond(s, dt)
+    Minv_host = _precond(s, dt, precond=precond, weighting=weighting, mom_exp=mom_exp, share=bool(share_precond))
     if dev:
         s_run, U = to_device(s, U)
-        Minv = [DEV.to_device(q, U) for q in Minv_host]
+        Minv = [DEV.to_device(q, U) if not callable(q) else q for q in Minv_host]
         # BACKEND-AGNOSTIC, for the same reason to_device() itself is.  This line
         # used to call torch.as_tensor directly, so a cupy run moved the state
         # and the preconditioner to the device and left Nprev on the host --
@@ -493,13 +509,15 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
 
     wu = wall_units(s, ex, ey)
     cfg = dict(N=N, ex=ex, ey=ey, nz=nz, dt=dt, nstep=nstep, backend=name,
-               re_tau=RE_TAU, Lx=LX, Lz=LZ, fx=FX, tol=1e-6, **wu)
+               re_tau=RE_TAU, Lx=LX, Lz=LZ, fx=FX, tol=1e-6, weighting=weighting,
+               mom_exp=mom_exp, precond=precond, share_precond=share_precond, **wu)
     json.dump({k: float(v) if isinstance(v, (int, float, np.floating)) else v
                for k, v in cfg.items()}, open(f'{out}/config.json', 'w'), indent=1)
 
     log = open(f'{out}/run.log', 'a')
     hdr = (f'# minimal channel Re_tau={RE_TAU:g}  {ex}x{ey} N={N} Nz={nz}  '
-           f'dt={dt:g}  backend={name}  Lx+={wu["Lx_plus"]:.0f} Lz+={wu["Lz_plus"]:.0f}')
+           f'dt={dt:g}  backend={name}  Lx+={wu["Lx_plus"]:.0f} Lz+={wu["Lz_plus"]:.0f}  '
+           f'weighting={weighting} mom_exp={mom_exp} precond={precond}')
     print(hdr, flush=True); log.write(hdr + '\n'); log.flush()
 
     # PROFILE STATISTICS.  The scalar log alone cannot demonstrate DNS -- the
@@ -512,7 +530,7 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
 
     hist, t0 = [], time.perf_counter()
     for i in range(step0, nstep):
-        U, Nprev, it = advance(s_run, U, Nprev, dt, Minv)
+        U, Nprev, it = advance(s_run, U, Nprev, dt, Minv, weighting=weighting, mom_exp=mom_exp)
         if not bool(np.all(np.isfinite(DEV.to_host(U)))):
             log.write('BLEWUP\n'); log.close()
             raise SystemExit('non-finite state -- aborting')
@@ -552,12 +570,16 @@ def main():
     if what == 'check':
         backend.set_backend(os.environ.get('LSSEM3D_BACKEND', 'numba')); check()
     elif what == 'price':
-        backend.set_backend(os.environ.get('LSSEM3D_BACKEND', 'numba')); price()
+        kw = {}
+        for a in sys.argv[2:]:
+            k, v = a.split('=')
+            kw[k] = v if k in ('weighting', 'precond') else (float(v) if '.' in v or 'e' in v.lower() else int(v))
+        backend.set_backend(os.environ.get('LSSEM3D_BACKEND', 'numba')); price(**kw)
     elif what == 'run':
         kw = {}
         for a in sys.argv[2:]:
             k, v = a.split('=')
-            kw[k] = v if k in ('out', 'resume', 'backend_name') else (
+            kw[k] = v if k in ('out', 'resume', 'backend_name', 'weighting', 'precond') else (
                 float(v) if '.' in v or 'e' in v.lower() else int(v))
         run(**kw)
     else:

@@ -43,6 +43,7 @@ from lssem2d.lgl import lgl_nodes, diff_matrix
 from . import operator as OP
 from . import bc as BC
 from . import solver3d as S3
+from . import device as DEV
 
 # Optimised 4th-kind Chebyshev weights (Phillips & Fischer / Lottes, Table 5),
 # the same table as solver_pmg2.f90's beta4.
@@ -450,3 +451,270 @@ class PMG:
 
     def __call__(self, r):
         return self._vcycle(r, 0)
+
+
+# =============================================================================
+# Overlapping vertex-patch additive Schwarz (statically condensed), per mode
+# =============================================================================
+#
+# Port of scratch/vertex_schwarz2d.py (VERTEX_SCHWARZ_IMPLEMENTATION.md,
+# SCHWARZ_SEM_TUTORIAL.md, BALANCED_CONDENSED_PLAN.md sec 1.4) to the 5-D
+# (elem, i, j, var, mode) layout.  The global operator stays matrix-free; the
+# only dense objects are per-element interior factors and per-patch edge Schur
+# complements, one set per Fourier mode (the modes never couple).
+#
+#     M^-1 r = P_c A_c^-1 P_c^T r  +  sum_v R_v^T (R_v A R_v^T)^-1 R_v r
+#
+# patch(v) = every dof of the four elements sharing mesh vertex v;
+# R_v A R_v^T is the ASSEMBLED operator on those dofs, so the ring of
+# neighbouring elements contributes (a patch built from its own elements alone
+# is singular).  Condensation orders each patch [I_1..I_4 | E]: the element
+# interior blocks are factored once and shared by the four patches that use
+# the element; only the edge Schur complement S_v is per patch.  Exact: the
+# condensed and dense solves agree to round-off (tested).
+#
+# Why it works where Jacobi/PMG stall: above c* ~ nu p^4/h^2 the (u, omega)
+# pair is coupled and the divergence-free kernel is invisible to pointwise
+# smoothers; a patch solve is exact on the coupled pair inside the patch and
+# the p = 2 coarse term carries the global part.  2D: 19-21 CG iterations flat
+# for N = 5..20 against Jacobi's 435-4010 (LOW_MEMORY_PATCH_SOLVERS.md 3.1).
+#
+# Build cost: one probe of the UNASSEMBLED per-mode operator per local column
+# (n*n*14 probes, each returning every element's column at once, exactly as
+# DirectCoarseE) -- done one mode at a time so the transient (nelem, nloc,
+# nloc) block array is per mode, not per run.  With explicit convection the
+# operator is fixed for the run: build once per stage value of c.
+
+
+def _element_blocks_mode(mesh, D, kz_k, nu, c, kap, rw, mask_k, wq):
+    """A_e = M L0_e^T W L0_e M for one mode, every element: (nelem, nloc, nloc),
+    local column index (i*n + j)*NVAR_R + var.  `mask_k` is (nelem,n,n,14,1)
+    sliced from the FULL-nk mask (never rebuilt for a subset: bc.build_mask
+    zeroes the imaginary half of the column it believes is k = 0)."""
+    nelem, n = mesh.nelem, mesh.N + 1
+    nvar = OP.NVAR_R
+    nloc = n*n*nvar
+    blocks = np.empty((nelem, nloc, nloc))
+    v = np.zeros((nelem, n, n, nvar, 1))
+    for col in range(nloc):
+        i, j, f = np.unravel_index(col, (n, n, nvar))
+        v[:] = 0.0
+        v[:, i, j, f, 0] = 1.0
+        out = S3.normal_op(v, D, mesh.facx, mesh.facy, kz_k, nu, c, None,
+                           mask_k, wq, kap, rw)
+        blocks[:, :, col] = out.reshape(nelem, nloc)
+    return blocks
+
+
+def _chol(K):
+    """Equilibrated Cholesky solve callable for an SPD block.  Symmetric Jacobi
+    scaling first: the pressure rows carry the momentum weight (1/c^2 ~ 1e-8
+    legacy) against O(1) constraint rows and unscaled potrf loses those pivots."""
+    import scipy.linalg as sla
+    sc = 1.0/np.sqrt(np.diag(K))
+    Ks = K*sc[:, None]*sc[None, :]
+    try:
+        cf = sla.cho_factor(Ks, lower=True, check_finite=False)
+        return lambda b: sc*sla.cho_solve(cf, sc*b, check_finite=False), Ks.shape[0]*(Ks.shape[0]+1)//2
+    except sla.LinAlgError:
+        lu = sla.lu_factor(Ks, check_finite=False)
+        return lambda b: sc*sla.lu_solve(lu, sc*b, check_finite=False), Ks.shape[0]**2
+
+
+class VertexSchwarz3D:
+    """Vertex-patch additive Schwarz preconditioner for the per-mode VVP
+    operator, callable r -> z for `pcg(M_inv=...)`.
+
+    Parameters mirror `PMG`: (mesh, nk, nz, nu, c, kz, kap, rw), plus
+      mask      the caller's own FULL-nk mask (recommended; else built from pin_p)
+      coarse    'element' -> exact p = 2 coarse term via DirectCoarseE (default);
+                None -> patches only (one-level; iterations grow with h)
+      condense  True (default) -> static condensation; False -> dense patch
+                blocks (reference for the exactness test; 8-13x the memory)
+      pc        coarse polynomial order (2)
+
+    Apply is NumPy; a device-resident residual is moved to the host and back
+    (functional, not fast -- the batched apply is the port's step 4.5).
+    """
+
+    name = 'vschwarz'
+
+    def __init__(self, mesh, nk, nz, nu, c, kz, kap=0.0, rw=None, mask=None,
+                 pin_p=False, coarse='element', condense=True, pc=2,
+                 verbose=False):
+        import time
+        t0 = time.perf_counter()
+        n, N = mesh.N + 1, mesh.N
+        nvar = OP.NVAR_R
+        nloc = n*n*nvar
+        self.m, self.nk, self.c, self.condense = mesh, nk, c, condense
+        self.D = diff_matrix(N)
+        self.shape = (mesh.nelem, n, n, nvar, nk)
+        self.mask = (np.array(mask, copy=True) if mask is not None
+                     else BC.build_mask(mesh, nk, pin_p=pin_p, nz=nz))
+        kz = np.asarray(kz, dtype=float)
+        mult = S3.gs(mesh, np.ones(self.shape))
+        self.mw = 1.0/np.where(mult < 1e-10, 1.0, mult)
+        gid = mesh.gidx
+        nnode = int(gid.max()) + 1
+        self.g = (gid[..., None]*nvar + np.arange(nvar)).astype(np.int64)   # (nelem,n,n,nvar)
+        self.ndof = nnode*nvar
+        gflat = self.g.reshape(mesh.nelem, -1)
+        loc_int = np.zeros((n, n, nvar), bool)
+        loc_int[1:N, 1:N, :] = True
+        loc_int = loc_int.ravel()
+
+        # ---- mode-independent topology: patches (corner -> elements) and rings
+        corners, node_elems = {}, {}
+        for e in range(mesh.nelem):
+            for (a, b) in ((0, 0), (0, N), (N, 0), (N, N)):
+                corners.setdefault(int(gid[e, a, b]), []).append(e)
+            for gn in np.unique(gid[e]):
+                node_elems.setdefault(int(gn), []).append(e)
+        topo = []
+        for es in corners.values():
+            ring = sorted({e2 for e in es for gn in np.unique(gid[e])
+                           for e2 in node_elems[int(gn)]})
+            topo.append((es, ring))
+        self.npatch = len(topo)
+
+        # ---- per mode: element interior factors + patch Schur complements
+        self.modes = []            # per mode: dict(elem=..., patches=...) or None
+        self.bytes = 0
+        for k in range(nk):
+            mask_k = np.ascontiguousarray(self.mask[..., k:k+1])
+            free = np.zeros(self.ndof, bool)
+            np.logical_or.at(free, self.g.ravel(), mask_k[..., 0].ravel() > 0.5)
+            if not free.any():
+                self.modes.append(None)
+                continue
+            blocks = _element_blocks_mode(mesh, self.D, kz[k:k+1], nu, c, kap,
+                                          rw, mask_k, mesh.wq)
+            if not condense:
+                patches = []
+                for es, ring in topo:
+                    dofs = np.unique(np.concatenate([gflat[e] for e in es]))
+                    dofs = dofs[free[dofs]]
+                    loc = -np.ones(self.ndof, dtype=np.int64)
+                    loc[dofs] = np.arange(dofs.size)
+                    K = np.zeros((dofs.size, dofs.size))
+                    for e in ring:
+                        li = loc[gflat[e]]
+                        keep = li >= 0
+                        K[np.ix_(li[keep], li[keep])] += blocks[e][np.ix_(keep, keep)]
+                    K = 0.5*(K + K.T)
+                    solve, nb = _chol(K)
+                    self.bytes += 8*nb
+                    patches.append((dofs, solve))
+                self.modes.append(dict(patches=patches))
+                continue
+            # element interior factor and interior->edge coupling, shared
+            eint, eedge, esolve, eKIB = {}, {}, {}, {}
+            for e in range(mesh.nelem):
+                ge = gflat[e]
+                fr = free[ge]
+                I = np.flatnonzero(loc_int & fr)
+                B = np.flatnonzero(~loc_int & fr)
+                K = blocks[e]
+                if I.size:
+                    esolve[e], nb = _chol(K[np.ix_(I, I)])
+                    self.bytes += 8*(nb + I.size*B.size)
+                else:
+                    esolve[e] = lambda b: b
+                eKIB[e] = K[np.ix_(I, B)].copy()
+                eint[e], eedge[e] = ge[I], ge[B]
+            patches = []
+            for es, ring in topo:
+                Bp = np.unique(np.concatenate([eedge[e] for e in es]))
+                locB = -np.ones(self.ndof, dtype=np.int64)
+                locB[Bp] = np.arange(Bp.size)
+                S = np.zeros((Bp.size, Bp.size))
+                for e in ring:                     # K_EE from every element touching the patch edge dofs
+                    li = locB[gflat[e]]
+                    kp = li >= 0
+                    S[np.ix_(li[kp], li[kp])] += blocks[e][np.ix_(kp, kp)]
+                emaps = []
+                for e in es:                       # - K_EI K_II^-1 K_IE of the patch's own elements
+                    cols = locB[eedge[e]]
+                    KIB = eKIB[e]
+                    if KIB.shape[0]:
+                        X = np.column_stack([esolve[e](KIB[:, j]) for j in range(KIB.shape[1])])
+                        S[np.ix_(cols, cols)] -= KIB.T @ X
+                    emaps.append((e, cols))
+                S = 0.5*(S + S.T)
+                solve, nb = _chol(S)
+                self.bytes += 8*nb
+                patches.append((Bp, emaps, solve))
+            self.modes.append(dict(eint=eint, eedge=eedge, esolve=esolve,
+                                   eKIB=eKIB, patches=patches))
+            del blocks
+
+        # ---- coarse term: exact p = pc solve with PMG's transfers
+        self.coarse = None
+        if coarse:
+            mm = coarsen_mesh(mesh, pc)
+            if mask is not None:
+                # the caller's convention: pressure pinned at k = 0 only
+                lm = BC.build_mask(mm, nk, pin_p=False, nz=nz)
+                BC.pin_dof(mm, lm, OP.P_, 0)
+                BC.pin_dof(mm, lm, OP.NVAR + OP.P_, 0)
+            else:
+                lm = None
+            lev = _Level(mm, nk, nz, nu, c, kz, kap, rw, pin_p, mask=lm)
+            self.coarse = DirectCoarseE(lev)
+            self.lev_c = lev
+            self.P = p_interp(pc, N)
+            self.R = self.P.T
+        self.setup_time = time.perf_counter() - t0
+        if verbose:
+            print(f'  VertexSchwarz3D: {self.npatch} patches x {nk} modes, '
+                  f'{"condensed" if condense else "dense"}, stored {self.bytes/1e6:.1f} MB, '
+                  f'setup {self.setup_time:.1f}s ({nloc} probes/mode)', flush=True)
+
+    # -- two-level pieces (PMG rules 1-2: R = P^T, multiplicity-weighted) --
+    def _restrict(self, x):
+        xw = x*self.mw
+        t = np.einsum('bj,eijvk->eibvk', self.R, xw)
+        cc = np.einsum('ai,eibvk->eabvk', self.R, t)
+        return S3.gs(self.lev_c.m, cc)*self.lev_c.mask
+
+    def _prolong(self, xc):
+        t = np.einsum('bj,eijvk->eibvk', self.P, xc)
+        return np.einsum('ai,eibvk->eabvk', self.P, t)*self.mask
+
+    def _apply_host(self, r):
+        r = r*self.mask
+        z = np.zeros(self.shape)
+        gr = self.g.ravel()
+        for k, md in enumerate(self.modes):
+            if md is None:
+                continue
+            rg = np.bincount(gr, weights=(r[..., k]*self.mw[..., k]).ravel(),
+                             minlength=self.ndof)
+            zg = np.zeros(self.ndof)
+            if not self.condense:
+                for dofs, solve in md['patches']:
+                    zg[dofs] += solve(rg[dofs])
+            else:
+                eint, esolve, eKIB = md['eint'], md['esolve'], md['eKIB']
+                for Bp, emaps, solve in md['patches']:
+                    rB = rg[Bp].copy()
+                    ys = []
+                    for e, cols in emaps:
+                        y = esolve[e](rg[eint[e]])
+                        ys.append(y)
+                        rB[cols] -= eKIB[e].T @ y
+                    zB = solve(rB)
+                    zg[Bp] += zB
+                    for (e, cols), y in zip(emaps, ys):
+                        zg[eint[e]] += y - esolve[e](eKIB[e] @ zB[cols])
+            z[..., k] = zg[self.g]
+        z *= self.mask
+        if self.coarse is not None:
+            z = z + self._prolong(self.coarse(self._restrict(r)))
+        return z
+
+    def __call__(self, r):
+        if DEV.is_tensor(r) or DEV.is_cupy(r):
+            return DEV.to_device(self._apply_host(DEV.to_host(r)), r)
+        return self._apply_host(np.asarray(r))

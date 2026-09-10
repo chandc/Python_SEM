@@ -235,17 +235,66 @@ MOM_WEIGHT = float(os.environ.get('LSSEM_MOM_WEIGHT', 1.0))
 VORT_WEIGHT = float(os.environ.get('LSSEM_VORT_WEIGHT', 1.0))
 
 
-def momentum_row_weights(c, w7=ROW7_WEIGHT, w_mom=None, w_vort=None):
-    """lssem2d's legacy scaling: momentum rows divided by c so their mass
-    coefficient is 1, matching the constraint rows.  Squared, because the
-    functional squares the residual.
+# MOMENTUM-ROW WEIGHTING FAMILY.  The squared least-squares weight of the three
+# momentum rows against the constraint rows is  w_mom / c**q :
+#
+#     'legacy'    q = 2   row scaled 1/c    -- the validated default.  Mass
+#                          coefficient 1; the whole momentum equation is weighted
+#                          dt^2 against the constraints, so as dt -> 0 the fixed
+#                          point of the step loses the momentum equation
+#                          (BALANCED_CONDENSED_PLAN.md sec 1.2): mesh-scale
+#                          zigzag and a dt-dependent steady state, measured in 2D.
+#     'balanced'  q = 1   row scaled c^-1/2 -- the balanced-norm FOSLS weighting
+#                          (Adler-MacLachlan-Madden 2019; 2D: w_mom = w_mass =
+#                          sqrt(dt)).  Fixed point has an O(1) momentum weight;
+#                          dt-independent steady state, second-order in time,
+#                          Orr-Sommerfeld growth rate held below dt = 0.1 where
+#                          legacy fails (ZIGZAG_CURE_RESEARCH.md sec 4).
+#     'unit'      q = 0   row unscaled      -- the raw operator; cond ~ c^2
+#                          (FOSLS_TIME_DEPENDENT.md sec 2.1).  Diagnostics only.
+#
+# c = a_mass/a_flux is the SAME for every member, so the operator regime and the
+# preconditioners built for it carry over; only the row scale against the
+# constraints changes.  The exponent may also be given directly (`mom_exp`,
+# e.g. 1.5 as the compromise if 'balanced' degrades div u in 3D).  Selectable
+# per call or, for the validation ladder, through the environment:
+#     LSSEM_WEIGHTING = legacy | balanced | unit     LSSEM_MOM_EXP = <float>
+WEIGHTINGS = {'legacy': 2.0, 'balanced': 1.0, 'unit': 0.0}
+DEFAULT_WEIGHTING = os.environ.get('LSSEM_WEIGHTING', 'legacy')
+_ENV_MOM_EXP = os.environ.get('LSSEM_MOM_EXP')
+
+
+def momentum_exponent(weighting=None, mom_exp=None):
+    """Resolve (weighting, mom_exp) -> the exponent q in w_mom/c**q."""
+    if mom_exp is not None:
+        return float(mom_exp)
+    if weighting is None:
+        if _ENV_MOM_EXP is not None:
+            return float(_ENV_MOM_EXP)
+        weighting = DEFAULT_WEIGHTING
+    try:
+        return WEIGHTINGS[str(weighting).lower()]
+    except KeyError:
+        raise ValueError(f'unknown weighting {weighting!r}; '
+                         f'choose from {sorted(WEIGHTINGS)} or give mom_exp')
+
+
+def momentum_row_weights(c, w7=ROW7_WEIGHT, w_mom=None, w_vort=None,
+                         weighting=None, mom_exp=None):
+    """Least-squares row weights (NROW,) for the per-mode operator.
+
+    Momentum rows: w_mom / c**q with q from `weighting` / `mom_exp` (see
+    WEIGHTINGS above).  The legacy q = 2 is lssem2d's scaling: momentum rows
+    divided by c so their mass coefficient is 1, matching the constraint rows;
+    squared, because the functional squares the residual.
 
     `w7` down-weights the redundant vorticity-divergence row -- see above.  Pass
     w7=1.0 to reproduce the original, un-weighted behaviour.
     """
+    q = momentum_exponent(weighting, mom_exp)
     rw = np.ones(NROW)
     rw[1:4] = VORT_WEIGHT if w_vort is None else w_vort
-    rw[4:7] = (MOM_WEIGHT if w_mom is None else w_mom)/(c*c)
+    rw[4:7] = (MOM_WEIGHT if w_mom is None else w_mom)/(c**q)
     rw[7] = w7
     return rw
 

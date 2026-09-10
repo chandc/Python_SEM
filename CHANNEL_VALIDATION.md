@@ -338,6 +338,18 @@ meaningless without stating the window.** The headline table above uses
 
 ---
 
+### Balanced weighting, and what happens below dt = 0.1 (2026-09-09)
+
+The runs above use the legacy row weighting (momentum row × dt). With the
+balanced weighting $w_{\rm mom}=w_{\rm mass}=\sqrt{\Delta t}$ adopted in
+ZIGZAG_CURE_RESEARCH.md (§4.5 has the full tables and
+`figs_fosls_vs_fs/os_balanced_vs_legacy.png`), the dt = 0.1 results are
+unchanged in character (N=8 −10 %, N=10 −0.012 %, N=14 −0.25 %). The
+difference appears when dt is refined: at dt = 0.02 and 0.01 the legacy
+weighting is 3–6 % off with a drifting local growth rate, while the balanced
+weighting holds 0.02–0.08 % (N=10, CG relative tolerance 1e−4). Harness:
+`scratch/os_run_balanced.py --N --dt --w {legacy,balanced} --cgsfac`.
+
 ## 7. Status and caveats
 
 - **Figure 1 (Stokes) is reproduced** to the digit Chan quotes, and the method

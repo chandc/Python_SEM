@@ -214,7 +214,10 @@ def stage(s, U, Nprev, k, dt, kap, workers=None, tol=1e-9, max_iter=3000,
         # already device-resident.
         # is_tensor alone misses cupy, which would then be handed to the
         # thread-parallel numpy solver and slice device arrays across workers
-        solve = S3.pcg if (DEV.is_tensor(b) or DEV.is_cupy(b)) else (
+        # A CALLABLE preconditioner (PMG, vertex patch) cannot be sliced per
+        # mode chunk by the thread-parallel solver; it goes to the serial pcg.
+        _Mk = None if Minv is None else Minv[k]
+        solve = S3.pcg if (DEV.is_tensor(b) or DEV.is_cupy(b) or callable(_Mk)) else (
             lambda *a, **kw: PAR.pcg(*a, workers=workers, **kw))
         dU, it, _ = solve(b, D, facx, facy, kz, nu, c, mesh=m, mask=mask,
                           M_inv=None if Minv is None else Minv[k], tol=tol,
@@ -259,29 +262,75 @@ def _device_arrays(s, like):
     return got
 
 
-def make_precond(s, dt, kap, rowweight=False, like=None):
+# Preconditioner and weighting are INPUT OPTIONS, one object per RKW3 stage
+# (the three stages have different c).  With explicit convection the operator
+# is fixed for the run, so the patch/PMG builds are paid once.
+#
+#   precond    'jacobi'   analytic diagonal (the validated default)
+#              'pmg'      p-multigrid V-cycle, Chebyshev smoother, exact p=2 coarse
+#              'vschwarz' condensed vertex-patch Schwarz + exact p=2 coarse
+#              'vschwarz1' the same without the coarse term (diagnostic)
+#   weighting  'legacy' | 'balanced' | 'unit'   (operator.momentum_row_weights);
+#              mom_exp=<float> overrides with an explicit exponent.
+PRECONDS = ('jacobi', 'pmg', 'vschwarz', 'vschwarz1')
+
+
+def row_weights(dt, k, rowweight=True, weighting=None, mom_exp=None):
+    """The (NROW,) least-squares row weights for stage k, or None (unweighted)."""
+    if not rowweight:
+        return None
+    return OP.momentum_row_weights(T.implicit_coeff(dt, k), weighting=weighting,
+                                   mom_exp=mom_exp)
+
+
+def make_precond(s, dt, kap, rowweight=False, like=None, precond='jacobi',
+                 weighting=None, mom_exp=None, verbose=False, share=False, **pkw):
+    """One preconditioner per stage.  Jacobi returns diagonal arrays (moved to
+    `like`'s device); the others return callables that pcg applies as-is.
+
+    share=True builds ONE patch/PMG preconditioner at the middle stage's c
+    (the three stage values differ by 1.39x: 1/beta = 4.32, 4.80, 6.00) and
+    reuses it for all three stages -- a third of the memory and build time
+    for a few extra iterations on the outer stages."""
+    from lssem3d.precond import PMG, VertexSchwarz3D
     shape = (s['m'].nelem, s['N']+1, s['N']+1, OP.NVAR_R, s['nk'])
+    if precond not in PRECONDS:
+        raise ValueError(f'precond {precond!r} not in {PRECONDS}')
     out = []
     for k in range(T.NSTAGE):
-        cc = T.implicit_coeff(dt, k)
-        rw = OP.momentum_row_weights(cc) if rowweight else None
-        d = S3.jacobi_diagonal_analytic(shape, s['D'], s['m'].facx, s['m'].facy, s['kz'],
-                               s['nu'], cc, s['m'],
-                               s['mask'], s['m'].wq, kap, rw=rw)
-        # jacobi_inverse, not 1/max(d, 1e-30): the clamp puts 1e30 on every
-        # PRESCRIBED dof (diagonal exactly 0) and survives only because the
-        # masked residual happens to be exactly zero.
-        inv = S3.jacobi_inverse(d, s['mask'])
-        # the preconditioner meets the residual inside pcg, so it must live
-        # where the state does
-        out.append(inv if like is None else DEV.to_device(inv, like))
+        if share and precond != 'jacobi' and k > 0:
+            out.append(out[0]); continue
+        cc = T.implicit_coeff(dt, 1 if (share and precond != 'jacobi') else k)
+        rw = row_weights(dt, 1 if (share and precond != 'jacobi') else k, rowweight, weighting, mom_exp)
+        if precond == 'jacobi':
+            d = S3.jacobi_diagonal_analytic(shape, s['D'], s['m'].facx, s['m'].facy, s['kz'],
+                                   s['nu'], cc, s['m'],
+                                   s['mask'], s['m'].wq, kap, rw=rw)
+            # jacobi_inverse, not 1/max(d, 1e-30): the clamp puts 1e30 on every
+            # PRESCRIBED dof (diagonal exactly 0) and survives only because the
+            # masked residual happens to be exactly zero.
+            inv = S3.jacobi_inverse(d, s['mask'])
+            # the preconditioner meets the residual inside pcg, so it must live
+            # where the state does
+            out.append(inv if like is None else DEV.to_device(inv, like))
+        elif precond == 'pmg':
+            orders = pkw.get('orders') or tuple(p for p in (s['N'], 4, 2) if p <= s['N'])
+            out.append(PMG(s['m'], s['nk'], s['nz'], s['nu'], cc, s['kz'], kap, rw,
+                           orders=orders, mask=s['mask'], direct_coarse='element',
+                           deg=pkw.get('deg', 6)))
+        else:
+            out.append(VertexSchwarz3D(s['m'], s['nk'], s['nz'], s['nu'], cc, s['kz'],
+                                       kap, rw, mask=s['mask'],
+                                       coarse=('element' if precond == 'vschwarz' else None),
+                                       condense=pkw.get('condense', True),
+                                       pc=pkw.get('pc', 2), verbose=verbose))
     return out
 
 
-def step(s, U, Nprev, dt, kap, rowweight=False, **kw):
+def step(s, U, Nprev, dt, kap, rowweight=False, weighting=None, mom_exp=None, **kw):
     its = 0
     for k in range(T.NSTAGE):
-        rw = OP.momentum_row_weights(T.implicit_coeff(dt, k)) if rowweight else None
+        rw = row_weights(dt, k, rowweight, weighting, mom_exp)
         U, Nprev, it = stage(s, U, Nprev, k, dt, kap, rw=rw, **kw)
         its = max(its, it)
     return U, Nprev, its

@@ -68,3 +68,44 @@ def plane(fld, m, N, yp_target, RT=180.0, nx_per_elem=12, nzf=None, nz=None):
     P[:, :F.shape[1]] = F
     imgz = np.fft.irfft(P, nzf, axis=1)*(nzf/nz)
     return xf, np.arange(nzf)/nzf, imgz.T                 # image[z, x]
+
+
+def cross(fld, m, N, x_target, RT=180.0, ny_per_elem=8, ymax_plus=None,
+          nzf=None, nz=None):
+    """Cross-stream (z, y) section at streamwise station `x_target`.
+
+    Same principle as `plane`: evaluate the interpolant rather than triangulate.
+    Lagrange in x to the requested station, Lagrange onto a uniform sub-grid
+    inside each y-element, FFT zero-padding in z.  Returns (z, y+, image[y, z]).
+    """
+    nz = nz or fld.shape[-1]
+    x0 = np.array([m.xnod[e][0] for e in range(m.nelem)])
+    x1 = np.array([m.xnod[e][-1] for e in range(m.nelem)])
+    y0 = np.array([m.ynod[e][0] for e in range(m.nelem)])
+
+    col = np.flatnonzero((x0 - 1e-12 <= x_target) & (x_target <= x1 + 1e-12))
+    if len(col) == 0:
+        col = np.flatnonzero(np.abs(x0 - x_target) == np.abs(x0 - x_target).min())
+    xel = col[0]
+    band = np.flatnonzero(np.abs(x0 - x0[xel]) < 1e-12)   # the whole y-column
+    band = band[np.argsort(y0[band])]
+
+    rows, ys = [], []
+    for e in band:
+        if ymax_plus is not None and m.ynod[e][0]*RT > ymax_plus:
+            continue
+        Lx = lagrange_at(m.xnod[e],
+                         np.clip(x_target, m.xnod[e][0], m.xnod[e][-1]))[0]
+        strip = np.einsum('i,ijz->jz', Lx, fld[e])         # (N+1, nz)
+        ye = m.ynod[e]
+        yq = np.linspace(ye[0], ye[-1], ny_per_elem, endpoint=False)
+        rows.append(np.einsum('qj,jz->qz', lagrange_at(ye, yq), strip))
+        ys.append(yq)
+    img = np.concatenate(rows, axis=0)
+    yf = np.concatenate(ys)
+
+    nzf = nzf or 4*nz
+    F = np.fft.rfft(img, axis=1)
+    P = np.zeros(img.shape[:1] + (nzf//2 + 1,), complex)
+    P[:, :F.shape[1]] = F
+    return np.arange(nzf)/nzf, yf*RT, np.fft.irfft(P, nzf, axis=1)*(nzf/nz)
