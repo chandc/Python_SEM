@@ -85,3 +85,18 @@ def test_patch_pcg_beats_jacobi(geom, weighting, c):
     assert np.sqrt(np.sum(r*r)) < 1e-8*np.sqrt(np.sum(b*b))
     assert itp <= 40, f'{itp} patch iterations'
     assert itp*5 < itj, f'patch {itp} vs jacobi {itj}'
+
+
+def test_batched_equals_reference(geom):
+    """Factor-sharing + batched torch apply reproduces the reference preconditioner."""
+    pytest.importorskip('torch')
+    from lssem3d.precond import VertexSchwarzBatched3D
+    m, nk, mask, kz = geom
+    c = 5405.4
+    rw = OP.momentum_row_weights(c)
+    ref = VertexSchwarz3D(m, nk, NZ, NU, c, kz, 0.0, rw, mask=mask)
+    bat = VertexSchwarzBatched3D(m, nk, NZ, NU, c, kz, 0.0, rw, mask=mask, device='cpu')
+    r = _rand_state(m, nk, mask, 5)
+    zr, zb = ref(r), bat(r)
+    assert np.abs(zb - zr).max() < 1e-12*np.abs(zr).max()
+    assert max(bat.n_etypes) <= 3 and max(bat.n_ptypes) <= 5      # sharing found the few distinct types

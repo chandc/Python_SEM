@@ -718,3 +718,308 @@ class VertexSchwarz3D:
         if DEV.is_tensor(r) or DEV.is_cupy(r):
             return DEV.to_device(self._apply_host(DEV.to_host(r)), r)
         return self._apply_host(np.asarray(r))
+
+
+# =============================================================================
+# Batched, factor-sharing vertex-patch Schwarz (torch, fp64)
+# =============================================================================
+#
+# Same preconditioner as VertexSchwarz3D, restructured for the device
+# (BALANCED_CONDENSED_PLAN.md step 4.5):
+#
+#  * PADDING.  Every element block keeps all n*n*14 local dofs and every patch
+#    keeps all dofs of its (2N+1)^2 (or (2N+1)(N+1) at a wall) node grid; a
+#    prescribed dof gets a unit diagonal and zero coupling.  All blocks of a
+#    kind then have one size, so one batched solve serves all of them.
+#  * SHARING.  With identical elements and constant coefficients (no
+#    convection in the implicit operator) the element matrix depends only on
+#    the mode and on which local dofs are masked.  Elements are grouped by
+#    mask pattern and the group's blocks are CHECKED equal (else the group is
+#    split); patch Schur complements are built in a canonical patch-grid
+#    ordering and deduplicated by comparison.  On the 6x18 channel that is
+#    3-4 element types and 3-4 patch types per mode instead of 108 / 114.
+#  * ONE BACK-SUBSTITUTION PER ELEMENT.  The interior correction is linear in
+#    the edge solution, so the four patches containing an element are summed
+#    first (C_e = sum of their edge solutions on e's edge dofs) and the
+#    interior solve is done once: z_I = 4 y - K_II^-1 K_IE C_e.
+#  * APPLY = index gathers, batched torch.cholesky_solve with many right-hand
+#    sides (level-3 work), index_add_ scatters.  fp64 throughout.  The coarse
+#    term is the same DirectCoarseE on the host.
+#
+# Device: kernels_torch.device() (LSSEM3D_DEVICE, else CUDA if present, else
+# CPU) -- the Mac tests the batched path on the CPU in fp64.
+
+
+def _build_coarse(mesh, nk, nz, nu, c, kz, kap, rw, pin_p, mask, pc):
+    mm = coarsen_mesh(mesh, pc)
+    if mask is not None:
+        lm = BC.build_mask(mm, nk, pin_p=False, nz=nz)
+        BC.pin_dof(mm, lm, OP.P_, 0)
+        BC.pin_dof(mm, lm, OP.NVAR + OP.P_, 0)
+    else:
+        lm = None
+    lev = _Level(mm, nk, nz, nu, c, kz, kap, rw, pin_p, mask=lm)
+    P = p_interp(pc, mesh.N)
+    return lev, DirectCoarseE(lev), P
+
+
+class VertexSchwarzBatched3D:
+    name = 'vsbatch'
+
+    def __init__(self, mesh, nk, nz, nu, c, kz, kap=0.0, rw=None, mask=None,
+                 pin_p=False, coarse='element', pc=2, device=None, verbose=False,
+                 share=True):
+        import time
+        import torch
+        t0 = time.perf_counter()
+        n, N = mesh.N + 1, mesh.N
+        nvar = OP.NVAR_R
+        nloc = n*n*nvar
+        self.m, self.nk, self.c = mesh, nk, c
+        self.D = diff_matrix(N)
+        self.shape = (mesh.nelem, n, n, nvar, nk)
+        self.mask = (np.array(mask, copy=True) if mask is not None
+                     else BC.build_mask(mesh, nk, pin_p=pin_p, nz=nz))
+        kz = np.asarray(kz, dtype=float)
+        mult = S3.gs(mesh, np.ones(self.shape))
+        self.mw = 1.0/np.where(mult < 1e-10, 1.0, mult)
+        gid = mesh.gidx
+        nnode = int(gid.max()) + 1
+        self.g = (gid[..., None]*nvar + np.arange(nvar)).astype(np.int64)
+        self.ndof = nnode*nvar
+        gflat = self.g.reshape(mesh.nelem, -1)
+        loc_int = np.zeros((n, n, nvar), bool); loc_int[1:N, 1:N, :] = True
+        loc_int = loc_int.ravel()
+        I_loc, E_loc = np.flatnonzero(loc_int), np.flatnonzero(~loc_int)
+        self.nI, self.nE = I_loc.size, E_loc.size
+        eint_g, eedge_g = gflat[:, I_loc], gflat[:, E_loc]              # (nelem, nI), (nelem, nE)
+
+        # ---------------- patch topology (mode independent) ----------------
+        corners, node_elems = {}, {}
+        slot_of = {(N, N): 0, (0, N): 1, (N, 0): 2, (0, 0): 3}           # element is SW/SE/NW/NE of the vertex
+        for e in range(mesh.nelem):
+            for (a, b) in slot_of:
+                corners.setdefault(int(gid[e, a, b]), []).append((slot_of[(a, b)], e))
+            for gn in np.unique(gid[e]):
+                node_elems.setdefault(int(gn), []).append(e)
+        # canonical patch grid: (I, J) in [0, 2N]^2; slot s covers I in [sx*N, sx*N+N], J in [sy*N, ...]
+        slot_off = {0: (0, 0), 1: (N, 0), 2: (0, N), 3: (N, N)}
+        patches = []                                                        # (elements-by-slot dict, edge global dofs canonical, ring, present-key)
+        for v, lst in corners.items():
+            node = -np.ones((2*N+1, 2*N+1), dtype=np.int64)
+            slots = {}
+            for s, e in lst:
+                ox, oy = slot_off[s]
+                node[ox:ox+n, oy:oy+n] = gid[e]
+                slots[s] = e
+            II, JJ = np.meshgrid(np.arange(2*N+1), np.arange(2*N+1), indexing='ij')
+            edge = (node >= 0) & ((II % N == 0) | (JJ % N == 0))
+            enodes = node[edge]                                             # lexicographic (I, J) order
+            _, first = np.unique(enodes, return_index=True)                 # a 2-element-wide periodic mesh wraps: keep the first copy of a node
+            enodes = enodes[np.sort(first)]
+            edofs = (enodes[:, None]*nvar + np.arange(nvar)).ravel()
+            ring = sorted({e2 for e in slots.values() for gn in np.unique(gid[e]) for e2 in node_elems[int(gn)]})
+            patches.append((slots, edofs, ring, tuple(sorted(slots))))
+        self.npatch = len(patches)
+        # patches containing each element (always 4 corners, but count it)
+        npe = np.zeros(mesh.nelem, dtype=np.int64)
+        for slots, _, _, _ in patches:
+            for e in slots.values(): npe[e] += 1
+
+        # ---------------- per mode: shared factors + index plans ----------------
+        self.dev = torch.device(device) if device is not None else __import__('lssem3d.kernels_torch', fromlist=['device']).device()
+        T = lambda a: torch.as_tensor(np.ascontiguousarray(a), device=self.dev)
+        Ti = lambda a: torch.as_tensor(np.ascontiguousarray(a, dtype=np.int64), device=self.dev)
+        self.modes = []
+        self.bytes = 0
+        self.n_etypes, self.n_ptypes = [], []
+        for k in range(nk):
+            mask_k = np.ascontiguousarray(self.mask[..., k:k+1])
+            mloc = (mask_k[..., 0].reshape(mesh.nelem, nloc) > 0.5)         # (nelem, nloc) free flags
+            free = np.zeros(self.ndof, bool)
+            np.logical_or.at(free, gflat.ravel(), mloc.ravel())
+            if not free.any():
+                self.modes.append(None); self.n_etypes.append(0); self.n_ptypes.append(0)
+                continue
+            blocks = _element_blocks_mode(mesh, self.D, kz[k:k+1], nu, c, kap, rw, mask_k, mesh.wq)
+            for e in range(mesh.nelem):                                     # padding: unit diagonal on masked dofs
+                dead = ~mloc[e]
+                blocks[e][dead, dead] = 1.0
+            # ---- element types by mask pattern, verified ----
+            etype = -np.ones(mesh.nelem, dtype=np.int64); reps = []
+            for e in range(mesh.nelem):
+                key = mloc[e].tobytes()
+                found = -1
+                if share:
+                    for t, (kk, re_) in enumerate(reps):
+                        if kk == key and np.abs(blocks[e] - blocks[re_]).max() <= 1e-11*np.abs(blocks[re_]).max():
+                            found = t; break
+                if found < 0:
+                    reps.append((key, e)); found = len(reps) - 1
+                etype[e] = found
+            efac = []                                                       # per type: sc_I, L_II (scaled), K_EI, K_IE
+            for key, re_ in reps:
+                K = blocks[re_]
+                KII = K[np.ix_(I_loc, I_loc)]
+                sc = 1.0/np.sqrt(np.diag(KII))
+                L = np.linalg.cholesky(KII*sc[:, None]*sc[None, :])
+                KEI = K[np.ix_(E_loc, I_loc)]
+                efac.append((T(sc), T(L), T(KEI), T(KEI.T.copy())))
+                self.bytes += 8*(L.size + 2*KEI.size)
+            # ---- patch Schur complements in canonical ordering, deduplicated ----
+            ptype = -np.ones(self.npatch, dtype=np.int64); preps = []        # (present-key, S, edofs-size, slot cols)
+            pfac = []
+            locB = -np.ones(self.ndof, dtype=np.int64)
+            for pi, (slots, edofs, ring, pkey) in enumerate(patches):
+                nb = edofs.size
+                locB[:] = -1; locB[edofs] = np.arange(nb)
+                S = np.zeros((nb, nb))
+                for e2 in ring:
+                    li = locB[gflat[e2]]; kp = li >= 0
+                    S[np.ix_(li[kp], li[kp])] += blocks[e2][np.ix_(kp, kp)]
+                slot_cols = {}
+                for s, e in slots.items():
+                    cols = locB[eedge_g[e]]                                 # element's edge dofs -> patch positions
+                    sc_e, L_e, KEI_e, _ = efac[etype[e]]
+                    KEI_np = KEI_e.cpu().numpy(); sc_np = sc_e.cpu().numpy(); L_np = L_e.cpu().numpy()
+                    # K_EI K_II^-1 K_IE = KEI (D L L^T D)^-1 KEI^T with KII = D^-1 (L L^T) D^-1, D = diag(1/sc)
+                    Y = sc_np[:, None]*np.linalg.solve(L_np.T, np.linalg.solve(L_np, sc_np[:, None]*KEI_np.T))
+                    S[np.ix_(cols, cols)] -= KEI_np @ Y
+                    slot_cols[s] = cols
+                dead = ~free[edofs]
+                S[dead, :] = 0.0; S[:, dead] = 0.0; S[dead, dead] = 1.0
+                S = 0.5*(S + S.T)
+                found = -1
+                if share:
+                    for t, (kk, Sr, nbr, _) in enumerate(preps):
+                        if kk == pkey and nbr == nb and np.abs(S - Sr).max() <= 1e-11*np.abs(Sr).max():
+                            found = t; break
+                if found < 0:
+                    sc = 1.0/np.sqrt(np.diag(S))
+                    L = np.linalg.cholesky(S*sc[:, None]*sc[None, :])
+                    preps.append((pkey, S, nb, slot_cols)); pfac.append((T(sc), T(L)))
+                    self.bytes += 8*L.size
+                    found = len(preps) - 1
+                ptype[pi] = found
+            # ---- index plans (per element type / patch type) ----
+            eplan = []
+            for t in range(len(reps)):
+                es = np.flatnonzero(etype == t)
+                eplan.append(dict(es=Ti(es), gI=Ti(eint_g[es]), n=es.size))
+            pplan = []
+            for t in range(len(preps)):
+                ps = np.flatnonzero(ptype == t)
+                pkey, _, nb, slot_cols = preps[t]
+                gB = np.stack([patches[p][1] for p in ps])                  # (np_t, nb) global dofs
+                slots = []
+                for s in sorted(slot_cols):
+                    es = np.array([patches[p][0][s] for p in ps])
+                    slots.append((Ti(es), Ti(slot_cols[s])))
+                pplan.append(dict(ps=ps, gB=Ti(gB), n=ps.size, nb=nb, slots=slots))
+            self.modes.append(dict(efac=efac, eplan=eplan, pfac=pfac, pplan=pplan,
+                                   gI=Ti(eint_g), gE=Ti(eedge_g), etype=Ti(etype),
+                                   npe=T(npe.astype(float))))
+            self.n_etypes.append(len(reps)); self.n_ptypes.append(len(preps))
+            del blocks
+        self.gflat_t = Ti(gflat)
+        self.g_t = Ti(self.g.ravel())
+        self.mask_t = T(self.mask)
+        self.mw_t = T(self.mw)
+        self._group_modes()
+        # ---- coarse term (host) ----
+        self.coarse = None
+        if coarse:
+            self.lev_c, self.coarse, self.P = _build_coarse(mesh, nk, nz, nu, c, kz, kap, rw, pin_p, mask, pc)
+            self.R = self.P.T
+        self.setup_time = time.perf_counter() - t0
+        if verbose:
+            print(f'  VertexSchwarzBatched3D: {self.npatch} patches x {nk} modes, element types/mode {self.n_etypes}, '
+                  f'patch types/mode {self.n_ptypes}, factors {self.bytes/1e6:.1f} MB on {self.dev}, '
+                  f'setup {self.setup_time:.1f}s', flush=True)
+
+    def _restrict(self, x):
+        xw = x*self.mw
+        t = np.einsum('bj,eijvk->eibvk', self.R, xw)
+        cc = np.einsum('ai,eibvk->eabvk', self.R, t)
+        return S3.gs(self.lev_c.m, cc)*self.lev_c.mask
+
+    def _prolong(self, xc):
+        t = np.einsum('bj,eijvk->eibvk', self.P, xc)
+        return np.einsum('ai,eibvk->eabvk', self.P, t)*self.mask
+
+    def _group_modes(self):
+        """Stack the factors of modes that share the same index plans, so one
+        batched call serves all of them (17 modes -> 2-3 groups on the channel:
+        k = 0 with its pin, the Nyquist mode, and everything else)."""
+        import torch
+        groups = {}
+        for k, md in enumerate(self.modes):
+            if md is None:
+                continue
+            sig = (tuple(int(p['n']) for p in md['eplan']),
+                   tuple((int(p['n']), int(p['nb'])) for p in md['pplan']),
+                   bytes(md['etype'].cpu().numpy()),
+                   tuple(bytes(p['ps']) for p in md['pplan']))
+            groups.setdefault(sig, []).append(k)
+        self.groups = []
+        for sig, ks in groups.items():
+            m0 = self.modes[ks[0]]
+            efac = [tuple(torch.stack([self.modes[k]['efac'][t][j] for k in ks]) for j in range(4))
+                    for t in range(len(m0['eplan']))]
+            pfac = [tuple(torch.stack([self.modes[k]['pfac'][t][j] for k in ks]) for j in range(2))
+                    for t in range(len(m0['pplan']))]
+            self.groups.append(dict(ks=torch.as_tensor(ks, device=self.dev), efac=efac, pfac=pfac,
+                                    eplan=m0['eplan'], pplan=m0['pplan'], npe=m0['npe']))
+        self.n_groups = len(self.groups)
+
+    def _apply_patches(self, r):
+        """r: torch (nelem, n, n, 14, nk) on self.dev -> z same shape (patch part only).
+        One batched call per (mode group, block type)."""
+        import torch
+        nelem = self.shape[0]
+        z = torch.zeros_like(r)
+        rm = (r*self.mask_t*self.mw_t).reshape(-1, self.nk)               # (nlocal, nk)
+        for G in self.groups:
+            ks = G['ks']; nm = ks.numel()
+            rg = torch.zeros((nm, self.ndof), dtype=r.dtype, device=self.dev)
+            rg.index_add_(1, self.g_t, rm[:, ks].T.contiguous())
+            Y = torch.empty((nm, nelem, self.nI), dtype=r.dtype, device=self.dev)
+            F = torch.empty((nm, nelem, self.nE), dtype=r.dtype, device=self.dev)
+            for t, pl in enumerate(G['eplan']):
+                sc, L, KEI, KIE = G['efac'][t]                                # (nm,nI) (nm,nI,nI) (nm,nE,nI) (nm,nI,nE)
+                B = rg[:, pl['gI']].transpose(1, 2)*sc[:, :, None]            # (nm, nI, n_t)
+                Yt = torch.cholesky_solve(B, L)*sc[:, :, None]
+                Y[:, pl['es']] = Yt.transpose(1, 2)
+                F[:, pl['es']] = (KEI @ Yt).transpose(1, 2)
+            zg = torch.zeros((nm, self.ndof), dtype=r.dtype, device=self.dev)
+            C = torch.zeros((nm, nelem, self.nE), dtype=r.dtype, device=self.dev)
+            for t, pl in enumerate(G['pplan']):
+                sc, L = G['pfac'][t]                                          # (nm,nb) (nm,nb,nb)
+                rB = rg[:, pl['gB']]                                          # (nm, np_t, nb)
+                for es, cols in pl['slots']:
+                    rB[:, :, cols] -= F[:, es]
+                zB = (torch.cholesky_solve((rB*sc[:, None, :]).transpose(1, 2), L)*sc[:, :, None]).transpose(1, 2)
+                zg.index_add_(1, pl['gB'].reshape(-1), zB.reshape(nm, -1))
+                for es, cols in pl['slots']:
+                    C.index_add_(1, es, zB[:, :, cols])
+            for t, pl in enumerate(G['eplan']):
+                sc, L, KEI, KIE = G['efac'][t]
+                Gm = (KIE @ C[:, pl['es']].transpose(1, 2))*sc[:, :, None]  # (nm, nI, n_t)
+                W = torch.cholesky_solve(Gm, L)*sc[:, :, None]
+                zI = G['npe'][pl['es']][None, :, None]*Y[:, pl['es']] - W.transpose(1, 2)
+                zg.index_add_(1, pl['gI'].reshape(-1), zI.reshape(nm, -1))
+            z[..., ks] = zg[:, self.g_t].T.reshape(self.shape[:-1] + (nm,))
+        return z*self.mask_t
+
+    def __call__(self, r):
+        import torch
+        was_tensor = DEV.is_tensor(r)
+        rt = r.to(self.dev) if was_tensor else torch.as_tensor(np.asarray(r), device=self.dev)
+        z = self._apply_patches(rt)
+        if self.coarse is not None:
+            rh = DEV.to_host(r) if was_tensor else np.asarray(r)
+            zc = self._prolong(self.coarse(self._restrict(rh)))
+            z = z + torch.as_tensor(zc, device=self.dev)
+        if was_tensor:
+            return z.to(r.device)
+        return z.cpu().numpy()

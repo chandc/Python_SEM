@@ -26,8 +26,8 @@ CAVITY_N15_MARCH.md (the marches), CHANNEL_VALIDATION.md §6 (Orr–Sommerfeld).
 | balanced weighting, 3D | **blocked** with explicit convection: channel divergence 3e−1 → 6e−1 in 10 steps (legacy 8e−4); $q=1.5$ holds 3e−2 | §5.3 below, `scratch/minchan_w_*.log` |
 | legacy weighting, 3D zigzag | **absent**: run01 fields have the same node-alternation statistics as the fractional-step field and less top-mode energy | ZIGZAG_CURE_RESEARCH.md §4.8, `scratch/zigzag3d.py` |
 | 3D options | **in**: `weighting`, `mom_exp`, `precond`, `share_precond`; defaults unchanged; 248 + 7 tests pass | §4b |
-| vertex patch + coarse, 3D | **p-independent** (36–38 it, N = 4–10) and **77 vs 4675 it** per stage on the channel; NumPy apply 64 min/step | §4b, §8b |
-| next | batched device apply (step 4.5); increment-divergence term or implicit convection for 3D; corner grading for the singular cavity | §9 |
+| vertex patch + coarse, 3D | **p-independent** (36–38 it, N = 4–10) and **71 vs 4675 it** per stage on the channel; batched fp64 apply: 70 s/step on the Mac CPU (was 64 min), identical step to Jacobi | §4b, §8b, FP64_ON_APPLE_GPU.md |
+| next | GEMM-form apply on Accelerate (Mac) and the GB10 timing; increment-divergence term or implicit convection for 3D; corner grading for the singular cavity | §9, FP64_ON_APPLE_GPU.md §5 |
 
 ---
 
@@ -551,6 +551,22 @@ dissipation to all printed digits).  Build 40 min and 18 GB stored
 patch solves per iteration run in a Python loop (≈16 s per iteration
 against 1.3 ms for the operator).  The iteration count is the production
 number; the time is the prototype's.
+
+**Step 4.5 done on the Mac (2026-09-10, fp64, `precond=vsbatch`,
+`lssem3d/precond.py::VertexSchwarzBatched3D`, FP64_ON_APPLE_GPU.md §3):**
+padding to uniform block sizes, factor sharing by mask pattern (3 element
+and 5 patch types per mode on the channel, 5 and 11 at $k=0$ with the pin,
+verified equal to round-off before sharing), one back-substitution per
+element, torch batched `cholesky_solve` with the modes stacked.  Equal to
+the reference to 3e−15.  Channel, per stage value of $c$: build 2.3 min and
+1.4 GB (was 40 min, 18 GB); apply 0.21 s per CG iteration (was 16 s);
+**full step 70 s on the Mac CPU (71 CG/stage) against 64 min before and
+≈80 s for Jacobi's 4675/stage**; a two-step restart from run01 reproduces
+the Jacobi step to every logged digit (`scratch/minchan_vsb_legacy.log`).
+The apply is now arithmetic-bound at ≈70 GFLOP/s on the CPU's batched
+solves; the GEMM form with precomputed inverses runs the same work at
+300+ GFLOP/s on Accelerate (≈30 ms), and the GB10's native FP64 is the
+production target.
 
 Bottom line: patch + coarse turns the channel solve from ≈18 s/step into an
 estimated 1–3 s/step for ≈6 GB of factors, provided the apply is batched on

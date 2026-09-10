@@ -270,9 +270,10 @@ def _device_arrays(s, like):
 #              'pmg'      p-multigrid V-cycle, Chebyshev smoother, exact p=2 coarse
 #              'vschwarz' condensed vertex-patch Schwarz + exact p=2 coarse
 #              'vschwarz1' the same without the coarse term (diagnostic)
+#              'vsbatch'  the same preconditioner, factor-sharing + batched torch apply (fp64)
 #   weighting  'legacy' | 'balanced' | 'unit'   (operator.momentum_row_weights);
 #              mom_exp=<float> overrides with an explicit exponent.
-PRECONDS = ('jacobi', 'pmg', 'vschwarz', 'vschwarz1')
+PRECONDS = ('jacobi', 'pmg', 'vschwarz', 'vschwarz1', 'vsbatch')
 
 
 def row_weights(dt, k, rowweight=True, weighting=None, mom_exp=None):
@@ -292,7 +293,7 @@ def make_precond(s, dt, kap, rowweight=False, like=None, precond='jacobi',
     (the three stage values differ by 1.39x: 1/beta = 4.32, 4.80, 6.00) and
     reuses it for all three stages -- a third of the memory and build time
     for a few extra iterations on the outer stages."""
-    from lssem3d.precond import PMG, VertexSchwarz3D
+    from lssem3d.precond import PMG, VertexSchwarz3D, VertexSchwarzBatched3D
     shape = (s['m'].nelem, s['N']+1, s['N']+1, OP.NVAR_R, s['nk'])
     if precond not in PRECONDS:
         raise ValueError(f'precond {precond!r} not in {PRECONDS}')
@@ -318,6 +319,9 @@ def make_precond(s, dt, kap, rowweight=False, like=None, precond='jacobi',
             out.append(PMG(s['m'], s['nk'], s['nz'], s['nu'], cc, s['kz'], kap, rw,
                            orders=orders, mask=s['mask'], direct_coarse='element',
                            deg=pkw.get('deg', 6)))
+        elif precond == 'vsbatch':
+            out.append(VertexSchwarzBatched3D(s['m'], s['nk'], s['nz'], s['nu'], cc, s['kz'],
+                                              kap, rw, mask=s['mask'], pc=pkw.get('pc', 2), verbose=verbose))
         else:
             out.append(VertexSchwarz3D(s['m'], s['nk'], s['nz'], s['nu'], cc, s['kz'],
                                        kap, rw, mask=s['mask'],
