@@ -433,9 +433,13 @@ def price(N=8, ex=6, ey=18, nz=32, dt=None, weighting='legacy', mom_exp=None, pr
     # a host array meeting a device Nk in the RK combination, one line deeper
     # than the operator -- the same "Unsupported type numpy.ndarray", with the
     # traceback pointing at arithmetic rather than at the allocation.
-    _xp = DEV.xp(U)
-    Nprev = _xp.zeros(tuple(OP.to_complex(U).shape[:-2]) + (3, s['nk']),
-                      dtype=complex)
+    # Same as run(): allocate on the host, then move to WHERE THE STATE IS.
+    # `torch.zeros(..., dtype=complex)` with no device lands on the CPU, so on
+    # a CUDA torch run the RK combination met a cuda Nk and a cpu Nprev
+    # ("Expected all tensors to be on the same device") -- price() had only
+    # ever been exercised on cupy, where xp.zeros is device-resident.
+    Nprev = np.zeros(tuple(OP.to_complex(DEV.to_host(U)).shape[:-2]) + (3, s['nk']), dtype=complex)
+    Nprev = DEV.to_device(Nprev, U)
     t0 = time.perf_counter(); U1, Nprev, it = advance(s, U, Nprev, dt, Minv, weighting=weighting, mom_exp=mom_exp)
     t1 = time.perf_counter() - t0
     t0 = time.perf_counter(); U1, Nprev, it = advance(s, U1, Nprev, dt, Minv, weighting=weighting, mom_exp=mom_exp)
