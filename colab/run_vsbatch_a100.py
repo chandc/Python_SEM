@@ -65,7 +65,9 @@ if __name__ == '__main__':
     ap.add_argument('--out', default='colab_results'); ap.add_argument('--backends', default='torch,cuda')
     ap.add_argument('--device', default=None)
     a = ap.parse_args()
-    import torch
+    import torch, datetime
+    _commit = subprocess.run(['git', 'log', '--oneline', '-1'], capture_output=True, text=True, cwd=ROOT).stdout.strip()
+    print(f'code: {_commit}   started {datetime.datetime.now():%Y-%m-%d %H:%M:%S}', flush=True)
     dev = a.device or ('cuda' if torch.cuda.is_available() else 'cpu')
     os.environ['LSSEM3D_DEVICE'] = dev
     os.makedirs(a.out, exist_ok=True)
