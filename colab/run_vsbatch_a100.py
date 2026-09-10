@@ -74,8 +74,8 @@ if __name__ == '__main__':
     mesh = dict(N='6', EX='2', EY='4', NZ='8') if a.quick else dict(N='8', EX='6', EY='18', NZ='32')
     price_args = ['N=6', 'ex=2', 'ey=4', 'nz=8'] if a.quick else []
 
-    print('\n== 2. preconditioner build/apply on the channel mesh (numpy operator, torch apply)')
-    out = sh([sys.executable, '-u', 'scratch/vsbatch_check.py'], env=dict(mesh, REF='0', LSSEM3D_BACKEND='numpy', LSSEM3D_DEVICE=dev))
+    print('\n== 2. preconditioner build/apply on the channel mesh (device probes + apply; operator on the device)')
+    out = sh([sys.executable, '-u', 'scratch/vsbatch_check.py'], env=dict(mesh, REF='0', LSSEM3D_BACKEND=('torch' if dev.startswith('cuda') else 'numpy'), LSSEM3D_DEVICE=dev))
     R['check'] = [l.strip() for l in out.splitlines() if 'VertexSchwarzBatched3D' in l or 'build batched' in l or 'pcg with' in l]
 
     print('\n== 3. seconds per RKW3 step: Jacobi vs vsbatch')

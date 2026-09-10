@@ -763,21 +763,69 @@ def _build_coarse(mesh, nk, nz, nu, c, kz, kap, rw, pin_p, mask, pc):
     return lev, DirectCoarseE(lev), P
 
 
+class _DenseCoarseDevice:
+    """Exact p = pc coarse solve with a DENSE fp64 Cholesky factor per mode,
+    resident on the device, so the coarse term costs no host round trip.
+    Channel at p = 2: 6216 dofs per mode, 0.3 GB per mode in double -- fine on
+    a 40 GB A100, so it is the default when the device is CUDA; on the CPU the
+    sparse host solver (DirectCoarseE) stays the default."""
+
+    def __init__(self, level, dev):
+        import torch
+        m, shape, mask = level.m, level.shape, level.mask
+        nelem, n, _, nvar, nk = shape
+        nloc = n*n*nvar
+        Aloc = np.empty((nelem, nk, nloc, nloc))
+        for col in range(nloc):
+            i, j, f = np.unravel_index(col, (n, n, nvar))
+            v = np.zeros(shape); v[:, i, j, f, :] = 1.0
+            Aloc[:, :, :, col] = np.moveaxis(level.A_un(v), -1, 1).reshape(nelem, nk, nloc)
+        gidx = m.gidx
+        nnode = int(gidx.max()) + 1
+        ndof = nnode*nvar
+        gd = (gidx[..., None]*nvar + np.arange(nvar)).reshape(nelem, nloc)
+        rows = np.repeat(gd, nloc, axis=1).ravel(); cols = np.tile(gd, (1, nloc)).ravel()
+        L = torch.empty((nk, ndof, ndof), dtype=torch.float64, device=dev)
+        for k in range(nk):
+            A = np.zeros((ndof, ndof))
+            np.add.at(A, (rows, cols), Aloc[:, k].reshape(-1))
+            d = np.diag(A); dead = np.abs(d) <= 1e-300
+            A[dead, dead] = 1.0
+            A = 0.5*(A + A.T)
+            L[k] = torch.linalg.cholesky(torch.as_tensor(A, device=dev))
+        self.L, self.ndof, self.gd = L, ndof, torch.as_tensor(gd.ravel(), device=dev)
+        self.mw = torch.as_tensor(level.mw, device=dev)
+        self.mask = torch.as_tensor(level.mask, device=dev)
+        self.shape = shape
+        self.bytes = 8*L.numel()
+
+    def __call__(self, r):
+        import torch
+        nelem, n, _, nvar, nk = self.shape
+        rw = (r*self.mw).reshape(nelem*n*n*nvar, nk).T.contiguous()          # (nk, nlocal)
+        g = torch.zeros((nk, self.ndof), dtype=r.dtype, device=r.device)
+        g.index_add_(1, self.gd, rw)
+        z = torch.cholesky_solve(g[:, :, None], self.L)[:, :, 0]               # (nk, ndof)
+        return z[:, self.gd].T.reshape(self.shape)*self.mask
+
+
 class VertexSchwarzBatched3D:
     name = 'vsbatch'
 
     def __init__(self, mesh, nk, nz, nu, c, kz, kap=0.0, rw=None, mask=None,
                  pin_p=False, coarse='element', pc=2, device=None, verbose=False,
-                 share=True):
+                 share=True, coarse_dense=None):
         import time
         import torch
+        from . import backend as BK
         t0 = time.perf_counter()
         n, N = mesh.N + 1, mesh.N
         nvar = OP.NVAR_R
         nloc = n*n*nvar
+        nelem = mesh.nelem
         self.m, self.nk, self.c = mesh, nk, c
         self.D = diff_matrix(N)
-        self.shape = (mesh.nelem, n, n, nvar, nk)
+        self.shape = (nelem, n, n, nvar, nk)
         self.mask = (np.array(mask, copy=True) if mask is not None
                      else BC.build_mask(mesh, nk, pin_p=pin_p, nz=nz))
         kz = np.asarray(kz, dtype=float)
@@ -787,155 +835,210 @@ class VertexSchwarzBatched3D:
         nnode = int(gid.max()) + 1
         self.g = (gid[..., None]*nvar + np.arange(nvar)).astype(np.int64)
         self.ndof = nnode*nvar
-        gflat = self.g.reshape(mesh.nelem, -1)
+        gflat = self.g.reshape(nelem, -1)
         loc_int = np.zeros((n, n, nvar), bool); loc_int[1:N, 1:N, :] = True
         loc_int = loc_int.ravel()
         I_loc, E_loc = np.flatnonzero(loc_int), np.flatnonzero(~loc_int)
         self.nI, self.nE = I_loc.size, E_loc.size
-        eint_g, eedge_g = gflat[:, I_loc], gflat[:, E_loc]              # (nelem, nI), (nelem, nE)
+        eint_g, eedge_g = gflat[:, I_loc], gflat[:, E_loc]
+        self.dev = torch.device(device) if device is not None else __import__('lssem3d.kernels_torch', fromlist=['device']).device()
+        T = lambda a: torch.as_tensor(np.ascontiguousarray(a), device=self.dev)
+        Ti = lambda a: torch.as_tensor(np.ascontiguousarray(a, dtype=np.int64), device=self.dev)
 
-        # ---------------- patch topology (mode independent) ----------------
+        # ---------------- topology (mode independent) ----------------
         corners, node_elems = {}, {}
         slot_of = {(N, N): 0, (0, N): 1, (N, 0): 2, (0, 0): 3}           # element is SW/SE/NW/NE of the vertex
-        for e in range(mesh.nelem):
+        for e in range(nelem):
             for (a, b) in slot_of:
-                corners.setdefault(int(gid[e, a, b]), []).append((slot_of[(a, b)], e))
+                corners.setdefault(int(gid[e, a, b]), []).append((slot_of[(a, b)], e, a, b))
             for gn in np.unique(gid[e]):
                 node_elems.setdefault(int(gn), []).append(e)
-        # canonical patch grid: (I, J) in [0, 2N]^2; slot s covers I in [sx*N, sx*N+N], J in [sy*N, ...]
         slot_off = {0: (0, 0), 1: (N, 0), 2: (0, N), 3: (N, N)}
-        patches = []                                                        # (elements-by-slot dict, edge global dofs canonical, ring, present-key)
+        px = getattr(mesh, 'periodic_x', None); py = getattr(mesh, 'periodic_y', None)
+        xc = 0.5*(mesh.xnod[:, 0] + mesh.xnod[:, -1]); yc = 0.5*(mesh.ynod[:, 0] + mesh.ynod[:, -1])
+        def rel(e2, xv, yv):
+            dx, dy = xc[e2] - xv, yc[e2] - yv
+            if px: dx = (dx + px/2) % px - px/2
+            if py: dy = (dy + py/2) % py - py/2
+            return (round(float(dx), 6), round(float(dy), 6))
+        patches = []      # dict(slots={s: e}, edofs, ring, present, ringrel=[(dx,dy,e2)])
         for v, lst in corners.items():
             node = -np.ones((2*N+1, 2*N+1), dtype=np.int64)
             slots = {}
-            for s, e in lst:
+            s0, e0, a0, b0 = lst[0]
+            xv, yv = float(mesh.xnod[e0, a0]), float(mesh.ynod[e0, b0])
+            for s, e, a, b in lst:
                 ox, oy = slot_off[s]
                 node[ox:ox+n, oy:oy+n] = gid[e]
                 slots[s] = e
             II, JJ = np.meshgrid(np.arange(2*N+1), np.arange(2*N+1), indexing='ij')
             edge = (node >= 0) & ((II % N == 0) | (JJ % N == 0))
-            enodes = node[edge]                                             # lexicographic (I, J) order
-            _, first = np.unique(enodes, return_index=True)                 # a 2-element-wide periodic mesh wraps: keep the first copy of a node
+            enodes = node[edge]
+            _, first = np.unique(enodes, return_index=True)
             enodes = enodes[np.sort(first)]
             edofs = (enodes[:, None]*nvar + np.arange(nvar)).ravel()
             ring = sorted({e2 for e in slots.values() for gn in np.unique(gid[e]) for e2 in node_elems[int(gn)]})
-            patches.append((slots, edofs, ring, tuple(sorted(slots))))
+            patches.append(dict(slots=slots, edofs=edofs, ring=ring, present=tuple(sorted(slots)),
+                                ringrel=[rel(e2, xv, yv) + (e2,) for e2 in ring]))
         self.npatch = len(patches)
-        # patches containing each element (always 4 corners, but count it)
-        npe = np.zeros(mesh.nelem, dtype=np.int64)
-        for slots, _, _, _ in patches:
-            for e in slots.values(): npe[e] += 1
+        npe = np.zeros(nelem, dtype=np.int64)
+        for P_ in patches:
+            for e in P_['slots'].values(): npe[e] += 1
 
-        # ---------------- per mode: shared factors + index plans ----------------
-        self.dev = torch.device(device) if device is not None else __import__('lssem3d.kernels_torch', fromlist=['device']).device()
-        T = lambda a: torch.as_tensor(np.ascontiguousarray(a), device=self.dev)
-        Ti = lambda a: torch.as_tensor(np.ascontiguousarray(a, dtype=np.int64), device=self.dev)
+        # ---------------- element types per mode from the mask pattern ----------------
+        mloc_all = self.mask.reshape(nelem, nloc, nk) > 0.5                   # (nelem, nloc, nk)
+        etype = np.zeros((nk, nelem), dtype=np.int64); ereps = []
+        for k in range(nk):
+            keys = {}
+            for e in range(nelem):
+                key = mloc_all[e, :, k].tobytes()
+                if key not in keys: keys[key] = len(keys)
+                etype[k, e] = keys[key]
+            reps = np.zeros(len(keys), dtype=np.int64)
+            for e in range(nelem - 1, -1, -1): reps[etype[k, e]] = e
+            ereps.append(reps)
+        ntypes = [len(r) for r in ereps]
+
+        # ---------------- probe: all modes at once, representatives kept, sharing verified ----------------
+        # With identical elements and constant coefficients (no convection in the
+        # implicit operator) an element's block depends only on its mask pattern;
+        # every column of every non-representative element is compared against
+        # its representative as it comes out of the probe, so the assumption is
+        # checked, not trusted (the check is what makes a graded or curved mesh
+        # fail loudly instead of quietly).
+        use_dev = self.dev.type == 'cuda' and BK.get_backend() in ('torch', 'cuda')
+        if use_dev:
+            Dd, fx, fy, kzd, md, wqd = (T(self.D), T(mesh.facx), T(mesh.facy), T(kz), T(self.mask), T(mesh.wq))
+            v = torch.zeros(self.shape, dtype=torch.float64, device=self.dev)
+            rep_blocks = [torch.zeros((ntypes[k], nloc, nloc), dtype=torch.float64, device=self.dev) for k in range(nk)]
+            et_t = [Ti(etype[k]) for k in range(nk)]; er_t = [Ti(ereps[k]) for k in range(nk)]
+            maxdiff = torch.zeros(nk, dtype=torch.float64, device=self.dev)
+        else:
+            Dd, fx, fy, kzd, md, wqd = self.D, mesh.facx, mesh.facy, kz, self.mask, mesh.wq
+            v = np.zeros(self.shape)
+            rep_blocks = [np.zeros((ntypes[k], nloc, nloc)) for k in range(nk)]
+            maxdiff = np.zeros(nk)
+        for col in range(nloc):
+            i, j, f = np.unravel_index(col, (n, n, nvar))
+            v[:] = 0.0
+            v[:, i, j, f, :] = 1.0
+            out = S3.normal_op(v, Dd, fx, fy, kzd, nu, c, None, md, wqd, kap, rw)
+            o = out.reshape(nelem, nloc, nk)
+            for k in range(nk):
+                ok = o[:, :, k]
+                if use_dev:
+                    rr = ok[er_t[k]]                                            # (ntypes, nloc)
+                    rep_blocks[k][:, :, col] = rr
+                    maxdiff[k] = torch.maximum(maxdiff[k], (ok - rr[et_t[k]]).abs().max())
+                else:
+                    rr = ok[ereps[k]]
+                    rep_blocks[k][:, :, col] = rr
+                    maxdiff[k] = max(maxdiff[k], np.abs(ok - rr[etype[k]]).max())
+        if use_dev:
+            maxdiff = maxdiff.cpu().numpy(); rep_blocks = [b.cpu().numpy() for b in rep_blocks]
+        scale = max(np.abs(b).max() for b in rep_blocks)
+        if share and maxdiff.max() > 1e-11*scale:
+            raise RuntimeError(f'element blocks differ within a mask type (max {maxdiff.max():.2e} vs scale {scale:.2e}): '
+                               'non-uniform mesh or non-constant coefficients -- use VertexSchwarz3D')
+        self.probe_time = time.perf_counter() - t0
+
+        # ---------------- per mode: element factors, patch Schur complements (types only) ----------------
         self.modes = []
         self.bytes = 0
         self.n_etypes, self.n_ptypes = [], []
+        locB = -np.ones(self.ndof, dtype=np.int64)
         for k in range(nk):
-            mask_k = np.ascontiguousarray(self.mask[..., k:k+1])
-            mloc = (mask_k[..., 0].reshape(mesh.nelem, nloc) > 0.5)         # (nelem, nloc) free flags
             free = np.zeros(self.ndof, bool)
-            np.logical_or.at(free, gflat.ravel(), mloc.ravel())
+            np.logical_or.at(free, gflat.ravel(), mloc_all[:, :, k].ravel())
             if not free.any():
                 self.modes.append(None); self.n_etypes.append(0); self.n_ptypes.append(0)
                 continue
-            blocks = _element_blocks_mode(mesh, self.D, kz[k:k+1], nu, c, kap, rw, mask_k, mesh.wq)
-            for e in range(mesh.nelem):                                     # padding: unit diagonal on masked dofs
-                dead = ~mloc[e]
-                blocks[e][dead, dead] = 1.0
-            # ---- element types by mask pattern, verified ----
-            etype = -np.ones(mesh.nelem, dtype=np.int64); reps = []
-            for e in range(mesh.nelem):
-                key = mloc[e].tobytes()
-                found = -1
-                if share:
-                    for t, (kk, re_) in enumerate(reps):
-                        if kk == key and np.abs(blocks[e] - blocks[re_]).max() <= 1e-11*np.abs(blocks[re_]).max():
-                            found = t; break
-                if found < 0:
-                    reps.append((key, e)); found = len(reps) - 1
-                etype[e] = found
-            efac = []                                                       # per type: sc_I, L_II (scaled), K_EI, K_IE
-            for key, re_ in reps:
-                K = blocks[re_]
+            # element types: padded block, interior factor, couplings, Schur contribution Q_t
+            efac, Kt, Qt = [], [], []
+            for t in range(ntypes[k]):
+                K = rep_blocks[k][t].copy()
+                dead = ~mloc_all[ereps[k][t], :, k]
+                K[dead, dead] = 1.0
+                Kt.append(K)
                 KII = K[np.ix_(I_loc, I_loc)]
                 sc = 1.0/np.sqrt(np.diag(KII))
                 L = np.linalg.cholesky(KII*sc[:, None]*sc[None, :])
                 KEI = K[np.ix_(E_loc, I_loc)]
+                Y = sc[:, None]*np.linalg.solve(L.T, np.linalg.solve(L, sc[:, None]*KEI.T))   # K_II^-1 K_IE
+                Qt.append(KEI @ Y)
                 efac.append((T(sc), T(L), T(KEI), T(KEI.T.copy())))
                 self.bytes += 8*(L.size + 2*KEI.size)
-            # ---- patch Schur complements in canonical ordering, deduplicated ----
-            ptype = -np.ones(self.npatch, dtype=np.int64); preps = []        # (present-key, S, edofs-size, slot cols)
-            pfac = []
-            locB = -np.ones(self.ndof, dtype=np.int64)
-            for pi, (slots, edofs, ring, pkey) in enumerate(patches):
-                nb = edofs.size
+            # patch types by signature; Schur complement assembled for the representative only
+            sigs, ptype = {}, np.zeros(self.npatch, dtype=np.int64)
+            for pi, P_ in enumerate(patches):
+                sig = (P_['present'], tuple(int(etype[k, P_['slots'][s]]) for s in P_['present']),
+                       tuple(sorted((dx, dy, int(etype[k, e2])) for dx, dy, e2 in P_['ringrel'])), P_['edofs'].size)
+                if sig not in sigs: sigs[sig] = (len(sigs), pi)
+                ptype[pi] = sigs[sig][0]
+            def assemble(pi):
+                P_ = patches[pi]; edofs = P_['edofs']; nb = edofs.size
                 locB[:] = -1; locB[edofs] = np.arange(nb)
                 S = np.zeros((nb, nb))
-                for e2 in ring:
+                for e2 in P_['ring']:
                     li = locB[gflat[e2]]; kp = li >= 0
-                    S[np.ix_(li[kp], li[kp])] += blocks[e2][np.ix_(kp, kp)]
-                slot_cols = {}
-                for s, e in slots.items():
-                    cols = locB[eedge_g[e]]                                 # element's edge dofs -> patch positions
-                    sc_e, L_e, KEI_e, _ = efac[etype[e]]
-                    KEI_np = KEI_e.cpu().numpy(); sc_np = sc_e.cpu().numpy(); L_np = L_e.cpu().numpy()
-                    # K_EI K_II^-1 K_IE = KEI (D L L^T D)^-1 KEI^T with KII = D^-1 (L L^T) D^-1, D = diag(1/sc)
-                    Y = sc_np[:, None]*np.linalg.solve(L_np.T, np.linalg.solve(L_np, sc_np[:, None]*KEI_np.T))
-                    S[np.ix_(cols, cols)] -= KEI_np @ Y
-                    slot_cols[s] = cols
+                    S[np.ix_(li[kp], li[kp])] += Kt[etype[k, e2]][np.ix_(kp, kp)]
+                cols_by_slot = {}
+                for s_, e in P_['slots'].items():
+                    cols = locB[eedge_g[e]]
+                    S[np.ix_(cols, cols)] -= Qt[etype[k, e]]
+                    cols_by_slot[s_] = cols
                 dead = ~free[edofs]
                 S[dead, :] = 0.0; S[:, dead] = 0.0; S[dead, dead] = 1.0
-                S = 0.5*(S + S.T)
-                found = -1
-                if share:
-                    for t, (kk, Sr, nbr, _) in enumerate(preps):
-                        if kk == pkey and nbr == nb and np.abs(S - Sr).max() <= 1e-11*np.abs(Sr).max():
-                            found = t; break
-                if found < 0:
-                    sc = 1.0/np.sqrt(np.diag(S))
-                    L = np.linalg.cholesky(S*sc[:, None]*sc[None, :])
-                    preps.append((pkey, S, nb, slot_cols)); pfac.append((T(sc), T(L)))
-                    self.bytes += 8*L.size
-                    found = len(preps) - 1
-                ptype[pi] = found
-            # ---- index plans (per element type / patch type) ----
-            eplan = []
-            for t in range(len(reps)):
-                es = np.flatnonzero(etype == t)
-                eplan.append(dict(es=Ti(es), gI=Ti(eint_g[es]), n=es.size))
-            pplan = []
-            for t in range(len(preps)):
+                return 0.5*(S + S.T), cols_by_slot
+            pfac, pplan = [], []
+            for sig, (t, pi) in sigs.items():
+                S, cols_by_slot = assemble(pi)
                 ps = np.flatnonzero(ptype == t)
-                pkey, _, nb, slot_cols = preps[t]
-                gB = np.stack([patches[p][1] for p in ps])                  # (np_t, nb) global dofs
-                slots = []
-                for s in sorted(slot_cols):
-                    es = np.array([patches[p][0][s] for p in ps])
-                    slots.append((Ti(es), Ti(slot_cols[s])))
-                pplan.append(dict(ps=ps, gB=Ti(gB), n=ps.size, nb=nb, slots=slots))
+                if share and ps.size > 1:                                       # spot check one more patch of the type
+                    S2, _ = assemble(int(ps[-1]))
+                    if np.abs(S - S2).max() > 1e-11*np.abs(S).max():
+                        raise RuntimeError('patch Schur complements differ within a signature type -- use VertexSchwarz3D')
+                sc = 1.0/np.sqrt(np.diag(S))
+                Ls = torch.linalg.cholesky(T(S*sc[:, None]*sc[None, :]))
+                pfac.append((T(sc), Ls))
+                self.bytes += 8*Ls.numel()
+                gB = np.stack([patches[p]['edofs'] for p in ps])
+                slots = [(Ti(np.array([patches[p]['slots'][s_] for p in ps])), Ti(cols_by_slot[s_])) for s_ in sorted(cols_by_slot)]
+                pplan.append(dict(ps=ps, gB=Ti(gB), n=ps.size, nb=S.shape[0], slots=slots))
+            eplan = []
+            for t in range(ntypes[k]):
+                es = np.flatnonzero(etype[k] == t)
+                eplan.append(dict(es=Ti(es), gI=Ti(eint_g[es]), n=es.size))
             self.modes.append(dict(efac=efac, eplan=eplan, pfac=pfac, pplan=pplan,
-                                   gI=Ti(eint_g), gE=Ti(eedge_g), etype=Ti(etype),
+                                   gI=Ti(eint_g), gE=Ti(eedge_g), etype=Ti(etype[k]),
                                    npe=T(npe.astype(float))))
-            self.n_etypes.append(len(reps)); self.n_ptypes.append(len(preps))
-            del blocks
+            self.n_etypes.append(ntypes[k]); self.n_ptypes.append(len(sigs))
         self.gflat_t = Ti(gflat)
         self.g_t = Ti(self.g.ravel())
         self.mask_t = T(self.mask)
         self.mw_t = T(self.mw)
         self._group_modes()
-        # ---- coarse term (host) ----
-        self.coarse = None
+
+        # ---------------- coarse term ----------------
+        self.coarse = None; self.coarse_dev = None
         if coarse:
-            self.lev_c, self.coarse, self.P = _build_coarse(mesh, nk, nz, nu, c, kz, kap, rw, pin_p, mask, pc)
+            self.lev_c, host_coarse, self.P = _build_coarse(mesh, nk, nz, nu, c, kz, kap, rw, pin_p, mask, pc)
             self.R = self.P.T
+            if coarse_dense is None:
+                coarse_dense = (self.dev.type == 'cuda')
+            if coarse_dense:
+                self.coarse_dev = _DenseCoarseDevice(self.lev_c, self.dev)
+                self.P_t, self.R_t = T(self.P), T(self.R)
+                self.mask_c_t = T(self.lev_c.mask)
+                self.bytes += self.coarse_dev.bytes
+            else:
+                self.coarse = host_coarse
         self.setup_time = time.perf_counter() - t0
         if verbose:
             print(f'  VertexSchwarzBatched3D: {self.npatch} patches x {nk} modes, element types/mode {self.n_etypes}, '
                   f'patch types/mode {self.n_ptypes}, factors {self.bytes/1e6:.1f} MB on {self.dev}, '
-                  f'setup {self.setup_time:.1f}s', flush=True)
+                  f'coarse {"dense on device" if self.coarse_dev is not None else "sparse on host"}, '
+                  f'setup {self.setup_time:.1f}s (probes {self.probe_time:.1f}s, {"device" if use_dev else "host"} operator)', flush=True)
 
     def _restrict(self, x):
         xw = x*self.mw
@@ -946,6 +1049,17 @@ class VertexSchwarzBatched3D:
     def _prolong(self, xc):
         t = np.einsum('bj,eijvk->eibvk', self.P, xc)
         return np.einsum('ai,eibvk->eabvk', self.P, t)*self.mask
+
+    def _coarse_device(self, r):
+        """Coarse correction entirely on the device: restrict, dense solve, prolong."""
+        import torch
+        xw = r*self.mw_t
+        t = torch.einsum('bj,eijvk->eibvk', self.R_t, xw)
+        cc = torch.einsum('ai,eibvk->eabvk', self.R_t, t)
+        rc = DEV.gs_torch(self.lev_c.m, cc)*self.mask_c_t
+        zc = self.coarse_dev(rc)
+        t = torch.einsum('bj,eijvk->eibvk', self.P_t, zc)
+        return torch.einsum('ai,eibvk->eabvk', self.P_t, t)*self.mask_t
 
     def _group_modes(self):
         """Stack the factors of modes that share the same index plans, so one
@@ -1016,7 +1130,9 @@ class VertexSchwarzBatched3D:
         was_tensor = DEV.is_tensor(r)
         rt = r.to(self.dev) if was_tensor else torch.as_tensor(np.asarray(r), device=self.dev)
         z = self._apply_patches(rt)
-        if self.coarse is not None:
+        if self.coarse_dev is not None:
+            z = z + self._coarse_device(rt)
+        elif self.coarse is not None:
             rh = DEV.to_host(r) if was_tensor else np.asarray(r)
             zc = self._prolong(self.coarse(self._restrict(rh)))
             z = z + torch.as_tensor(zc, device=self.dev)
