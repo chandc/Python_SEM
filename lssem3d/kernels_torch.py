@@ -247,6 +247,19 @@ def _kz(kz, nk, dev):
 _COMPILED = {}
 _COMPILE_OK = True
 
+# dynamic=False guards on every distinct Python scalar and shape: the three
+# RKW3 stage values of c, plus the preconditioner build probing with a
+# different mode count, exceeded dynamo's default limit of 8 on the A100 and
+# the kernels silently dropped to eager ("hit config.recompile_limit").  A
+# run legitimately sees a dozen (c, shape) pairs; allow them.
+try:
+    import torch._dynamo as _dynamo
+    for _name in ('recompile_limit', 'cache_size_limit'):
+        if hasattr(_dynamo.config, _name):
+            setattr(_dynamo.config, _name, max(64, getattr(_dynamo.config, _name)))
+except Exception:
+    pass
+
 
 def _maybe_compile(fn):
     global _COMPILE_OK
