@@ -232,7 +232,15 @@ def module():
         # TORCH_CUDA_ARCH_LIST: torch's default list for this build stops at
         # sm_120, and GB10 is sm_121.  Without this it would fall back to PTX
         # JIT of compute_120 -- functional, slower, and silent about it.
-        os.environ.setdefault('TORCH_CUDA_ARCH_LIST', '12.1')
+        # Default to the capability of the device we are about to run on
+        # (GB10 -> '12.1', A100 -> '8.0'); a fixed '12.1' made nvcc fail with
+        # "Unsupported gpu architecture 'compute_121'" on an A100 in Colab,
+        # whose CUDA toolkit predates sm_121.  An explicit env var still wins.
+        try:
+            _cap = torch.cuda.get_device_capability()
+            os.environ.setdefault('TORCH_CUDA_ARCH_LIST', f'{_cap[0]}.{_cap[1]}')
+        except Exception:
+            os.environ.setdefault('TORCH_CUDA_ARCH_LIST', '12.1')
         _MOD = load_inline(name='lssem3d_fused', cpp_sources=_DECL,
                            cuda_sources=_SRC,
                            functions=['apply_L', 'apply_LT'], verbose=False)

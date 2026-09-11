@@ -785,19 +785,26 @@ class _DenseCoarseDevice:
         ndof = nnode*nvar
         gd = (gidx[..., None]*nvar + np.arange(nvar)).reshape(nelem, nloc)
         rows = np.repeat(gd, nloc, axis=1).ravel(); cols = np.tile(gd, (1, nloc)).ravel()
-        L = torch.empty((nk, ndof, ndof), dtype=torch.float64, device=dev)
+        # The EXPLICIT INVERSE is stored, not the Cholesky factor: a
+        # single-right-hand-side triangular solve is a sequential level-2
+        # operation and 34 of them (two per mode) at n = 6216 cost ~100 ms on an
+        # A100 regardless of its bandwidth; one batched GEMV with the inverse
+        # reads the same 5.3 GB once and is bandwidth-bound (~4 ms on an A100,
+        # ~50 ms on the GB10).  The inverse of an SPD matrix from its Cholesky
+        # factor is accurate to kappa*eps, ample for a preconditioner.
+        Ainv = torch.empty((nk, ndof, ndof), dtype=torch.float64, device=dev)
         for k in range(nk):
             A = np.zeros((ndof, ndof))
             np.add.at(A, (rows, cols), Aloc[:, k].reshape(-1))
             d = np.diag(A); dead = np.abs(d) <= 1e-300
             A[dead, dead] = 1.0
             A = 0.5*(A + A.T)
-            L[k] = torch.linalg.cholesky(torch.as_tensor(A, device=dev))
-        self.L, self.ndof, self.gd = L, ndof, torch.as_tensor(gd.ravel(), device=dev)
+            Ainv[k] = torch.cholesky_inverse(torch.linalg.cholesky(torch.as_tensor(A, device=dev)))
+        self.Ainv, self.ndof, self.gd = Ainv, ndof, torch.as_tensor(gd.ravel(), device=dev)
         self.mw = torch.as_tensor(level.mw, device=dev)
         self.mask = torch.as_tensor(level.mask, device=dev)
         self.shape = shape
-        self.bytes = 8*L.numel()
+        self.bytes = 8*Ainv.numel()
 
     def __call__(self, r):
         import torch
@@ -805,12 +812,7 @@ class _DenseCoarseDevice:
         rw = (r*self.mw).reshape(nelem*n*n*nvar, nk).T.contiguous()          # (nk, nlocal)
         g = torch.zeros((nk, self.ndof), dtype=r.dtype, device=r.device)
         g.index_add_(1, self.gd, rw)
-        # One potrs per mode rather than one batched call: the batched
-        # cuSOLVER path raised "CUDA error: invalid argument" on the GB10 for
-        # 17 x 6216^2 factors; the per-mode calls are the same arithmetic.
-        z = torch.empty_like(g)
-        for k in range(nk):
-            z[k] = torch.cholesky_solve(g[k, :, None], self.L[k])[:, 0]
+        z = torch.bmm(self.Ainv, g[:, :, None])[:, :, 0]                       # (nk, ndof): one batched GEMV
         return z[:, self.gd].T.reshape(self.shape)*self.mask
 
 
