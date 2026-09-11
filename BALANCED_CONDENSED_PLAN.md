@@ -674,6 +674,13 @@ coarse GEMV 28), ten-step restart **25.4 s/step at 72 CG/stage**,
 identical diagnostics — **2.4× faster than run01's 60 s Jacobi step**, and
 now near that device's fp64 and bandwidth floor.  Mac 4×4 N=6 apply 49 → 12 ms.
 
+**A100 apply after the flat plans + CUDA-graph replay (commit cae9901):**
+eager 13.3 ms (gather 0.4, interior 1.9, patch 4.6, back-substitution 2.0,
+coarse 4.3), **graph replay 8.3 ms** — at the bandwidth floor (the 5.3 GB
+coarse read alone is 4.3 ms), from 58 ms two commits earlier; graph vs
+eager 4e−13.  Projected step 213 × (8.3 + 1.6) ms ≈ 2.1 s against
+Jacobi's 22.3 s; the measured step is the next entry.
+
 **A100, production mesh, commit e22dea5 (GEMV coarse, before the GEMM-form patch apply), torch backend:**
 apply **71 ms** per CG iteration, vsbatch step **11.5 s at 71 CG/stage**
 against Jacobi **22.3 s at 4699** — 1.9×; build 40–45 s per stage value of
