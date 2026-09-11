@@ -37,6 +37,8 @@ FOUR RULES INHERITED FROM THE 2D PORT, each of which breaks the method quietly:
 """
 from copy import copy
 
+import os
+
 import numpy as np
 
 from lssem2d.lgl import lgl_nodes, diff_matrix
@@ -1079,8 +1081,15 @@ class VertexSchwarzBatched3D:
     def _group_modes(self):
         """Stack the factors of modes that share the same index plans, so one
         batched call serves all of them (17 modes -> 2-3 groups on the channel:
-        k = 0 with its pin, the Nyquist mode, and everything else)."""
+        k = 0 with its pin, the Nyquist mode, and everything else), and build
+        FLAT index plans for the group: elements and patches reordered so each
+        type is a contiguous slice, one padded gather map for all patch edge
+        dofs, and one (src, dst) scatter map for every (patch, slot) coupling.
+        The apply is then a fixed sequence of ~10 gathers/scatters plus one
+        GEMM per type, instead of ~25 index operations per patch type."""
         import torch
+        Ti = lambda a: torch.as_tensor(np.ascontiguousarray(a, dtype=np.int64), device=self.dev)
+        nelem = self.shape[0]
         groups = {}
         for k, md in enumerate(self.modes):
             if md is None:
@@ -1097,9 +1106,36 @@ class VertexSchwarzBatched3D:
                     for t in range(len(m0['eplan']))]
             pfac = [tuple(torch.stack([self.modes[k]['pfac'][t][j] for k in ks]) for j in range(2))
                     for t in range(len(m0['pplan']))]
-            self.groups.append(dict(ks=torch.as_tensor(ks, device=self.dev), efac=efac, pfac=pfac,
-                                    eplan=m0['eplan'], pplan=m0['pplan'], npe=m0['npe']))
+            # ---- elements: sorted by type, contiguous slices ----
+            eorder = np.concatenate([pl['es'].cpu().numpy() for pl in m0['eplan']])
+            pos = np.empty(nelem, dtype=np.int64); pos[eorder] = np.arange(nelem)
+            eslices, e0 = [], 0
+            for pl in m0['eplan']:
+                eslices.append((e0, e0 + int(pl['n']))); e0 += int(pl['n'])
+            gI_sorted = m0['gI'].cpu().numpy()[eorder]                     # (nelem, nI)
+            npe_sorted = m0['npe'].cpu().numpy()[eorder]
+            # ---- patches: sorted by type, padded edge-dof gather map, slot scatter map ----
+            nb_max = max(int(pl['nb']) for pl in m0['pplan'])
+            npatch = sum(int(pl['n']) for pl in m0['pplan'])
+            gB_all = np.full((npatch, nb_max), self.ndof, dtype=np.int64)  # pad -> dummy zero dof
+            pslices, src, dst, p0 = [], [], [], 0
+            for pl in m0['pplan']:
+                n_t, nb = int(pl['n']), int(pl['nb'])
+                gB_all[p0:p0+n_t, :nb] = pl['gB'].cpu().numpy()
+                ar = np.arange(self.nE)
+                for es, cols in pl['slots']:
+                    es_np, cols_np = es.cpu().numpy(), cols.cpu().numpy()
+                    src.append((pos[es_np][:, None]*self.nE + ar[None, :]).ravel())
+                    dst.append(((p0 + np.arange(n_t))[:, None]*nb_max + cols_np[None, :]).ravel())
+                pslices.append((p0, p0 + n_t, nb)); p0 += n_t
+            self.groups.append(dict(ks=torch.as_tensor(ks, device=self.dev), nm=len(ks), efac=efac, pfac=pfac,
+                                    eslices=eslices, pslices=pslices, gI=Ti(gI_sorted), gI_flat=Ti(gI_sorted.ravel()),
+                                    npe=torch.as_tensor(npe_sorted, device=self.dev),
+                                    gB=Ti(gB_all), gB_flat=Ti(gB_all.ravel()), nb_max=nb_max, npatch=npatch,
+                                    src=Ti(np.concatenate(src)), dst=Ti(np.concatenate(dst))))
         self.n_groups = len(self.groups)
+        self.use_graph = (self.dev.type == 'cuda' and os.environ.get('LSSEM3D_VSB_GRAPH', '1') not in ('0', 'false', 'False'))
+        self._graph = None
 
     def _tick(self, key):
         """Optional phase profiler: set self.timing = {} to accumulate synchronized
@@ -1116,57 +1152,85 @@ class VertexSchwarzBatched3D:
 
     def _apply_patches(self, r):
         """r: torch (nelem, n, n, 14, nk) on self.dev -> z same shape (patch part only).
-        One batched call per (mode group, block type)."""
+        Flat plans: per mode group, 2 gathers + 1 scatter for the edge assembly,
+        one GEMM (+ scale/transposes) per block type, 3 scatters back."""
         import torch
         nelem = self.shape[0]
         self._t0 = None; self._tick('start')
         z = torch.zeros_like(r)
         rm = (r*self.mask_t*self.mw_t).reshape(-1, self.nk)               # (nlocal, nk)
         for G in self.groups:
-            ks = G['ks']; nm = ks.numel()
-            rg = torch.zeros((nm, self.ndof), dtype=r.dtype, device=self.dev)
+            ks, nm = G['ks'], G['nm']
+            rg = torch.zeros((nm, self.ndof + 1), dtype=r.dtype, device=self.dev)   # +1: dummy zero dof for padding
             rg.index_add_(1, self.g_t, rm[:, ks].T.contiguous())
             self._tick('gather')
-            Y = torch.empty((nm, nelem, self.nI), dtype=r.dtype, device=self.dev)
+            Y = torch.empty((nm, nelem, self.nI), dtype=r.dtype, device=self.dev)   # elements in sorted order
             F = torch.empty((nm, nelem, self.nE), dtype=r.dtype, device=self.dev)
-            for t, pl in enumerate(G['eplan']):
+            for t, (e0, e1) in enumerate(G['eslices']):
                 sc, Linv, KEI, KIE = G['efac'][t]                             # (nm,nI) (nm,nI,nI) (nm,nE,nI) (nm,nI,nE)
-                B = rg[:, pl['gI']].transpose(1, 2)*sc[:, :, None]            # (nm, nI, n_t)
-                Yt = (Linv @ B)*sc[:, :, None]                                # K_II^-1 B as one batched GEMM
-                Y[:, pl['es']] = Yt.transpose(1, 2)
-                F[:, pl['es']] = (KEI @ Yt).transpose(1, 2)
+                B = rg[:, G['gI'][e0:e1]].transpose(1, 2)*sc[:, :, None]      # (nm, nI, n_t)
+                Yt = (Linv @ B)*sc[:, :, None]                                # K_II^-1 B, one batched GEMM
+                Y[:, e0:e1] = Yt.transpose(1, 2)
+                F[:, e0:e1] = (KEI @ Yt).transpose(1, 2)                     # K_EI y
             self._tick('interior')
-            zg = torch.zeros((nm, self.ndof), dtype=r.dtype, device=self.dev)
-            C = torch.zeros((nm, nelem, self.nE), dtype=r.dtype, device=self.dev)
-            for t, pl in enumerate(G['pplan']):
+            # edge right-hand sides of ALL patches at once: gather, then one scatter of the couplings
+            rB = rg[:, G['gB']]                                               # (nm, npatch, nb_max)
+            rBf = rB.view(nm, -1)
+            rBf.index_add_(1, G['dst'], -F.view(nm, -1)[:, G['src']])
+            zB = torch.zeros_like(rB)
+            for t, (p0, p1, nb) in enumerate(G['pslices']):
                 sc, Sinv = G['pfac'][t]                                       # (nm,nb) (nm,nb,nb)
-                rB = rg[:, pl['gB']]                                          # (nm, np_t, nb)
-                for es, cols in pl['slots']:
-                    rB[:, :, cols] -= F[:, es]
-                zB = ((Sinv @ (rB*sc[:, None, :]).transpose(1, 2))*sc[:, :, None]).transpose(1, 2)   # S^-1 rB, batched GEMM
-                zg.index_add_(1, pl['gB'].reshape(-1), zB.reshape(nm, -1))
-                for es, cols in pl['slots']:
-                    C.index_add_(1, es, zB[:, :, cols])
+                X = (rB[:, p0:p1, :nb]*sc[:, None, :]).transpose(1, 2)        # (nm, nb, n_t)
+                zB[:, p0:p1, :nb] = ((Sinv @ X)*sc[:, :, None]).transpose(1, 2)
+            zg = torch.zeros((nm, self.ndof + 1), dtype=r.dtype, device=self.dev)
+            zg.index_add_(1, G['gB_flat'], zB.view(nm, -1))
+            C = torch.zeros((nm, nelem*self.nE), dtype=r.dtype, device=self.dev)
+            C.index_add_(1, G['src'], zB.view(nm, -1)[:, G['dst']])
+            C = C.view(nm, nelem, self.nE)
             self._tick('patch')
-            for t, pl in enumerate(G['eplan']):
+            zI = torch.empty_like(Y)
+            for t, (e0, e1) in enumerate(G['eslices']):
                 sc, Linv, KEI, KIE = G['efac'][t]
-                Gm = (KIE @ C[:, pl['es']].transpose(1, 2))*sc[:, :, None]  # (nm, nI, n_t)
+                Gm = (KIE @ C[:, e0:e1].transpose(1, 2))*sc[:, :, None]      # (nm, nI, n_t)
                 W = (Linv @ Gm)*sc[:, :, None]
-                zI = G['npe'][pl['es']][None, :, None]*Y[:, pl['es']] - W.transpose(1, 2)
-                zg.index_add_(1, pl['gI'].reshape(-1), zI.reshape(nm, -1))
-            z[..., ks] = zg[:, self.g_t].T.reshape(self.shape[:-1] + (nm,))
+                zI[:, e0:e1] = G['npe'][None, e0:e1, None]*Y[:, e0:e1] - W.transpose(1, 2)
+            zg.index_add_(1, G['gI_flat'], zI.view(nm, -1))
+            z[..., ks] = zg[:, :self.ndof][:, self.g_t].T.reshape(self.shape[:-1] + (nm,))
             self._tick('backsub+scatter')
         return z*self.mask_t
+
+    def _apply_device(self, rt):
+        z = self._apply_patches(rt)
+        if self.coarse_dev is not None:
+            z = z + self._coarse_device(rt)
+            self._tick('coarse')
+        return z
 
     def __call__(self, r):
         import torch
         was_tensor = DEV.is_tensor(r)
         rt = r.to(self.dev) if was_tensor else torch.as_tensor(np.asarray(r), device=self.dev)
-        z = self._apply_patches(rt)
-        if self.coarse_dev is not None:
-            z = z + self._coarse_device(rt)
-            self._tick('coarse')
-        elif self.coarse is not None:
+        if self.use_graph and self.timing is None:
+            # CUDA graph: the apply is a fixed sequence of ~100 kernels on static
+            # buffers; capturing it once removes the per-launch host cost (which
+            # was ~half of the A100 apply).  Warm-up on a side stream, then replay.
+            if self._graph is None:
+                self._static_in = rt.clone()
+                s_ = torch.cuda.Stream(self.dev)
+                s_.wait_stream(torch.cuda.current_stream(self.dev))
+                with torch.cuda.stream(s_):
+                    for _ in range(2):
+                        self._apply_device(self._static_in)
+                torch.cuda.current_stream(self.dev).wait_stream(s_)
+                self._graph = torch.cuda.CUDAGraph()
+                with torch.cuda.graph(self._graph):
+                    self._static_out = self._apply_device(self._static_in)
+            self._static_in.copy_(rt)
+            self._graph.replay()
+            z = self._static_out.clone()
+        else:
+            z = self._apply_device(rt)
+        if self.coarse_dev is None and self.coarse is not None:
             rh = DEV.to_host(r) if was_tensor else np.asarray(r)
             zc = self._prolong(self.coarse(self._restrict(rh)))
             z = z + torch.as_tensor(zc, device=self.dev)

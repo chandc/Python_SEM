@@ -25,9 +25,18 @@ if __name__ == '__main__':
     for _ in range(n): bat(r)
     if bat.dev.type == 'cuda': torch.cuda.synchronize()
     tot = (time.perf_counter() - t0)/n*1e3
-    print(f'apply {tot:.1f} ms on {bat.dev} ({bat.n_groups} mode groups); phases per apply:')
+    print(f'apply {tot:.1f} ms on {bat.dev} ({bat.n_groups} mode groups), phase timers on; phases per apply:')
     for k, v in bat.timing.items():
         if k != 'start': print(f'   {k:16s} {v/n:7.2f} ms')
+    bat.timing = None                                   # graph replay path (CUDA only)
+    bat(r); bat(r)
+    if bat.dev.type == 'cuda': torch.cuda.synchronize()
+    t0 = time.perf_counter()
+    for _ in range(n): bat(r)
+    if bat.dev.type == 'cuda': torch.cuda.synchronize()
+    print(f'apply {(time.perf_counter() - t0)/n*1e3:.1f} ms with {"CUDA graph replay" if bat.use_graph else "eager launches"}')
+    z1 = bat(r); bat.use_graph = False; z2 = bat(r)
+    print(f'graph vs eager agreement: {float((z1 - z2).abs().max()/z2.abs().max()):.1e}')
     if os.environ.get('TORCHPROF', '0') == '1':
         from torch.profiler import profile, ProfilerActivity
         acts = [ProfilerActivity.CPU] + ([ProfilerActivity.CUDA] if bat.dev.type == 'cuda' else [])
