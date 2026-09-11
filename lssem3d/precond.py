@@ -849,6 +849,7 @@ class VertexSchwarzBatched3D:
         self.nI, self.nE = I_loc.size, E_loc.size
         eint_g, eedge_g = gflat[:, I_loc], gflat[:, E_loc]
         self.dev = torch.device(device) if device is not None else __import__('lssem3d.kernels_torch', fromlist=['device']).device()
+        self.timing = None; self._t0 = None
         T = lambda a: torch.as_tensor(np.ascontiguousarray(a), device=self.dev)
         Ti = lambda a: torch.as_tensor(np.ascontiguousarray(a, dtype=np.int64), device=self.dev)
 
@@ -1093,17 +1094,32 @@ class VertexSchwarzBatched3D:
                                     eplan=m0['eplan'], pplan=m0['pplan'], npe=m0['npe']))
         self.n_groups = len(self.groups)
 
+    def _tick(self, key):
+        """Optional phase profiler: set self.timing = {} to accumulate synchronized
+        milliseconds per phase (device work included) across applies."""
+        if self.timing is None:
+            return
+        import time, torch
+        if self.dev.type == 'cuda':
+            torch.cuda.synchronize(self.dev)
+        now = time.perf_counter()
+        if self._t0 is not None:
+            self.timing[key] = self.timing.get(key, 0.0) + (now - self._t0)*1e3
+        self._t0 = now
+
     def _apply_patches(self, r):
         """r: torch (nelem, n, n, 14, nk) on self.dev -> z same shape (patch part only).
         One batched call per (mode group, block type)."""
         import torch
         nelem = self.shape[0]
+        self._t0 = None; self._tick('start')
         z = torch.zeros_like(r)
         rm = (r*self.mask_t*self.mw_t).reshape(-1, self.nk)               # (nlocal, nk)
         for G in self.groups:
             ks = G['ks']; nm = ks.numel()
             rg = torch.zeros((nm, self.ndof), dtype=r.dtype, device=self.dev)
             rg.index_add_(1, self.g_t, rm[:, ks].T.contiguous())
+            self._tick('gather')
             Y = torch.empty((nm, nelem, self.nI), dtype=r.dtype, device=self.dev)
             F = torch.empty((nm, nelem, self.nE), dtype=r.dtype, device=self.dev)
             for t, pl in enumerate(G['eplan']):
@@ -1112,6 +1128,7 @@ class VertexSchwarzBatched3D:
                 Yt = torch.cholesky_solve(B, L)*sc[:, :, None]
                 Y[:, pl['es']] = Yt.transpose(1, 2)
                 F[:, pl['es']] = (KEI @ Yt).transpose(1, 2)
+            self._tick('interior')
             zg = torch.zeros((nm, self.ndof), dtype=r.dtype, device=self.dev)
             C = torch.zeros((nm, nelem, self.nE), dtype=r.dtype, device=self.dev)
             for t, pl in enumerate(G['pplan']):
@@ -1123,6 +1140,7 @@ class VertexSchwarzBatched3D:
                 zg.index_add_(1, pl['gB'].reshape(-1), zB.reshape(nm, -1))
                 for es, cols in pl['slots']:
                     C.index_add_(1, es, zB[:, :, cols])
+            self._tick('patch')
             for t, pl in enumerate(G['eplan']):
                 sc, L, KEI, KIE = G['efac'][t]
                 Gm = (KIE @ C[:, pl['es']].transpose(1, 2))*sc[:, :, None]  # (nm, nI, n_t)
@@ -1130,6 +1148,7 @@ class VertexSchwarzBatched3D:
                 zI = G['npe'][pl['es']][None, :, None]*Y[:, pl['es']] - W.transpose(1, 2)
                 zg.index_add_(1, pl['gI'].reshape(-1), zI.reshape(nm, -1))
             z[..., ks] = zg[:, self.g_t].T.reshape(self.shape[:-1] + (nm,))
+            self._tick('backsub+scatter')
         return z*self.mask_t
 
     def __call__(self, r):
@@ -1139,6 +1158,7 @@ class VertexSchwarzBatched3D:
         z = self._apply_patches(rt)
         if self.coarse_dev is not None:
             z = z + self._coarse_device(rt)
+            self._tick('coarse')
         elif self.coarse is not None:
             rh = DEV.to_host(r) if was_tensor else np.asarray(r)
             zc = self._prolong(self.coarse(self._restrict(rh)))
