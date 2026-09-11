@@ -805,7 +805,12 @@ class _DenseCoarseDevice:
         rw = (r*self.mw).reshape(nelem*n*n*nvar, nk).T.contiguous()          # (nk, nlocal)
         g = torch.zeros((nk, self.ndof), dtype=r.dtype, device=r.device)
         g.index_add_(1, self.gd, rw)
-        z = torch.cholesky_solve(g[:, :, None], self.L)[:, :, 0]               # (nk, ndof)
+        # One potrs per mode rather than one batched call: the batched
+        # cuSOLVER path raised "CUDA error: invalid argument" on the GB10 for
+        # 17 x 6216^2 factors; the per-mode calls are the same arithmetic.
+        z = torch.empty_like(g)
+        for k in range(nk):
+            z[k] = torch.cholesky_solve(g[k, :, None], self.L[k])[:, 0]
         return z[:, self.gd].T.reshape(self.shape)*self.mask
 
 
