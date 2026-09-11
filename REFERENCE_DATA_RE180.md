@@ -148,8 +148,9 @@ Window t ∈ [1, 5] by checkpoint subtraction, then one figure per row:
 
 `scratch/compare_ref180.py` → `figs_fosls_vs_fs/compare_ref180.png`;
 `scratch/plot_stats.py` → `figs_fosls_vs_fs/run01_stats_final.png`.
-run01 finished on 2026-09-07: 6250 steps to t = 5.0, 30.9 h on the GB10,
-~4680 CG iterations per stage at the end. Last checkpoint t = 4.96.
+run01 finished on 2026-09-07: 6250 steps to t = 5.0; the final session
+(resumed at step 4400) took 30.9 h on the GB10, i.e. ≈60 s per step at
+~4680 CG iterations per stage. Last checkpoint t = 4.96.
 FOSLS window t ∈ [1.28, 4.96] by checkpoint subtraction (461 plane samples,
 3.7 turnovers; vorticity and pressure rms from the 19 checkpoint snapshots
 in the window, pressure gauge removed per snapshot). Fractional step

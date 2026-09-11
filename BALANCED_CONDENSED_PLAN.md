@@ -497,19 +497,24 @@ the assembled ring.
 ## 8b. Resource estimates: Jacobi vs patch + coarse on the production channel
 
 Anchors (measured): run01, minimal channel 6×18 elements N=8 nz=32
-(17 modes), $\Delta t=8\times10^{-4}$, cuda backend on the GB10: **17.8 s/step**
-(6250 steps in 30.9 h), ≈4680 CG iterations per stage at the end, i.e.
-≈1.3 ms per batched CG iteration (operator apply on all 17 modes).  Patch
+(17 modes), $\Delta t=8\times10^{-4}$, cuda backend on the GB10: **≈60 s/step**
+(run01's own log: 594 s per 10 steps near $t=5$; a 10-step replay of its
+launch on 2026-09-11 gave 61 s/step), ≈4680 CG iterations per stage, i.e.
+≈4.3 ms per batched CG iteration (both operator applies, gather-scatter and
+the inner products on all 17 modes).  *Correction 2026-09-11:* an earlier
+version of this section quoted 17.8 s/step, obtained by dividing the last
+session's 30.9 h by all 6250 steps although that session had resumed at
+step 4400; the GB10 rows below are re-based on the measured 60 s.  Patch
 figures scale from the 4×4 N=8 nk=5 measurement (25 patches × 5 modes = 125
 patch-modes: 542 MB condensed / 3126 MB dense, 0.58 s per NumPy apply,
 36 iterations) to 114 patches × 17 modes = 1938 patch-modes.
 
-| | Jacobi (run01) | patch + coarse, NumPy prototype | patch + coarse, batched GPU (estimate) |
+| | Jacobi (run01, GB10) | patch + coarse, NumPy prototype | patch + coarse, batched GPU (estimate) |
 |---|---|---|---|
 | CG iterations per stage | ≈4680 (grows with $c$ and $N$) | 40–50 (flat) | 40–50 |
-| cost per iteration | 1.3 ms | 1.3 ms + 9 s (1938 patch solves in Python) | 1.3 ms + 4 ms (fp32 factors) … 17 ms (fp64) |
-| per stage | 6 s | 6–7 min | 0.2–0.9 s |
-| **per step (3 stages)** | **18 s** | **≈20 min** (not viable) | **0.6–2.7 s → 7–30×** |
+| cost per iteration | 4.3 ms | 4.3 ms + 9 s (1938 patch solves in Python) | 4.3 ms + (device-dependent apply, see the measured table below) |
+| per stage | 20 s | 6–7 min | |
+| **per step (3 stages)** | **60 s** | **≈20 min** (not viable) | measured below |
 | factor memory, one $c$ | ≈0 | 8.4 GB (split-real double) | 2.1 GB (complex-Hermitian fp32) |
 | factor memory, three stage values of $c$ | ≈0 | 25 GB | 6.3 GB (or refactor per stage) |
 | dense patches for comparison | | 48 GB per $c$, 145 GB for three | does not fit the 121 GB Spark |
@@ -568,9 +573,28 @@ solves; the GEMM form with precomputed inverses runs the same work at
 300+ GFLOP/s on Accelerate (≈30 ms), and the GB10's native FP64 is the
 production target.
 
-Bottom line: patch + coarse turns the channel solve from ≈18 s/step into an
-estimated 1–3 s/step for ≈6 GB of factors, provided the apply is batched on
-the device (step 4.5).  Without that step it is a correctness tool only.
+**Measured on the GB10 in Docker (2026-09-11, `unsloth`/`nvcr pytorch:25.12`
+images, fp64, `precond=vsbatch`, dense device coarse):** build 20–37 s per
+stage value of $c$ (probes 4–20 s on the device), factors 7.2 GB of which
+the p=2 coarse is 5.3 GB, apply **271 ms** per CG iteration, step **60 s
+at 71 CG/stage** on both the fused-cuda and torch backends (the step is
+213 applies), restart from run01 identical to Jacobi to every logged
+digit.  Jacobi in the same container measured 149 s (fused) / 114 s (torch)
+per step against the 61 s replay of run01's own launch — a container-side
+difference under investigation, not a hardware one.  Reading: on the GB10
+the apply is bound by reading 7 GB of factors at 112 GB/s and by 0.4
+TFLOP/s fp64; vsbatch reaches parity with run01's 60 s, no better, and the
+lever left there is the 5.3 GB coarse factor (host sparse LU instead).
+
+**A100 (Colab, fp64):** batched Cholesky solve 3.8 ms and GEMM 0.5 ms for
+the apply's shapes (40× the GB10); with the version before the device
+coarse the apply was 160 ms and the vsbatch step 36.8 s vs Jacobi 22.1 s on
+the torch backend; the device-coarse version is queued there.
+
+Bottom line: patch + coarse turns the channel solve from ≈60 s/step into an
+estimated few-second step on an A100-class device for ≈7 GB of factors; on
+the GB10 it reaches parity only, because that device's fp64 rate and
+bandwidth make the dense factors the bottleneck.
 
 ## 9. Risks and what to do about them
 

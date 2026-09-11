@@ -18,6 +18,7 @@ Runs, in order, and writes a markdown summary to --out:
 --quick uses a 2x4 N=6 nz=8 mesh for steps 2-3 (a smoke test of the path, no
 performance meaning).  Mac reference numbers (M3 Max CPU, fp64): apply 0.21 s
 per iteration, full step 70 s vsbatch / ~80 s Jacobi (numba operator).
+GB10 (Docker, fp64): apply 271 ms, vsbatch step 60 s at 71 CG/stage; run01's Jacobi step 60 s.
 """
 import argparse, os, subprocess, sys, time, json, re
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -47,8 +48,8 @@ def fp64_rates(dev):
     n, k, b = 1302, 96, 17
     A = torch.randn(b, n, n, dtype=torch.float64, device=dev); A = A @ A.transpose(1, 2) + n*torch.eye(n, dtype=torch.float64, device=dev)
     L = torch.linalg.cholesky(A); B = torch.randn(b, n, k, dtype=torch.float64, device=dev)
-    t = tm(lambda: torch.cholesky_solve(B, L)); print(f'   batched cholesky_solve 17 x ({n}^2, {k} rhs) fp64: {t*1e3:7.2f} ms = {b*4*n*n*k/t/1e9:6.0f} GFLOP/s   (Mac CPU: 24 ms / 230)')
-    t = tm(lambda: torch.bmm(A, B)); print(f'   batched GEMM           17 x ({n}^2 @ {n}x{k}) fp64: {t*1e3:7.2f} ms = {b*2*n*n*k/t/1e9:6.0f} GFLOP/s   (Mac CPU: 17 ms / 332)')
+    t = tm(lambda: torch.cholesky_solve(B, L)); print(f'   batched cholesky_solve 17 x ({n}^2, {k} rhs) fp64: {t*1e3:7.2f} ms = {b*4*n*n*k/t/1e9:6.0f} GFLOP/s   (Mac CPU: 24 ms / 230, GB10: 18 ms / 600)')
+    t = tm(lambda: torch.bmm(A, B)); print(f'   batched GEMM           17 x ({n}^2 @ {n}x{k}) fp64: {t*1e3:7.2f} ms = {b*2*n*n*k/t/1e9:6.0f} GFLOP/s   (Mac CPU: 17 ms / 332, GB10: 18 ms / 307)')
     N = 4096; a = torch.randn(N, N, dtype=torch.float64, device=dev)
     t = tm(lambda: a @ a, 3); print(f'   DGEMM {N}: {2*N**3/t/1e12:5.2f} TFLOP/s   (A100 ~9.7-19, GB10 0.21, M3 Max CPU 0.41)')
     return dict(device=torch.cuda.get_device_name(0) if dev.startswith('cuda') else 'cpu')
