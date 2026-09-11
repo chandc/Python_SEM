@@ -26,7 +26,7 @@ CAVITY_N15_MARCH.md (the marches), CHANNEL_VALIDATION.md §6 (Orr–Sommerfeld).
 | balanced weighting, 3D | **blocked** with explicit convection: channel divergence 3e−1 → 6e−1 in 10 steps (legacy 8e−4); $q=1.5$ holds 3e−2 | §5.3 below, `scratch/minchan_w_*.log` |
 | legacy weighting, 3D zigzag | **absent**: run01 fields have the same node-alternation statistics as the fractional-step field and less top-mode energy | ZIGZAG_CURE_RESEARCH.md §4.8, `scratch/zigzag3d.py` |
 | 3D options | **in**: `weighting`, `mom_exp`, `precond`, `share_precond`; defaults unchanged; 248 + 7 tests pass | §4b |
-| vertex patch + coarse, 3D | **p-independent** (36–38 it, N = 4–10) and **72 vs 4675 it** per stage on the channel; batched fp64 apply: Mac CPU 70 s/step, **GB10 41 s/step vs Jacobi 60 s** (host coarse), identical step to Jacobi on both | §4b, §8b, FP64_ON_APPLE_GPU.md |
+| vertex patch + coarse, 3D | **p-independent** (36–38 it, N = 4–10) and **72 vs 4675 it** per stage on the channel; GEMM-form fp64 apply: **GB10 25 s/step vs Jacobi 60 s**, A100 11.5 s vs 22.3 s before the GEMM-form patch apply (re-measurement pending); identical step to Jacobi everywhere | §4b, §8b, FP64_ON_APPLE_GPU.md |
 | next | GEMM-form apply on Accelerate (Mac) and the GB10 timing; increment-divergence term or implicit convection for 3D; corner grading for the singular cavity | §9, FP64_ON_APPLE_GPU.md §5 |
 
 ---
@@ -664,7 +664,17 @@ triangular-solve form had cost ~100 ms of a 120 ms apply (measured step
 17.8 s vs Jacobi 22.2 s, torch backend); the GEMV form is the re-run to
 make there.
 
-**A100, production mesh, commit e22dea5 (GEMV coarse), torch backend:**
+**GEMM-form apply (commit 9e87834):** the torch profiler showed 62 % of
+device time inside `cholesky_solve`, executed as ~3200 MAGMA blocked-trsm
+kernels per apply; the interior blocks and Schur complements are now stored
+as explicit inverses of the equilibrated matrices and applied as batched
+GEMMs (same storage, equal to the reference to 3e−15).  GB10: apply
+173 → 113 ms (patch 97 → 50, interior 25 → 17, back-substitution 26 → 17,
+coarse GEMV 28), ten-step restart **25.4 s/step at 72 CG/stage**,
+identical diagnostics — **2.4× faster than run01's 60 s Jacobi step**, and
+now near that device's fp64 and bandwidth floor.  Mac 4×4 N=6 apply 49 → 12 ms.
+
+**A100, production mesh, commit e22dea5 (GEMV coarse, before the GEMM-form patch apply), torch backend:**
 apply **71 ms** per CG iteration, vsbatch step **11.5 s at 71 CG/stage**
 against Jacobi **22.3 s at 4699** — 1.9×; build 40–45 s per stage value of
 $c$ (probes 5–8 s).  The fused `cuda` backend compiled (arch 8.0) but is
