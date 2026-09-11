@@ -162,6 +162,66 @@ per field in 2D) is per patch. The result is identical to the dense patch
 solve (iterations and $\kappa$ equal to the digit) at 7.7× (N=8) to 13× (N=24)
 less memory and 2–4× faster applies.
 
+### 1.5 The 3D stage is a Stokes problem — consequences for weights and preconditioner (2026-09-11)
+
+With convection explicit (RKW3), each implicit stage of the channel solves
+
+$$
+c\,\mathbf u+\nabla p+\nu\nabla\times\boldsymbol\omega=\mathbf f^{\rm expl},\qquad
+\nabla\!\cdot\mathbf u=0,\qquad \boldsymbol\omega=\nabla\times\mathbf u ,
+$$
+
+a **linear, constant-coefficient Stokes-type system whose operator is the
+same at every step** (three values of $c$, one per stage).  Both halves of
+this plan look different in that light.
+
+**Weights.** The right-hand side $\mathbf f^{\rm expl}=c\,\mathbf u^n+\dots$ carries
+the divergence of the explicit convective increment; it is not solenoidal.
+The least-squares stage is therefore the *projection* step of the scheme,
+and the continuity row must dominate for the stage to return a
+divergence-free field.  The legacy weighting ($1/c^2$ on momentum) does
+exactly that; the balanced weighting ($1/c$) was derived for an implicit
+nonlinear step where momentum and continuity can be met together, and here
+it tells the stage to follow a non-solenoidal right-hand side — the
+divergence growth of §5.3 is that, not a solver defect.  The 2D zigzag
+mechanism needs a fixed point and a singular source, neither of which the
+channel has (ZIGZAG_CURE_RESEARCH.md §4.8).  **Decision: legacy weights for
+the 3D stage.**  The only open accuracy question the Stokes framing leaves
+is the *viscous* part: at $c\approx7500$ the momentum row carries weight
+$2\times10^{-8}$, so the near-wall viscous dynamics is enforced weakly within
+a stage.  run01's statistics matched the references, so it is not gross;
+the bound is the existing Stokes-decay gate (`scratch/cupy_validation_ladder.py 1`,
+analytic $\sigma=9.3137399$, matched to 8 digits at $\Delta t$ = 0.01–0.0025)
+re-run at run01's $\Delta t=8\times10^{-4}$.  If it shows a loss, the FOSLS-internal
+fix is the increment-divergence term (§9), not the balanced weighting.
+
+**Preconditioner.** A fixed operator is what makes the one-time build and
+the factor sharing legitimate (3 element and 7 patch types per mode on the
+channel; §4b).  Two further steps are available only because of it:
+
+1. *Exact per-mode direct solver by block-circulant (Bloch) decomposition
+   in $x$.*  With uniform elements and periodicity in $x$ the assembled
+   operator for each $k_z$ is block-circulant over the 6 element columns; a
+   discrete Fourier transform across the columns splits it into 6 Bloch
+   problems, each a one-column SEM system in $y$ (18 elements,
+   block-tridiagonal with $9\times9\times14=1134$-dof blocks).  Factor once
+   ($\approx102\times2.6\times10^{10}$ flop, ≈40 GB complex double on the
+   channel), then every stage is an exact solve — no CG, no iteration count.
+   The natural end point for a Stokes stage; a larger project than the
+   patch preconditioner, and one that a stretched or non-periodic mesh
+   would forfeit.
+2. *Deflation.*  The softest directions of $A$ (the near-null pressure modes
+   the diagonal cannot see) are the same at every step; compute them once
+   and deflate them from CG.  A small addition to the existing solver.
+
+**The trade with implicit convection.**  Making convection implicit (as in
+2D) would restore the balanced weighting's benefits — larger $\Delta t$,
+smaller $c$, $\Delta t$-independent steady states — but the operator would then
+change every step, and the one-time build becomes a refresh (30 s on the
+GB10 per rebuild; the 2D cavity tolerated a preconditioner frozen for
+50–100 steps).  Not absurd, but a trade, and not one to make before the
+Stokes-decay gate above says the current stage is inaccurate.
+
 ---
 
 ## 2. Diagrams
