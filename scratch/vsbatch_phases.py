@@ -28,3 +28,12 @@ if __name__ == '__main__':
     print(f'apply {tot:.1f} ms on {bat.dev} ({bat.n_groups} mode groups); phases per apply:')
     for k, v in bat.timing.items():
         if k != 'start': print(f'   {k:16s} {v/n:7.2f} ms')
+    if os.environ.get('TORCHPROF', '0') == '1':
+        from torch.profiler import profile, ProfilerActivity
+        acts = [ProfilerActivity.CPU] + ([ProfilerActivity.CUDA] if bat.dev.type == 'cuda' else [])
+        bat.timing = None
+        with profile(activities=acts) as prof:
+            for _ in range(3): bat(r)
+            if bat.dev.type == 'cuda': torch.cuda.synchronize()
+        key = 'cuda_time_total' if bat.dev.type == 'cuda' else 'cpu_time_total'
+        print(prof.key_averages().table(sort_by=key, row_limit=18, max_name_column_width=60))
