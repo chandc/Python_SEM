@@ -655,6 +655,15 @@ run01, so the earlier 149 s was the `price()` harness, not the container.
 GB10 recipe: image `nvcr.io/nvidia/pytorch:25.12-py3`,
 `TORCH_CUDA_ARCH_LIST=12.1`, `precond=vsbatch coarse_dense=0`.
 
+**Coarse solve as a GEMV** (commit e22dea5: the dense coarse stores the
+explicit inverse and applies it as one batched GEMV instead of 34
+sequential single-rhs triangular solves): GB10 dense-coarse step 60 s →
+**45 s** (ten-step restart, 72 CG/stage, identical diagnostics); the host
+sparse-LU coarse stays best on the GB10 at 41 s.  On the A100 the
+triangular-solve form had cost ~100 ms of a 120 ms apply (measured step
+17.8 s vs Jacobi 22.2 s, torch backend); the GEMV form is the re-run to
+make there.
+
 **A100 (Colab, fp64):** batched Cholesky solve 3.8 ms and GEMM 0.5 ms for
 the apply's shapes (40× the GB10); with the version before the device
 coarse the apply was 160 ms and the vsbatch step 36.8 s vs Jacobi 22.1 s on
