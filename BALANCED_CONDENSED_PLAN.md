@@ -26,7 +26,7 @@ CAVITY_N15_MARCH.md (the marches), CHANNEL_VALIDATION.md §6 (Orr–Sommerfeld).
 | balanced weighting, 3D | **blocked** with explicit convection: channel divergence 3e−1 → 6e−1 in 10 steps (legacy 8e−4); $q=1.5$ holds 3e−2 | §5.3 below, `scratch/minchan_w_*.log` |
 | legacy weighting, 3D zigzag | **absent**: run01 fields have the same node-alternation statistics as the fractional-step field and less top-mode energy | ZIGZAG_CURE_RESEARCH.md §4.8, `scratch/zigzag3d.py` |
 | 3D options | **in**: `weighting`, `mom_exp`, `precond`, `share_precond`; defaults unchanged; 248 + 7 tests pass | §4b |
-| vertex patch + coarse, 3D | **p-independent** (36–38 it, N = 4–10) and **71 vs 4675 it** per stage on the channel; batched fp64 apply: 70 s/step on the Mac CPU (was 64 min), identical step to Jacobi | §4b, §8b, FP64_ON_APPLE_GPU.md |
+| vertex patch + coarse, 3D | **p-independent** (36–38 it, N = 4–10) and **72 vs 4675 it** per stage on the channel; batched fp64 apply: Mac CPU 70 s/step, **GB10 41 s/step vs Jacobi 60 s** (host coarse), identical step to Jacobi on both | §4b, §8b, FP64_ON_APPLE_GPU.md |
 | next | GEMM-form apply on Accelerate (Mac) and the GB10 timing; increment-divergence term or implicit convection for 3D; corner grading for the singular cavity | §9, FP64_ON_APPLE_GPU.md §5 |
 
 ---
@@ -586,15 +586,24 @@ the apply is bound by reading 7 GB of factors at 112 GB/s and by 0.4
 TFLOP/s fp64; vsbatch reaches parity with run01's 60 s, no better, and the
 lever left there is the 5.3 GB coarse factor (host sparse LU instead).
 
+**GB10 with the coarse solve on the host** (`coarse_dense=0`: sparse LU on
+the Grace CPU, the 5.3 GB dense factor gone from the per-iteration
+traffic), same ten-step restart from run01: **41 s/step at 72 CG/stage**,
+identical diagnostics — 1.46× faster than run01's 60 s Jacobi step.  A
+ten-step Jacobi restart in the same container gave 60.7 s/step, matching
+run01, so the earlier 149 s was the `price()` harness, not the container.
+GB10 recipe: image `nvcr.io/nvidia/pytorch:25.12-py3`,
+`TORCH_CUDA_ARCH_LIST=12.1`, `precond=vsbatch coarse_dense=0`.
+
 **A100 (Colab, fp64):** batched Cholesky solve 3.8 ms and GEMM 0.5 ms for
 the apply's shapes (40× the GB10); with the version before the device
 coarse the apply was 160 ms and the vsbatch step 36.8 s vs Jacobi 22.1 s on
 the torch backend; the device-coarse version is queued there.
 
 Bottom line: patch + coarse turns the channel solve from ≈60 s/step into an
-estimated few-second step on an A100-class device for ≈7 GB of factors; on
-the GB10 it reaches parity only, because that device's fp64 rate and
-bandwidth make the dense factors the bottleneck.
+estimated few-second step on an A100-class device; on the GB10, whose fp64
+rate and bandwidth make dense factors the bottleneck, it gives 41 s against
+60 s with the coarse level kept on the host.
 
 ## 9. Risks and what to do about them
 
