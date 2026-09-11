@@ -664,6 +664,18 @@ triangular-solve form had cost ~100 ms of a 120 ms apply (measured step
 17.8 s vs Jacobi 22.2 s, torch backend); the GEMV form is the re-run to
 make there.
 
+**A100, production mesh, commit e22dea5 (GEMV coarse), torch backend:**
+apply **71 ms** per CG iteration, vsbatch step **11.5 s at 71 CG/stage**
+against Jacobi **22.3 s at 4699** — 1.9×; build 40–45 s per stage value of
+$c$ (probes 5–8 s).  The fused `cuda` backend compiled (arch 8.0) but is
+20× *slower* than torch on the A100 (Jacobi 454 s/step): a kernel tuned for
+the GB10, not an A100 path.  GB10 phase profile of the same apply
+(`scratch/vsbatch_phases.py`): gather 1 ms, interior solves 25, patch
+solves 97, back-substitution 26, coarse GEMV 24, total 173 ms — fp64
+arithmetic-bound there.  The A100's 71 ms is ~5× its arithmetic; its phase
+profile is the next measurement (a 71-iteration stage at the arithmetic
+floor would be ~3 s/step).
+
 **A100 (Colab, fp64):** batched Cholesky solve 3.8 ms and GEMM 0.5 ms for
 the apply's shapes (40× the GB10); with the version before the device
 coarse the apply was 160 ms and the vsbatch step 36.8 s vs Jacobi 22.1 s on
