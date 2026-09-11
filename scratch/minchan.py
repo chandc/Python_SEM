@@ -345,11 +345,12 @@ def to_device(s, U):
 #   weighting  legacy | balanced | unit    momentum-row weighting family
 #   mom_exp    float                       explicit exponent q in w/c^q (overrides)
 #   precond    jacobi | pmg | vschwarz | vschwarz1
-OPTIONS = dict(weighting='legacy', mom_exp=None, precond='jacobi', share_precond=0)
+OPTIONS = dict(weighting='legacy', mom_exp=None, precond='jacobi', share_precond=0, coarse_dense=None)
+#   coarse_dense  0|1     vsbatch coarse solve: dense factor on the device (1) or sparse LU on the host (0); default by device
 #   share_precond 0|1   build one patch/PMG preconditioner (middle stage c) for all three stages
 
 
-def _precond(s_host, dt, like=None, precond='jacobi', weighting='legacy', mom_exp=None, share=False):
+def _precond(s_host, dt, like=None, precond='jacobi', weighting='legacy', mom_exp=None, share=False, coarse_dense=None):
     """Build the preconditioner ON THE HOST, then move it.
 
     `jacobi_diagonal_analytic` is closed-form NumPy and is evaluated ONCE per
@@ -360,7 +361,8 @@ def _precond(s_host, dt, like=None, precond='jacobi', weighting='legacy', mom_ex
     (they move the residual themselves).
     """
     Minv = C.make_precond(s_host, dt, 0.0, rowweight=True, precond=precond,
-                          weighting=weighting, mom_exp=mom_exp, verbose=True, share=share)
+                          weighting=weighting, mom_exp=mom_exp, verbose=True, share=share,
+                          coarse_dense=(None if coarse_dense is None else bool(coarse_dense)))
     if like is not None:
         Minv = [DEV.to_device(q, like) if not callable(q) else q for q in Minv]
     return Minv
@@ -411,7 +413,7 @@ def check(N=8, ex=6, ey=18, nz=32):
     return s, U
 
 
-def price(N=8, ex=6, ey=18, nz=32, dt=None, weighting='legacy', mom_exp=None, precond='jacobi', share_precond=0):
+def price(N=8, ex=6, ey=18, nz=32, dt=None, weighting='legacy', mom_exp=None, precond='jacobi', share_precond=0, coarse_dense=None):
     """Time ONE step on the real grid, then cost the run.  GPU_PORT_PLAN.md
     Phase 6: never commit a long run to an extrapolated table."""
     s, U = check(N, ex, ey, nz)
@@ -427,7 +429,7 @@ def price(N=8, ex=6, ey=18, nz=32, dt=None, weighting='legacy', mom_exp=None, pr
     if backend.get_backend() in ('torch', 'cupy'):
         s, U = to_device(s, U)
         print('  state moved to device (%s)' % backend.get_backend())
-    Minv = _precond(s_host, dt, like=U, precond=precond, weighting=weighting, mom_exp=mom_exp, share=bool(share_precond))
+    Minv = _precond(s_host, dt, like=U, precond=precond, weighting=weighting, mom_exp=mom_exp, share=bool(share_precond), coarse_dense=coarse_dense)
     print(f'  options: weighting={weighting} mom_exp={mom_exp} precond={precond}')
     # allocate the convective history WHERE THE STATE IS.  np.zeros here left
     # a host array meeting a device Nk in the RK combination, one line deeper
@@ -463,7 +465,7 @@ def _atomic_savez(path, **kw):
 
 def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
         resume=None, N=8, ex=6, ey=18, nz=32, weighting='legacy', mom_exp=None,
-        precond='jacobi', share_precond=0):
+        precond='jacobi', share_precond=0, coarse_dense=None):
     """The production minimal-channel run.
 
     OUTPUT ALL GOES TO `out`, which is a BIND MOUNT in the container -- anything
@@ -497,7 +499,7 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
         U = initial_state(s)
         Nprev = np.zeros(OP.to_complex(U).shape[:-2] + (3, s['nk']), dtype=complex)
 
-    Minv_host = _precond(s, dt, precond=precond, weighting=weighting, mom_exp=mom_exp, share=bool(share_precond))
+    Minv_host = _precond(s, dt, precond=precond, weighting=weighting, mom_exp=mom_exp, share=bool(share_precond), coarse_dense=coarse_dense)
     if dev:
         s_run, U = to_device(s, U)
         Minv = [DEV.to_device(q, U) if not callable(q) else q for q in Minv_host]
