@@ -974,7 +974,14 @@ class VertexSchwarzBatched3D:
                 KEI = K[np.ix_(E_loc, I_loc)]
                 Y = sc[:, None]*np.linalg.solve(L.T, np.linalg.solve(L, sc[:, None]*KEI.T))   # K_II^-1 K_IE
                 Qt.append(KEI @ Y)
-                efac.append((T(sc), T(L), T(KEI), T(KEI.T.copy())))
+                # EXPLICIT INVERSE of the scaled block, applied as a GEMM: a batched
+                # triangular solve runs as thousands of small MAGMA kernels per apply
+                # (profiled: 62 % of device time, ~3200 launches on the GB10) while a
+                # GEMM is a few cutlass launches on the fp64 tensor cores.  Storage
+                # is the same (the factor was stored as a full matrix); accuracy
+                # kappa*eps of the equilibrated block, ample for a preconditioner.
+                Linv = torch.cholesky_inverse(T(L))
+                efac.append((T(sc), Linv, T(KEI), T(KEI.T.copy())))
                 self.bytes += 8*(L.size + 2*KEI.size)
             # patch types by signature; Schur complement assembled for the representative only
             sigs, ptype = {}, np.zeros(self.npatch, dtype=np.int64)
@@ -1007,9 +1014,9 @@ class VertexSchwarzBatched3D:
                     if np.abs(S - S2).max() > 1e-11*np.abs(S).max():
                         raise RuntimeError('patch Schur complements differ within a signature type -- use VertexSchwarz3D')
                 sc = 1.0/np.sqrt(np.diag(S))
-                Ls = torch.linalg.cholesky(T(S*sc[:, None]*sc[None, :]))
-                pfac.append((T(sc), Ls))
-                self.bytes += 8*Ls.numel()
+                Sinv = torch.cholesky_inverse(torch.linalg.cholesky(T(S*sc[:, None]*sc[None, :])))
+                pfac.append((T(sc), Sinv))
+                self.bytes += 8*Sinv.numel()
                 gB = np.stack([patches[p]['edofs'] for p in ps])
                 slots = [(Ti(np.array([patches[p]['slots'][s_] for p in ps])), Ti(cols_by_slot[s_])) for s_ in sorted(cols_by_slot)]
                 pplan.append(dict(ps=ps, gB=Ti(gB), n=ps.size, nb=S.shape[0], slots=slots))
@@ -1123,28 +1130,28 @@ class VertexSchwarzBatched3D:
             Y = torch.empty((nm, nelem, self.nI), dtype=r.dtype, device=self.dev)
             F = torch.empty((nm, nelem, self.nE), dtype=r.dtype, device=self.dev)
             for t, pl in enumerate(G['eplan']):
-                sc, L, KEI, KIE = G['efac'][t]                                # (nm,nI) (nm,nI,nI) (nm,nE,nI) (nm,nI,nE)
+                sc, Linv, KEI, KIE = G['efac'][t]                             # (nm,nI) (nm,nI,nI) (nm,nE,nI) (nm,nI,nE)
                 B = rg[:, pl['gI']].transpose(1, 2)*sc[:, :, None]            # (nm, nI, n_t)
-                Yt = torch.cholesky_solve(B, L)*sc[:, :, None]
+                Yt = (Linv @ B)*sc[:, :, None]                                # K_II^-1 B as one batched GEMM
                 Y[:, pl['es']] = Yt.transpose(1, 2)
                 F[:, pl['es']] = (KEI @ Yt).transpose(1, 2)
             self._tick('interior')
             zg = torch.zeros((nm, self.ndof), dtype=r.dtype, device=self.dev)
             C = torch.zeros((nm, nelem, self.nE), dtype=r.dtype, device=self.dev)
             for t, pl in enumerate(G['pplan']):
-                sc, L = G['pfac'][t]                                          # (nm,nb) (nm,nb,nb)
+                sc, Sinv = G['pfac'][t]                                       # (nm,nb) (nm,nb,nb)
                 rB = rg[:, pl['gB']]                                          # (nm, np_t, nb)
                 for es, cols in pl['slots']:
                     rB[:, :, cols] -= F[:, es]
-                zB = (torch.cholesky_solve((rB*sc[:, None, :]).transpose(1, 2), L)*sc[:, :, None]).transpose(1, 2)
+                zB = ((Sinv @ (rB*sc[:, None, :]).transpose(1, 2))*sc[:, :, None]).transpose(1, 2)   # S^-1 rB, batched GEMM
                 zg.index_add_(1, pl['gB'].reshape(-1), zB.reshape(nm, -1))
                 for es, cols in pl['slots']:
                     C.index_add_(1, es, zB[:, :, cols])
             self._tick('patch')
             for t, pl in enumerate(G['eplan']):
-                sc, L, KEI, KIE = G['efac'][t]
+                sc, Linv, KEI, KIE = G['efac'][t]
                 Gm = (KIE @ C[:, pl['es']].transpose(1, 2))*sc[:, :, None]  # (nm, nI, n_t)
-                W = torch.cholesky_solve(Gm, L)*sc[:, :, None]
+                W = (Linv @ Gm)*sc[:, :, None]
                 zI = G['npe'][pl['es']][None, :, None]*Y[:, pl['es']] - W.transpose(1, 2)
                 zg.index_add_(1, pl['gI'].reshape(-1), zI.reshape(nm, -1))
             z[..., ks] = zg[:, self.g_t].T.reshape(self.shape[:-1] + (nm,))

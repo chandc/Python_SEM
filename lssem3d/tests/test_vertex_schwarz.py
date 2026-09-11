@@ -98,9 +98,9 @@ def test_batched_equals_reference(geom):
     bat = VertexSchwarzBatched3D(m, nk, NZ, NU, c, kz, 0.0, rw, mask=mask, device='cpu')
     r = _rand_state(m, nk, mask, 5)
     zr, zb = ref(r), bat(r)
-    assert np.abs(zb - zr).max() < 1e-12*np.abs(zr).max()
+    assert np.abs(zb - zr).max() < 1e-9*np.abs(zr).max()          # explicit inverses: kappa*eps, not round-off
     assert bat.n_etypes[1] <= 3 and bat.n_ptypes[1] <= 8              # sharing found the few distinct types (k != 0)
     # dense device coarse solve (the CUDA default) must match the sparse host one
     bd = VertexSchwarzBatched3D(m, nk, NZ, NU, c, kz, 0.0, rw, mask=mask, device='cpu', coarse_dense=True)
     zd = bd(r)
-    assert np.abs(zd - zr).max() < 1e-11*np.abs(zr).max()
+    assert np.abs(zd - zr).max() < 1e-9*np.abs(zr).max()
