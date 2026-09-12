@@ -690,3 +690,58 @@ Reading.
    with: the defect is in the *spatial* accuracy of a time-dependent computation.
 4. The floor is visible in pressure too, and larger there
    (§4.10(c) measured the same asymmetry in the 1D fixed point).
+
+### 4.12 The crossover predicted, then found: refining the step makes the legacy answer worse (`scratch/mms2d_crossover.py`, `mms2d_tolcheck.py`)
+
+§4.11 fitted two constants.  This section uses them to make a prediction and then
+tests it.  The two error terms cross where $C_2\Delta t^2=\Phi\lVert R_h\rVert$, so
+the weighting begins to matter below
+
+$$
+\Delta t^\ast=\sqrt{\Phi\lVert R_h\rVert/C_2},
+$$
+
+which with $C_2=5.46\times10^{-3}$ accounts for the whole §4.11 table *a
+posteriori*: $\Delta t^\ast$ = 0.42, 0.046, 3.8e−3, 2.6e−4 at $N$ = 6, 8, 10, 12
+against a sweep over $7.8\times10^{-4}\le\Delta t\le2.5\times10^{-2}$ — floor-bound
+at $N=6,8$; crossing in view at $N=10$ (the legacy curve departs between 6.3e−3
+and 3.1e−3); and *nothing visible* at $N=12$, whose $\Delta t^\ast$ is a factor of
+three below the smallest step run.  The prediction: continue the $N=12$ row past
+$\Delta t^\ast$ and the separation must appear.  It does.
+
+| $\Delta t$ | steps | legacy | balanced | ratio |
+|---|---|---|---|---|
+| 7.81e−4 | 256 | 3.991e−9 | 3.974e−9 | 1.00 |
+| 3.91e−4 | 512 | 1.079e−9 | 9.965e−10 | 1.08 |
+| 1.95e−4 | 1024 | 8.522e−10 | 2.548e−10 | 3.34 |
+| 9.77e−5 | 2048 | **2.397e−9** | 8.249e−11 | **29.1** |
+
+The balanced error falls monotonically at observed orders 2.00, 1.97, 1.63.  The
+legacy error reaches a minimum between $3.9\times10^{-4}$ and $1.95\times10^{-4}$ —
+straddling the predicted $\Delta t^\ast=2.6\times10^{-4}$ — and then **grows**, by
+2.8× for the last halving of the step.  **There is an optimal time step for the
+legacy weighting, and refining past it is harmful.**
+
+**It is the discretisation, not the solver.**  The legacy operator's condition
+number grows like $1/\Delta t^2$ (§4.10), so an ill-conditioned solve is a
+competing explanation and had to be excluded.  Sweeping the tolerance that
+actually binds (`cgsfac=0`, so `cg_tol` decides; the first attempt swept the
+*relative* factor, which had already fallen below the absolute floor, and
+returned three identical rows — a no-op test that nearly went into the record):
+
+| `cg_tol` | legacy | CG/solve (max) | balanced | CG/solve (max) | ratio |
+|---|---|---|---|---|---|
+| 1e−8 | 1.580e−6 | 3.9 (9) | 2.196e−9 | 5.2 (12) | 719 |
+| 1e−12 | 2.3968e−9 | 7.4 (16) | 8.2492e−11 | 6.8 (17) | 29.1 |
+| 1e−16 | 2.3968e−9 | 7.4 (16) | 8.2492e−11 | 6.8 (17) | 29.1 |
+
+Identical to five digits with identical iteration counts at $10^{-12}$ and
+$10^{-16}$: CG is converging below both targets, so the answer is
+solver-independent and the rise is the discrete problem's, exactly as §4.9
+predicts from the $\Delta t^2$ momentum-to-constraint ratio.
+
+A secondary finding in the same table: at a loose tolerance the legacy
+formulation is far more sensitive, 1.58e−6 against the balanced 2.20e−9 — it
+**amplifies solver error by some 700×** — so it not only reaches a worse answer
+but demands a much tighter solve to reach it.  That is the same conditioning
+defect §4.10 measures, seen from the user's side.

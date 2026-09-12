@@ -157,7 +157,8 @@ def residual_norm(st, m, U, t):
 
 # ------------------------------------------------------------------------ driver
 
-def march(N, E, dt, weighting, tend=TEND, newton=4, cgsfac=1e-12, refresh=20):
+def march(N, E, dt, weighting, tend=TEND, newton=4, cgsfac=1e-12, refresh=20,
+          cg_tol=1e-16, report_cg=False):
     m = build_channel(1.0, 1.0, E, E, N, bcs=(1, 1, 1, 1))
     m.compute_global_indices()
     w = None if weighting == 'legacy' else np.sqrt(dt)
@@ -182,6 +183,15 @@ def march(N, E, dt, weighting, tend=TEND, newton=4, cgsfac=1e-12, refresh=20):
         return cache['pre']
     st.precond_factory = factory
     nstep = int(round(tend/dt))
+    its = []
+    if report_cg:
+        _orig = S.pcg_solve
+
+        def _timed(*a, **k):
+            o = _orig(*a, **k)
+            its.append(int(o[1]))
+            return o
+        S.pcg_solve = _timed
     # BDF2 from the first step: both history levels seeded exactly.
     h = [exact(m, 0.0), exact(m, -dt)]
     t0 = _time.perf_counter()
@@ -190,10 +200,14 @@ def march(N, E, dt, weighting, tend=TEND, newton=4, cgsfac=1e-12, refresh=20):
         f = a_flux*forcing(m, t)                        # the weighted-row source
         S.step_bdf(st, h, time=t, max_newton=newton, newton_tol=1e-13,
                    newton_factor=0.0, f_known=f, pin_p=True,
-                   cgsfac=cgsfac, cg_tol=1e-16, cg_max_iter=20000,
+                   cgsfac=cgsfac, cg_tol=cg_tol, cg_max_iter=20000,
                    line_search=False)
+    if report_cg:
+        S.pcg_solve = _orig
     Ue = exact(m, nstep*dt)
     e = errors(m, h[0], Ue)
+    e['cg'] = float(np.mean(its)) if its else float('nan')
+    e['cgmax'] = float(np.max(its)) if its else float('nan')
     e['wall'] = _time.perf_counter() - t0
     e['Rh'] = residual_norm(st, m, Ue, nstep*dt)
     return e

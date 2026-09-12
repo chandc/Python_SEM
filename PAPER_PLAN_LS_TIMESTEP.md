@@ -16,8 +16,12 @@ error separates as $C_2\Delta t^2 + \Phi(w)\lVert R_h\rVert$ with $R_h$ the
 irreducible spatial least-squares residual and $\Phi$ a weighting-dependent
 constant, measured at $0.19$ for the conventional weighting and $0.05$ for the
 balanced one.  The consequence is not a loss of temporal order — there is none —
-but a floor: **at a given mesh there is an accuracy the conventional weighting
-cannot reach at any time step.**
+but a floor, and below the crossover $\Delta t^\ast=\sqrt{\Phi\lVert R_h\rVert/C_2}$
+the legacy error *rises* with refinement: **there is an optimal time step for the
+conventional weighting, refining past it is harmful, and at a given mesh there is
+an accuracy it cannot reach at any time step.**  Verified as a prediction, not a
+fit: the crossover was computed from coarser meshes and the separation then found
+where it was placed (§2.3).
 
 ---
 
@@ -128,6 +132,7 @@ the weighting rather than of the operator.
 | the same mode in an independent implementation and in the original Fortran code | reproduced (6 of 8 sign changes in Fortran) — not a bug in one code | CAVITY_N15_MARCH.md |
 | Orr–Sommerfeld growth rate, $Re=7500$, known answer $\sigma=0.00223497$ | legacy off by 3–6 % at $\Delta t=0.02$ and $0.01$ with a local rate drifting −10 %→+4 % within one run, and *worse* when the linear solver is tightened; balanced within 0.02–0.08 % | ZIGZAG_CURE_RESEARCH.md §4.5 |
 | temporal order, start-up Poiseuille | 2.04 balanced (2.039 legacy) — the cure costs no order, and the test cannot discriminate because its solution is representable | §4.4 |
+| **crossover predicted then tested** | $\Delta t^\ast$ computed from the $N=6,8$ constants places the $N=12$ separation at 2.6e−4; continuing that row past it gives ratios 1.00 → 1.08 → 3.34 → 29.1, with the legacy error reaching a minimum at the predicted step and then rising 2.8× per halving.  Excluded as a solver artefact by a tolerance sweep (identical to five digits and identical iteration counts at $10^{-12}$ and $10^{-16}$) | §4.12 |
 | **transient manufactured solution, 2D nonlinear Navier–Stokes, four orders × six time steps** | the two error terms separated: identical $\Delta t^2$ behaviour for both weightings (five digits at $N=12$, order 1.98), then floors at $0.19\lVert R_h\rVert$ (legacy) against $0.05\lVert R_h\rVert$ (balanced), the constants stable over three decades of $\lVert R_h\rVert$; the $N=10$ floor predicted from $N=6,8$ to within 1 % | §4.11, `figs_fosls_vs_fs/mms2d_temporal.png` |
 | Richardson self-convergence, regularised vs singular cavity lid | smooth: order → 2 for balanced, 0.6–0.7 legacy; singular lid: 0.3 for both, at a level an order below the spatial error, separating the two error terms | §4.7 |
 | 3D channel, explicit convection (the delimiting negative result) | balanced weighting makes $\nabla\!\cdot\mathbf u$ grow (3e−1 → 6e−1 in ten steps against legacy's 8e−4), because the RKW3 stage is a Stokes *projection* whose right-hand side is not solenoidal; physics identical to four digits | BALANCED_CONDENSED_PLAN.md §1.5, §5.3 |
