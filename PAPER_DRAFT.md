@@ -55,11 +55,100 @@ there the conventional weighting is the correct one.
 
 ## 1. Introduction
 
-*(to be written last; the argument is the abstract's, at length. Points to
-make: why LSFEM is attractive and why it is absent from unsteady production
-work; that the two objections have never been connected; that the connection is
-the mass coefficient; and that the paper is organised as a ladder from an
-algebraic statement to a DNS.)*
+A least-squares finite element method takes a first-order system
+$\mathcal L U=F$ and minimises the residual in a discrete norm. Three properties
+follow whatever the underlying physics: the algebraic problem is symmetric and
+positive definite, so the conjugate gradient method applies and no saddle point
+has to be navigated; the velocity and pressure spaces need satisfy no inf-sup
+compatibility condition, so equal-order interpolation is admissible; and the
+value of the functional is a sharp, computable a-posteriori error estimator.
+Written in velocity–vorticity–pressure form the incompressible Navier–Stokes
+equations are such a system, and the theory covering it is mature. Against a
+projection or fractional-step method, which must choose pressure boundary
+conditions that the continuous problem does not supply and which fixes a
+splitting error at the outset, the attractions are substantial.
+
+Unsteady production computation nevertheless does not use it. Two objections are
+usually offered, and they are usually offered separately. The first is
+accuracy: least-squares solutions are held to be over-constrained, to lose
+accuracy relative to a Galerkin discretisation of the same order, and — in
+reports that are harder to dismiss — to *degrade* when the time step is refined,
+which is the opposite of what any time-marching scheme should do. The second is
+cost: the operator is a squared one, its condition number scales like the square
+of a second-order operator's, and the standard preconditioners of high-order
+finite element practice have been reported to work in some settings and to stall
+completely in others, with no stated criterion separating the two.
+
+This paper's claim is that the two objections are the same number seen twice,
+and that both have remedies.
+
+Write one implicit step as the minimisation of
+$\lVert w_{\rm mass}\Delta t^{-1}(\mathrm{fac}_1\mathbf u-\sum_m\alpha_m
+\mathbf u^{n-m})+w_{\rm mom}\mathcal N(U)\rVert^2+\lVert CU\rVert^2$, with
+$\mathcal N$ the momentum residual, $C$ the divergence and curl constraints, and
+$\mathrm{fac}_1$ the backward-difference consistency constant. The mass
+coefficient the step imposes on the momentum rows is
+$c=\mathrm{fac}_1/\Delta t$, and it appears in two places.
+
+**In the fixed point.** At a fixed point of the step map the mass and history
+terms cancel identically, for every backward-difference order, because
+$\mathrm{fac}_1=\sum_m\alpha_m$ is exactly that statement. What the iteration
+converges to is therefore *not* the minimiser of any steady least-squares
+functional: an extra cross term survives, and the weight with which the momentum
+equation enters the fixed-point operator is the product $ma$ of the two row
+weights. Under the scaling used throughout the literature that product is
+$\Delta t$. The momentum equation therefore leaves the problem as the step is
+refined, the constraint block alone survives, and the computed steady state
+depends on $\Delta t$ and drifts away from the correct answer as $\Delta t$
+falls. We prove (Section 3) that $ma=O(1)$ is necessary, that the ratio it
+constrains is invariant under every diagonal row and column scaling so that no
+reformulation evades it, and that time consistency independently forces the two
+weights to be equal — so that $w_{\rm mom}=w_{\rm mass}=\sqrt{\Delta t}$ is the
+unique admissible choice. Sections 4 to 6 quantify what the conventional choice
+costs, on a one-dimensional model where everything is computable in closed form,
+on a transient manufactured solution where the error separates cleanly into a
+$\Delta t^2$ term and a floor, and on two standard benchmarks.
+
+**In the operator.** The same $c$ is the zeroth-order coefficient of the
+algebraic system each step must solve. Read as a parameter-dependent elliptic
+system, the operator changes character at $c^\ast\approx\nu p^4/h^2$: below it
+every field is controlled in $H^1$ and standard relaxation is optimal; above it
+the momentum row degenerates, velocity and vorticity are coupled by the curl row
+and controlled only in $H(\mathrm{div})$, and the discretely divergence-free
+subspace — two thirds of the space — becomes invisible to any pointwise or
+per-variable correction. A production channel simulation sits two orders above
+$c^\ast$ and a steady cavity computation sits below it, which is why the
+literature contains both reports. Section 7 establishes this by exact block
+preconditioning, and Sections 8 and 9 supply the remedy the $H(\mathrm{div})$
+literature prescribes — overlapping vertex-patch Schwarz with a low-order coarse
+space — in a form whose memory and arithmetic are affordable at spectral order.
+
+The paper is organised as a ladder, and each rung is a complete statement resting
+on the one below it: an algebraic identity that needs no inequality (Section 3),
+a model problem in which every constant is computed (Section 4), a manufactured
+solution that measures the error model and then verifies it by prediction
+(Section 5), standard benchmarks with published answers (Section 6), a solver
+diagnosis and its remedy on three geometries (Sections 7 and 8), an
+implementation that runs at the machine's floor (Section 9), and a direct
+numerical simulation of turbulent channel flow (Section 10).
+
+Two boundaries of the claim are stated where they arise rather than in a
+concluding caveat. Near a boundary singularity both weightings converge only
+sublinearly in $\Delta t$, at a level an order below the spatial error
+(Section 6.3). And when convection is treated explicitly, each implicit stage is
+a Stokes *projection* whose right-hand side is not solenoidal; that stage has no
+fixed point to degenerate toward, the constraint rows must dominate for the
+projection to do its work, and the conventional weighting is there the correct
+choice (Section 10). The criterion of this paper applies to a step whose fixed
+point is the intended solution, which is to say to implicit convection.
+
+One practical consequence deserves stating at the outset, because it explains how
+a defect of this size has persisted. With the solution well resolved in space,
+the two weightings agree to five significant digits. The error they differ in is
+proportional to the spatial residual, so it is invisible on exactly the test a
+careful developer runs: **a code verified against a well-resolved manufactured
+solution passes this defect silently**, and meets it later as a mesh-scale
+oscillation or an unexplained time-step sensitivity in a production run.
 
 ## 2. The weighted least-squares time step
 
