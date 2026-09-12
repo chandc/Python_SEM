@@ -543,6 +543,18 @@ irreducible residual $10^{-15}$):
 | $10^{-3}$ | 1.8e−2 | 2.0e−5 | 1.2e−2 | 2.9e−3 | 2.0e−2 | 2.2e−3 |
 | $10^{-5}$ | 1.8e−2 | 2.0e−7 | 1.2e−2 | 2.9e−3 | 2.0e−2 | 2.2e−3 |
 
+Figure `figs_fosls_vs_fs/model1d_mechanism.png` collects the three panels:
+(a) the fixed-point error for a resolved and an unresolved case, (b) the
+symmetry defect, which is exactly $ma$ — a straight line of slope 1 for legacy
+against a horizontal line for balanced — and (c) the condition number after the
+field-dependent row scaling, flat in $\Delta t$ for the balanced weighting and
+still $\sim1/\Delta t$ for legacy.  Panel (a) carries one point the tables above
+do not: in the *resolved* case, where the irreducible residual is at machine
+level, the legacy fixed point is nonetheless polluted by its own conditioning as
+$\Delta t$ falls, reaching $1.2\times10^{-5}$ at $\Delta t=10^{-6}$ — worse there
+than the *unresolved* balanced error.  Zero residual protects the answer only
+while the arithmetic holds up.
+
 Reading, and these are the paper's Section 2.
 
 1. **No irreducible residual, no pathology.** In the control both weightings

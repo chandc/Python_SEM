@@ -505,6 +505,63 @@ def scaling_study(E=4, N=4, k=2.0, nu=1.0/180.0, kind='trig',
         print(' '.join(row), flush=True)
 
 
+def figure(out='figs_fosls_vs_fs/model1d_mechanism.png', fac1=1.5, k=2.0, nu=1.0/180.0,
+           dts=(1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6)):
+    """The three panels of the mechanism, on the 1D model.
+
+      (a) error of the fixed point: with the solution IN the space both weightings
+          are exact for every dt (only conditioning bites); unresolved, the legacy
+          fixed point settles several times further from the truth.
+      (b) the symmetry defect ||K - K^H||/||K|| IS the product m*a: dt under the
+          legacy scaling, constant under the balanced one.  The legacy operator
+          becomes symmetric as dt -> 0, and that symmetry is the disease.
+      (c) condition number after the field-dependent row scaling: flat in dt for
+          the balanced weighting (a balanced norm), still ~1/dt for legacy.
+    """
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    cases = [('resolved (2 elem, N=6)', 'poly', 2, 6, 'C0'),
+             ('unresolved (8 elem, N=6)', 'trig', 8, 6, 'C3')]
+    fig, ax = plt.subplots(1, 3, figsize=(14.5, 4.3))
+    for lab, kind, E, N, col in cases:
+        B = blocks(E, N, k, nu); free = free_dofs(B, k)
+        Ue, f = manufactured(B, k, nu, kind)
+        nrm = np.sqrt(np.sum(np.abs(Ue)**2))
+        fld = np.tile(np.arange(NF), B['ng'])[free]
+        for wname, ls, mk in (('legacy', '--', 'o'), ('balanced', '-', 's')):
+            err, sym, cnd = [], [], []
+            for dt in dts:
+                m, a = weights(dt, wname, fac1)
+                U, K = fixed_point(B, free, m, a, f)
+                err.append(np.sqrt(np.sum(np.abs(U - Ue)**2))/nrm)
+                sym.append(np.linalg.norm(K - K.conj().T)/np.linalg.norm(K))
+                sc = np.where(fld == P_, 1.0/a, a)
+                cnd.append(np.linalg.cond(sc[:, None]*K))
+            ax[0].loglog(dts, err, ls, color=col, marker=mk, ms=4, mfc='none' if wname == 'legacy' else col,
+                         label=f'{lab}, {wname}')
+            if kind == 'trig':
+                ax[1].loglog(dts, sym, ls, color='k', marker=mk, ms=4,
+                             mfc='none' if wname == 'legacy' else 'k', label=wname)
+                ax[2].loglog(dts, cnd, ls, color='k', marker=mk, ms=4,
+                             mfc='none' if wname == 'legacy' else 'k', label=wname)
+    d = np.array(dts)
+    ax[1].loglog(d, d, ':', color='0.5', lw=1.2, label=r'$\propto\Delta t$')
+    ax[2].loglog(d, 3e6/d*dts[0], ':', color='0.5', lw=1.2, label=r'$\propto1/\Delta t$')
+    ax[0].set(xlabel=r'$\Delta t$', ylabel='relative error of the fixed point',
+              title='(a) the fixed point')
+    ax[1].set(xlabel=r'$\Delta t$', ylabel=r'$\|K-K^H\|/\|K\|$',
+              title=r'(b) the symmetry defect is $m\,a$')
+    ax[2].set(xlabel=r'$\Delta t$', ylabel='cond, after field-dependent row scaling',
+              title='(c) a balanced norm exists only for one weighting')
+    for a_ in ax:
+        a_.grid(alpha=.3, which='both'); a_.legend(fontsize=7.5)
+    fig.suptitle('Least-squares time step, 1D model: dashed = legacy, solid = balanced', fontsize=11)
+    fig.tight_layout()
+    fig.savefig(out, dpi=130)
+    print('wrote', out)
+
+
 if __name__ == '__main__':
     print(__doc__.split('THE MODEL')[0].strip()[:0] or '', end='')
     print('LEAST-SQUARES TIME-STEP FIXED POINT, 1D Fourier-mode Stokes model\n')
@@ -525,3 +582,5 @@ if __name__ == '__main__':
     condition_study()
     print()
     nu_study()
+    print()
+    figure()

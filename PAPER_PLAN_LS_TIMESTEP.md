@@ -204,13 +204,16 @@ explicit-convection projection stage, and we can say why.
 
 ## 3. What is missing before submission
 
+**All measurement and literature gates are closed as of 2026-09-12.**  What
+remains is one optional analytical upgrade and the writing.
+
 | item | effort | why it matters |
 |---|---|---|
 | ~~A transient **manufactured solution** convergence table~~ — **done 2026-09-12**, §4.11 and the figure; it also corrected the error model (the second term is a floor, not a first-order term) | — | done |
 | Extend the 1D model to **BDF2** and confirm the same structure with $\mathrm{fac}_1=3/2$ | half a day | the production scheme is BDF2; the derivation above is BDF1 |
 | nonsingularity of the limit — **§2.5 / ZIGZAG §4.14: the energy argument is disposed of.** Its constants are computable exactly, and the sufficient condition is violated by up to three orders while $\sigma_{\min}$ stays positive, *and* it wants small $\nu$ whereas the limit actually degenerates as $\nu\to0$. A proof matching the observation needs a discrete Helmholtz decomposition plus an inf-sup argument | **1 week**, not 1 day | this is what separates a JCP paper from a SISC one; **decision needed** |
 | ~~extend the 1D model to BDF2~~ — **done**: the analysis is order-independent because fac₁ = Σαₘ is what makes the mass and history terms cancel at a fixed point; measured $ma$ = 1.5 and symmetry defect 3.06e−2 = 1.5 × the BDF1 value | — | done |
-| Convert the 1D model to a **figure**: error vs $\Delta t$ for both weightings, plus the symmetry defect | half a day | this is the paper's Figure 1; the MMS figure (merged to one panel, dashed legacy / solid balanced per order) is Figure 2 |
+| ~~Convert the 1D model to a **figure**~~ — **done**: `figs_fosls_vs_fs/model1d_mechanism.png`, three panels (fixed-point error resolved vs unresolved; symmetry defect $=ma$; scaled condition number).  **Figure 1.**  The MMS figure, merged to one panel, is **Figure 2** | — | done |
 | ~~Literature/priority check~~ — **done 2026-09-12**: no follow-up to arXiv:1709.00385 pursues the rescaling; Führer & Karkulik treat the weighting as given; the 1998 review supplies the weighted-$L^2$ taxonomy our result extends and puts time-dependent problems outside its own scope. The 2009 book stays unread by both of us and is cited but not relied on | — | done |
 | Decide whether the preconditioning story is a **second paper** or a section | — | it is a second paper; mixing them weakens both |
 
