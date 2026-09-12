@@ -209,7 +209,7 @@ route to sparse, O(dofs) preconditioning of this operator runs through a
 change of discretisation to de Rham-conforming spaces (option H), where
 Pazner–Kolev–Dohrmann's equivalence theorem applies.
 
-## 4. A third geometry: Gartling's backward-facing step (`scratch/gartling_precond.py`)
+## 6. A third geometry: Gartling's backward-facing step (`scratch/gartling_precond.py`)
 
 The cavity is closed and Dirichlet everywhere; the channel is periodic with
 walls.  Gartling's backward-facing step at $Re=800$ is neither, and it tests

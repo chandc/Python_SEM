@@ -1,7 +1,7 @@
 # Time-marching least-squares spectral elements for unsteady incompressible flow: the weighting that makes them accurate and the preconditioner that makes them affordable
 
-*Draft. Sections 1–6 are written from completed work; Sections 7–10 are outlined
-and carry the work still in progress. Plan: `PAPER_PLAN_PRACTICAL.md`. Every
+*Draft. Sections 2–9 are written from completed work; Section 1, Section 10 and
+Appendix A remain outlined, and Section 10 awaits the long channel run. Plan: `PAPER_PLAN_PRACTICAL.md`. Every
 number quoted here is traceable to `ZIGZAG_CURE_RESEARCH.md`,
 `BALANCED_CONDENSED_PLAN.md` or the scripts named in the text.*
 
@@ -39,8 +39,12 @@ the divergence-free directions invisible to pointwise relaxation, which accounts
 for the observed failure of point Jacobi, block Jacobi, $p$-multigrid and
 low-order-refined algebraic multigrid alike. An overlapping vertex-patch Schwarz
 preconditioner with a coarse space, made affordable by an exact static
-condensation, gives iteration counts that are flat in polynomial order where
-those methods grow by two orders of magnitude.
+condensation, gives iteration counts flat in polynomial order and in mesh size
+across three geometries where those methods grow by two orders of magnitude, and
+an advantage that *grows* as the step is refined: from 36-fold to 309-fold fewer
+iterations as $c$ rises from 15 to 1500 on a backward-facing step. Batched to a
+form that a GPU can execute, it turns a channel-flow time step of 60 seconds into
+25.
 
 We close with a direct numerical simulation of turbulent channel flow, and with
 the condition under which the accuracy result does *not* apply: a stage with
@@ -427,30 +431,376 @@ conventional failure, and it confirms that $ma=O(1)$ is a two-sided requirement.
 
 ---
 
-## 7. The same parameter in the operator *(to be written)*
+## 7. The same parameter in the operator
 
-Diagnosis: the crossover $c^\ast\approx\nu p^4/h^2$; below it the pair
-$(\mathbf u,\omega)$ decouples and standard relaxation works, above it the
-divergence-free kernel is invisible to anything pointwise. Accounts for the
-measured failure of point Jacobi, block Jacobi, $p$-multigrid with a Chebyshev
-smoother, and low-order-refined AMG. Exact block preconditioning experiments
-giving $\kappa\approx3$ flat in $p$, $h$ and $c$ as the target.
+Sections 3–6 read $c=\mathrm{fac}_1/\Delta t$ as a property of the *fixed point*.
+The same number is also a property of the *operator that each step must solve*,
+and it is there that it accounts for the second half of the method's reputation.
 
-## 8. An affordable patch preconditioner *(to be written)*
+Note first that $c$ is unchanged by the weighting. Multiplying the momentum row
+by $w_{\rm mom}$ scales $a_{\rm mass}$ and $a_{\rm flux}$ together, so all three
+members of the family in Section 2 share
+$c=a_{\rm mass}/a_{\rm flux}=\mathrm{fac}_1/\Delta t$ and differ only in the
+scale of that row relative to the constraints. The consequence is practical: a
+preconditioner built and tuned under the conventional weighting transfers to the
+balanced one unchanged, which we confirm below. The fix of Section 5 costs
+nothing in the solver, and the solver of Sections 8–9 is not a workaround for the
+weighting.
 
-Overlapping vertex patches plus a $p=2$ coarse space; ring assembly; exact static
-condensation and its $8$–$13\times$ memory reduction. Iteration counts: 2D
-$19$–$21$ flat for $N=5$–$20$ against $435$–$4010$; 3D $36$–$38$ for $N=4$–$10$
-against $1158$–$4802$; production channel $72$ against $4675$ with the step
-identical to every logged digit. Memory model and its $N^4$ scaling.
+### 7.1 Two regimes, and the crossover between them
 
-## 9. Implementation and cost *(to be written)*
+Divide the functional by $a_{\rm flux}^2$ so that the momentum row reads
+$\mathbf u+(\nu\nabla\times\omega+\nabla p)/c$:
 
-Factor sharing by mask pattern, verified rather than assumed; explicit inverses
-applied as batched matrix products in place of batched triangular solves; graph
-capture. Apply $160\,\mathrm{ms}\to8.3\,\mathrm{ms}$; build $40\,\mathrm{min}\to30\,\mathrm{s}$;
-channel step $64\,\mathrm{min}\to25\,\mathrm{s}$ on a GB10. Costs on three
-machines.
+$$
+J \;=\; \Big\lVert\,\mathbf u+\tfrac1c\big(\nu\nabla\times\omega+\nabla p\big)\Big\rVert^2
+\;+\;\lVert\nabla\!\cdot\mathbf u\rVert^2\;+\;\lVert\nabla\times\mathbf u-\omega\rVert^2 .
+$$
+
+Read as a parameter-dependent system in the sense of Agmon, Douglis and
+Nirenberg, the mass term is of order zero with coefficient one and the flux
+terms are of order one with coefficient $1/c$. The principal part therefore
+changes character where the two balance on the finest representable scale,
+$\lvert\xi\rvert_{\max}\sim p^2/h$, that is at
+
+$$
+c^\ast \;\approx\; \nu\,\lvert\xi\rvert_{\max}^2 \;\approx\; \nu\,p^4/h^2 .
+$$
+
+For $c\ll c^\ast$ the momentum row supplies $O(1)$ control of
+$\nu\nabla\times\omega\approx\nu\nabla\times\nabla\times\mathbf u$. Eliminating
+$\omega$, the velocity is controlled in divergence *and* curl, whose
+intersection is $H^1$ on our domains; every block is Laplacian-like and the
+functional is $H^1$-elliptic in each variable. This is the regime in which
+Jacobi-smoothed $p$-multigrid for least-squares systems is provably optimal, and
+in which we measure it to be $p$-independent.
+
+For $c\gg c^\ast$ the momentum row degenerates to $\lVert\mathbf u\rVert^2$. The
+curl row makes $\omega$ an order-zero slave of $\nabla\times\mathbf u$, and
+eliminating it leaves the velocity controlled by
+$\lVert\mathbf u\rVert^2+\lVert\nabla\!\cdot\mathbf u\rVert^2$ alone — the
+$H(\mathrm{div})$ norm and nothing more. The functional is then norm-equivalent
+to
+
+$$
+\lvert\!\lvert\!\lvert(\mathbf u,\omega,p)\rvert\!\rvert\!\rvert^2
+=\lVert\mathbf u\rVert^2_{H(\mathrm{div})}
++\lVert\omega-\nabla\times\mathbf u\rVert_0^2
++c^{-2}\lvert p\rvert_1^2
+\qquad\text{up to }O(\nu/c),
+$$
+
+with two features that decide everything that follows. The vorticity appears
+*shifted*: the functional is a norm on the pair $(\mathbf u,\omega-\nabla\times
+\mathbf u)$, not on $\mathbf u$ and $\omega$ separately. And the pressure
+decouples, entering only through a scaled Neumann Laplacian.
+
+A production channel simulation at $Re_\tau=180$ with $\Delta t=8\times10^{-4}$
+has $c=5405$ against $c^\ast\approx10^2$: it is two orders into the second
+regime. A steady cavity computation at $\Delta t=O(1)$ is in the first. The two
+literatures that report success and failure for the same preconditioners are
+reporting from opposite sides of $c^\ast$.
+
+### 7.2 The norm is the right one, and it is not separable
+
+Operator preconditioning in the sense of Mardal and Winther turns a norm
+equivalence into a prescription: the Riesz map of the equivalent norm is the
+optimal block preconditioner, with a condition number bounded by the equivalence
+constants and independent of $h$, $p$ and the parameters held uniform. This is
+testable directly. Take the **exact** block diagonal of the assembled operator —
+the strongest block preconditioner with a given block structure — and vary the
+blocks. If the norm of §7.1 is right, the grouping it dictates gives a flat, small
+$\kappa$, and the groupings it forbids do not.
+
+Assembled per Fourier mode on a channel mesh, $\nu=1/180$, iterations and
+$\kappa$ from the conjugate-gradient Lanczos values:
+
+| $c$ | $p$ | dofs | Jacobi | 7 blocks, one per variable | 3 blocks $\mathbf u\lVert\omega\lVert p$ | 2 blocks $(\mathbf u,\omega)\lVert p$ |
+|---|---|---|---|---|---|---|
+| 1 | 4 | 455 | 175 / 1.6e3 | 116 / 150 | 116 / 150 | **16 / 3.3** |
+| 1 | 12 | 4055 | 701 / 4.4e4 | 130 / 180 | 128 / 180 | **17 / 3.5** |
+| 5405 | 4 | 455 | 209 / 1.6e3 | 170 / 390 | 166 / 380 | **15 / 3.3** |
+| 5405 | 8 | 1807 | 620 / 1.2e4 | 426 / 3.3e3 | 424 / 3.2e3 | **14 / 3.3** |
+| 5405 | 12 | 4055 | 1201 / 3.7e4 | 827 / 1.5e4 | 798 / 1.4e4 | **13 / 3.3** |
+
+Refining $h$ at $p=8$, $c=5405$ takes Jacobi from 620 to 1244 iterations and
+$\kappa$ from $1.2\times10^4$ to $5.5\times10^4$, while the two-block value goes
+from 14 to 13 iterations at $\kappa=3.3$ unchanged.
+
+So $\kappa\le3.6$, flat in $h$, $p$ and $c$, is available, and the whole
+difficulty is the $(\mathbf u,\omega)$ coupling: separating the two costs a
+factor of $4\times10^3$ in $\kappa$ at $c=5405$ and nothing at all at $c=1$,
+which is the regime boundary of §7.1 appearing in the numbers. The diagonal
+blocks are individually benign — $\kappa(A_{uu})\propto p^2$,
+$\kappa(A_{\omega\omega})\propto p$, $\kappa(A_{pp})\propto p^4$ for what is a
+Neumann Laplacian.
+
+The shift matters too. Building the Riesz blocks literally as
+$H(\mathrm{div})\times L^2\times H^1$, that is $M+K_{\rm div}$ for velocity and
+a mass matrix for vorticity, gives $\kappa=2.5\times10^6$, worse than Jacobi.
+Writing the same preconditioner in block-$LDL^{\mathsf T}$ form with the exact
+Schur complement $S_u=A_{uu}-A_{u\omega}A_{\omega\omega}^{-1}A_{\omega u}$
+recovers $\kappa=3.3$ exactly, and replacing $S_u$ by $M+K_{\rm div}$ loses it
+again ($\kappa$ 460 to $2.7\times10^4$ over $p=4$ to 12). The difference is a
+discrete curl-representation defect: $\nabla\times\mathbf u_h$ is of degree $p-1$
+and discontinuous across faces, the $C^0$ vorticity space cannot represent it
+there, and the minimisation over $\omega_h$ leaves a face-jump penalty on
+$\nabla\times\mathbf u_h$. It is a property of the discretisation, not of the
+continuous norm, and it cannot be dropped.
+
+### 7.3 Why every pointwise method failed, and had to
+
+Because $A_{\omega\omega}$ is diagonal on Gauss–Lobatto nodes, $S_u$ is exactly
+and matrix-freely applicable, so the question can be put to the velocity block
+alone. It gains nothing: Jacobi on $S_u$ runs $\kappa$ from $3.5\times10^2$ to
+$5.5\times10^4$ over $p=4$ to 12, the same as on the full operator, and Jacobi on
+the pure $H(\mathrm{div})$ operator $M+K_{\rm div}$ is the same again. The softest
+Jacobi-preconditioned eigenvector of $S_u$ has
+$\lVert\nabla\!\cdot\mathbf u\rVert/\lVert\mathbf u\rVert=0$ to machine precision
+with $\lVert\nabla\times\mathbf u\rVert/\lVert\mathbf u\rVert=O(1)$: a smooth,
+exactly divergence-free velocity, on which $M+K_{\rm div}$ acts as the identity
+while its diagonal is $p^4/h^2$.
+
+That is the classical obstruction of $H(\mathrm{div})$ solvers. The solenoidal
+subspace is roughly two thirds of the space, no node-wise correction can see it,
+and a coarse space built by nodal interpolation does not correct it either. It
+accounts in one statement for four independent failures in our own history —
+point Jacobi, node-block Jacobi, per-variable blocks, and $p$-multigrid with
+Jacobi or Chebyshev smoothing and either a Galerkin or a direct coarse solve —
+each of which needed thousands of iterations per stage at the channel's $c$, and
+each of which we had previously suspected of being an implementation fault.
+
+Two remedies that work for high-order Poisson problems fail here for the same
+reason, and both are worth recording because both are natural things to try.
+A nodal Hiptmair auxiliary-space sweep fails because on $C^0$ Gauss–Lobatto
+elements the discrete divergence-free subspace has no potential representation.
+Low-order-refined preconditioning fails in the second regime specifically:
+
+| $c$ | $N$ | Jacobi | exact $A_{\rm LOR}^{-1}$ solve | AMG$(A_{\rm LOR})$ on $A_{\rm SEM}$ | AMG$(A_{\rm LOR})$ on $A_{\rm LOR}$ |
+|---|---|---|---|---|---|
+| 1 | 8 | 1355 / 1.0e5 | 219 / 630 | 324 / 1.4e3 | 60 / 47 |
+| 1 | 16 | 2965 / 9.1e5 | 180 / 370 | 422 / 2.5e3 | 91 / 130 |
+| 5405 | 8 | 1736 / 9.5e4 | **1392 / 4.7e4** | 1433 / 5.1e4 | 73 / 73 |
+| 5405 | 16 | 5103 / 1.3e6 | **4833 / 6.5e5** | 5199 / 7.8e5 | 112 / 280 |
+
+At $c=1$ the low-order operator is spectrally equivalent and algebraic multigrid
+on it is a serviceable preconditioner. At $c=5405$ the **exact** low-order solve
+is almost as bad as Jacobi, so no multigrid, however good, can rescue the
+approach; and the last column shows that the multigrid is not at fault, since it
+solves its own matrix in 73 to 280 iterations. The bilinear discretisation on the
+Gauss–Lobatto sub-cells and the spectral element have different discretely
+divergence-free kernels, and it is precisely those modes that dominate at large
+$c$. On $C^0$ nodal elements the kernel has no faithful representation in any
+space but its own.
+
+What remains is the remedy the $H(\mathrm{div})$ literature prescribes: solve
+local problems large enough to contain the local kernel modes.
+
+## 8. An affordable patch preconditioner
+
+### 8.1 The method
+
+Let $\mathcal P_v$ be the overlapping patch of all elements sharing an interior
+vertex $v$, with the unknowns on its closure. The preconditioner is additive
+Schwarz on these patches with a low-order coarse level,
+
+$$
+M^{-1}=P_c\,A_c^{-1}P_c^{\mathsf T}+\sum_v R_v^{\mathsf T}\big(R_vAR_v^{\mathsf T}\big)^{-1}R_v ,
+$$
+
+where $R_v$ restricts to the patch and $P_c$ is the natural injection from the
+same discretisation at $p=2$. Three details are not optional in practice. Patch
+matrices are assembled from the full ring of elements touching the vertex, not
+from the patch interior alone, or the local kernel modes are cut by the
+artificial boundary. Each local matrix is symmetrically equilibrated before
+factorisation, since the row scales of a least-squares operator span several
+orders. And the coarse level carries the pressure null-space treatment of the
+fine problem. Element-sized overlap is what makes Schwarz $p$-independent for
+spectral elements, and the vertex star is the standard relaxation for
+divergence-free kernels; neither idea is new here. What is new is the pairing
+with the regime diagnosis of §7 — which says when the expense is necessary — and
+with the condensation of §8.2, which is what makes it affordable at spectral
+order.
+
+### 8.2 Static condensation is exact, and pays for itself
+
+A dense patch factor costs $\tfrac12 n_P^2$ with $n_P=(2N+1)^dF$ for $F$ coupled
+fields: 32 GB on the three-dimensional channel at $N=8$, 44 GB for a
+two-dimensional cavity at $N=30$. Condensing element interiors removes the
+$(2N+1)^{2d}$ constant. Each element's interior block is factored once and shared
+by the $2^d$ patches containing it; each patch keeps only a dense Schur
+complement on its edge unknowns. The result is algebraically identical, not an
+approximation, and we verify that iteration counts and $\kappa$ agree exactly:
+
+| $N$ | dofs | dense it / $\kappa$ | stored | condensed it / $\kappa$ | stored | memory ratio |
+|---|---|---|---|---|---|---|
+| 8 | 4099 | 42 / 27 | 7.67e6 | **42 / 27** | 1.00e6 | 7.7× |
+| 12 | 9219 | 33 / 15 | 3.66e7 | **33 / 15** | 3.47e6 | 10.6× |
+| 16 | 16387 | 31 / 17 | 1.12e8 | **31 / 17** | 9.35e6 | 12.0× |
+| 24 | 36867 | 31 / 25 | 5.52e8 | **31 / 25** | 4.24e7 | 13.0× |
+
+The ratio grows with $N$ because the interiors scale as $(N-1)^{2d}$ per element
+while the Schur complements scale as the square of the edge count, and the apply
+is two to four times faster because the work moves into the smaller shared
+interior solves. On the three-dimensional channel this is the difference between
+32 GB and 4 GB; at $N=24$ in two dimensions, between 4.4 GB and 0.34 GB.
+
+### 8.3 Iteration counts
+
+**Two dimensions, production path.** Lid-driven cavity at $Re=1000$, $4\times4$
+elements, marched from rest, preconditioner built once and reused:
+
+| $N$ | dofs | Jacobi it/step | patch it/step | stored | ratio |
+|---|---|---|---|---|---|
+| 5 | 1,764 | 435 | **21** | 2.9 MB | 21× |
+| 10 | 6,724 | 1493 | **19** | 21 MB | 80× |
+| 15 | 14,884 | 2709 | **20** | 80 MB | 138× |
+| 20 | 26,244 | 4010 | **19** | 221 MB | 213× |
+
+**Three dimensions.** Channel mesh, $c=5405$, balanced weighting:
+
+| mesh | Jacobi | patch + coarse | patches only |
+|---|---|---|---|
+| $4\times4$, $N=4$ | 1158 | **36** | 64 |
+| $4\times4$, $N=6$ | 2306 | **35** | 63 |
+| $4\times4$, $N=8$ | 3593 | **36** | 64 |
+| $4\times4$, $N=10$ | 4802 | **38** | 64 |
+
+Flat at 19–21 in two dimensions over $N=5$ to 20, and at 35–38 in three over
+$N=4$ to 10, while Jacobi grows roughly linearly in $N$ in both. The one-level
+variant sits at a flat 64, so the coarse term is worth $1.8\times$ on this mesh
+and more on larger ones. Under the conventional weighting the patch counts are
+identical (17 against 17 on the small rig) while Jacobi's change by $-10\%$ to
+$+100\%$ depending on $c$, which is the claim of §7 that the preconditioner
+depends on $c$ and not on the weighting.
+
+**Production.** On the minimal channel itself, restarting a running simulation
+and sharing one preconditioner across the three Runge–Kutta stage values of $c$:
+worst-stage 77 iterations against Jacobi's 4675, a factor of 61, with the step
+reproducing the Jacobi step in every logged digit, including the friction
+velocity, the divergence norm, the energy and the dissipation.
+
+### 8.4 A third geometry, and the crossover
+
+The cavity is closed and Dirichlet; the channel is periodic with walls. Neither
+tests an inflow–outflow problem, a re-entrant corner, or a graded mesh, and in
+three dimensions our implementation shares factors between elements, which a
+non-uniform mesh forbids. Gartling's backward-facing step at $Re=800$ supplies
+all three. Marched from the converged steady field, conjugate gradients to a
+relative $10^{-8}$:
+
+| | grid, order | Jacobi it | patch it | ratio | wall |
+|---|---|---|---|---|---|
+| order | 11×4, $N=5$ | 5906 | **48.2** | 123× | 3.1× |
+| | 11×4, $N=6$ | 9290 | **52.8** | 176× | 4.2× |
+| | 11×4, $N=7$ | 11367 | **55.7** | 204× | 3.9× |
+| mesh | 11×4, $N=6$ | 9290 | **52.8** | 176× | 4.2× |
+| | graded, $N=6$ | 9822 | **53.5** | 184× | 4.1× |
+| | 18×4, $N=6$ | 10323 | **53.3** | 194× | 4.0× |
+
+Flat in $p$ and flat in $h$, including on the graded grid, on boundary
+conditions neither earlier case covers; the free-outlet variant, with the
+outflow plane left unknown and the pressure pinned at a corner, gives 142×.
+
+The sharpest test of §7 is the third sweep, holding the mesh fixed and varying
+only $\Delta t$, hence only $c$:
+
+| $\Delta t$ | $c$ | Jacobi it (worst) | patch it | ratio | wall speed-up |
+|---|---|---|---|---|---|
+| $10^{-1}$ | 15 | 3883 (3917) | 108.8 | 36× | 0.9× |
+| $10^{-2}$ | 150 | 9393 (10512) | 53.8 | 175× | 3.8× |
+| $10^{-3}$ | 1500 | 13687 (25647) | **44.2** | 309× | 6.7× |
+
+The patch preconditioner gets *better* as the step is refined, from 109 to 44
+iterations, while Jacobi degrades from 3883 to 13687 with its worst solve
+reaching 25647. This is the regime argument stated as a measurement: increasing
+$c$ moves the operator further into the $H(\mathrm{div})$ regime, where a
+pointwise method is blind to the kernel and a patch method is not. It also fixes
+the honest boundary of the claim. At $\Delta t=10^{-1}$, with $c$ near $c^\ast$
+for this grid, the patch preconditioner is slightly *slower* in wall time than
+Jacobi. It is a solver for time steps small enough that the physics, or the
+explicit convection, requires them — which is to say for unsteady simulation.
+
+### 8.5 Where it stops being the right choice
+
+Storage is $O(N^{2d})$ per element interior and $O(N^{2(d-1)})$ per patch face,
+so memory grows like $N^4$ in three dimensions even after condensation: 1.0 GB
+at $N=10$ on a $4\times4$ mesh, an estimated 52 GB for the production channel at
+$N=12$ in double precision, 13 GB in single. Build cost grows like $(N-1)^6$.
+Refining in $h$ instead is linear in both. Beyond roughly $N=12$, the routes that
+remove the $(N-1)^{2d}$ interior cost altogether — sparse patch bases built from
+fast diagonalisation, or inexact local solves by patch-local multigrid — become
+necessary rather than optional; we have not needed them.
+
+## 9. Implementation and cost
+
+The algorithm of Section 8 is arithmetic that batches almost perfectly and, in a
+naive implementation, does not. The prototype's apply at $N=20$ in two dimensions
+costs $2.5\times10^8$ floating-point operations, about 5 ms at the rate the
+machine sustains, and measured 329 ms: a factor of 60 lost to a Python loop over
+patches with per-call library overhead. In three dimensions the same gap put the
+channel step at 64 minutes against Jacobi's 60 seconds, with the iteration count
+already 61 times better. The iteration counts of §8.3 were therefore a real
+result attached to an unusable implementation, and closing that gap is most of
+the engineering in this work.
+
+Four changes close it, in order of what each was worth.
+
+**Uniform shapes and shared factors.** Blocks are padded to a small number of
+uniform sizes so that every local solve in a sweep is one batched call. On the
+channel, the masks produce three element types and five patch types per Fourier
+mode, and eleven at the zero mode where the pressure is pinned. Factors are
+shared between blocks with identical mask patterns — and the sharing is verified
+equal to round-off before it is used, not assumed from the mesh topology. Build
+cost fell from 40 minutes to 2.3 minutes, storage from 18 GB to 1.4 GB, and the
+apply from 16 s to 0.21 s per iteration.
+
+**Explicit inverses applied as matrix products.** A profile of the resulting
+device code showed 62% of the time inside batched triangular solves, executed as
+roughly 3200 separate blocked kernels per apply. Since the local matrices are
+equilibrated and factored once and applied thousands of times, we store the
+explicit inverse of each and apply it as a batched matrix–matrix product. The
+storage is the same, the result agrees with the triangular-solve form to
+$3\times10^{-15}$, and the apply halves.
+
+**The coarse level.** At production size the dense coarse factor is 5.3 GB, whose
+traffic dominates the apply on a bandwidth-limited device. Two remedies are
+available and the better one is machine-dependent: applying its explicit inverse
+as one batched product, or keeping the coarse solve as a sparse factorisation on
+the host.
+
+**Graph capture.** With shapes fixed, the whole apply is captured once and
+replayed, removing launch overhead from what is by then a millisecond-scale
+kernel sequence.
+
+Measured on three machines, all in double precision, all reproducing the Jacobi
+solution to every logged digit:
+
+| machine | apply per iteration | step, patch | step, Jacobi |
+|---|---|---|---|
+| CPU, 16 cores | 0.21 s (batched solves) | 70 s | ≈80 s |
+| GB10 | 113 ms (matrix products) | **25.4 s** | 60 s |
+| A100 | 71 ms, 8.3 ms after graph capture | 11.5 s, ≈2 s projected | 22.3 s |
+
+Each row's step uses 71 to 72 iterations per stage. The GB10 apply is
+arithmetic-bound in double precision, and there the patch method is 2.4 times
+faster per step than the running Jacobi simulation it replaced. The A100 apply of
+8.3 ms is at that device's bandwidth floor, where reading the coarse factor alone
+accounts for 4.3 ms; its measured 11.5 s step predates both the matrix-product
+apply and graph capture, and the projection is $213\times9.9\,\mathrm{ms}$ of
+applies plus operator work. The
+useful summary is that a solve which cost 4675 iterations and 60 seconds per step
+now costs 72 iterations and 25 seconds on the same device, with the remaining
+factor of ten visible in the profile rather than hypothetical.
+
+Three practical notes for anyone repeating this. The preconditioner may be
+shared across the three Runge–Kutta stage values of $c$ and rebuilt rarely; on
+the channel one build at the middle stage serves all three with no change in
+iteration count, which is what makes the build cost irrelevant in production.
+Fused kernels tuned for one device are not portable: our fused path is 20 times
+*slower* than the generic one on a different accelerator. And a compiled backend
+that silently falls back to interpretation when a shape cache overflows will hide
+all of this; ours did, until the cache limit was raised.
 
 ## 10. Direct numerical simulation, and a necessary exception *(to be written)*
 
@@ -485,6 +835,30 @@ avoid, not because it establishes the result.
 
 ## References *(partial)*
 
+- S. Agmon, A. Douglis and L. Nirenberg, *Estimates near the boundary for
+  solutions of elliptic partial differential equations satisfying general
+  boundary conditions*, CPAM **12** (1959) 623-727; **17** (1964) 35-92.
+- K.-A. Mardal and R. Winther, *Preconditioning discretizations of systems of
+  partial differential equations*, Numer. Linear Algebra Appl. **18** (2011) 1-40.
+- Z. Cai, T. A. Manteuffel and S. F. McCormick, *First-order system least squares
+  for the Stokes equations, with application to linear elasticity*, SINUM **34**
+  (1997) 1727-1741.
+- R. Hiptmair, *Multigrid method for H(div) in three dimensions*, ETNA **6**
+  (1997) 133-152.
+- R. Hiptmair and J. Xu, *Nodal auxiliary space preconditioning in H(curl) and
+  H(div) spaces*, SINUM **45** (2007) 2483-2509.
+- P. E. Farrell, M. G. Knepley, L. Mitchell and F. Wechsung, *PCPATCH: software
+  for the topological construction of multigrid relaxation methods*, ACM TOMS
+  **47** (2021) 25.
+- W. Couzy and M. O. Deville, *A fast Schur complement method for the spectral
+  element discretization of the incompressible Navier-Stokes equations*, JCP
+  **116** (1995) 135-142.
+- P. D. Brubeck and P. E. Farrell, *A scalable and robust vertex-star relaxation
+  for high-order FEM*, SISC **44** (2022) A2991-A3017.
+- W. Pazner, T. Kolev and C. R. Dohrmann, *Low-order preconditioning for the
+  high-order finite element de Rham complex*, SISC **45** (2023) A675-A702.
+- D. K. Gartling, *A test problem for outflow boundary conditions - flow over a
+  backward-facing step*, Int. J. Numer. Methods Fluids **11** (1990) 953-967.
 - [BG98] P. B. Bochev and M. D. Gunzburger, *Finite element methods of
   least-squares type*, SIAM Review **40**(4) (1998) 789–837.
 - P. B. Bochev and M. D. Gunzburger, *Least-Squares Finite Element Methods*,
