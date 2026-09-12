@@ -16,20 +16,34 @@ import scipy.linalg as sla
 
 from lssem2d.assembly import gather_scatter
 from lssem2d.lssem import apply_L, apply_LT
+from lssem2d import obc
 
 NV = 4
 
 
 def element_blocks(state, fu, fv):
-    """A_e = L0_e^T W L0_e for every element at once, (nelem, nde, nde),
-    local index ((i*n)+j)*NV + var."""
+    """A_e for every element at once, (nelem, nde, nde), local index
+    ((i*n)+j)*NV + var.
+
+    A_e = L0_e^T W L0_e  PLUS the Dong outflow term B^T B on any bc == 6 edge.
+    That second piece is what `newton_step` adds to the matvec (solver.py step
+    3.5), and it is element-local -- apply_B reads only the i = N edge of its own
+    element -- so it belongs in the element block.  Omitting it would build the
+    preconditioner from a DIFFERENT operator than the one being solved, precisely
+    on the boundary the condition exists to treat.  No-op when the mesh has no
+    bc == 6 edge, which is the case for the cavity, the channel and the Gartling
+    pressure outlet; the Armaly/BFS runs with the Dong condition need it."""
     m = state.mesh; n = m.N + 1; nde = n*n*NV
     blocks = np.empty((m.nelem, nde, nde))
     U = np.zeros((m.nelem, n, n, NV))
+    has_obc = obc.obc_active(state)
     for col in range(nde):
         i, j, v = np.unravel_index(col, (n, n, NV))
         U[:] = 0.0; U[:, i, j, v] = 1.0
-        blocks[:, :, col] = apply_LT(state, apply_L(state, U, fu, fv), fu, fv).reshape(m.nelem, nde)
+        out = apply_LT(state, apply_L(state, U, fu, fv), fu, fv)
+        if has_obc:
+            obc.apply_BT(state, obc.apply_B(state, U), out)
+        blocks[:, :, col] = out.reshape(m.nelem, nde)
     return blocks
 
 

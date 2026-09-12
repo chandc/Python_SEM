@@ -208,3 +208,65 @@ no representation in any other space than its own. Option F is closed; the
 route to sparse, O(dofs) preconditioning of this operator runs through a
 change of discretisation to de Rham-conforming spaces (option H), where
 Pazner–Kolev–Dohrmann's equivalence theorem applies.
+
+## 4. A third geometry: Gartling's backward-facing step (`scratch/gartling_precond.py`)
+
+The cavity is closed and Dirichlet everywhere; the channel is periodic with
+walls.  Gartling's backward-facing step at $Re=800$ is neither, and it tests
+three things neither of the others can: an **inflow/outflow** problem, where the
+`pz` outlet prescribes pressure and masks vorticity on the outflow plane (and the
+`free` variant instead leaves that plane unknown and pins pressure at one
+corner); a **re-entrant corner**, the geometric singularity whose effect on the
+time step is measured in ZIGZAG_CURE_RESEARCH.md §4.7 and whose effect on the
+*solver* is measured here; and **non-uniform elements**, with graded variants of
+the same grid, so the factor-sharing shortcut of the 3D implementation does not
+apply.
+
+Marched from the converged steady field (BDF2 from a fixed point), CG to a
+relative $10^{-8}$, two Newton iterations per step.  `element_blocks` now also
+probes the Dong outflow term $B^TB$ when the mesh carries a `bc == 6` edge — it
+is element-local, it is part of the operator `newton_step` applies, and omitting
+it would build the preconditioner from a different operator than the one being
+solved.  It is a no-op for the pressure outlet used here and matters for the
+Armaly runs.
+
+**Polynomial order, fixed 11×4 mesh, $\Delta t=10^{-2}$:**
+
+| $N$ | dofs | Jacobi it (max) | patch it (max) | stored | ratio | wall speed-up |
+|---|---|---|---|---|---|---|
+| 5 | 6336 | 5906 (7235) | **48.2** (63) | 9.1 MB | 123× | 3.1× |
+| 6 | 8624 | 9290 (10512) | **52.8** (65) | 14.7 MB | 176× | 4.2× |
+| 7 | 11264 | 11367 (14439) | **55.7** (74) | 22.5 MB | 204× | 3.9× |
+
+**Mesh refinement, fixed order 6** (13g is a *graded* grid):
+
+| grid | dofs | Jacobi it | patch it | ratio | wall speed-up |
+|---|---|---|---|---|---|
+| 11×4 | 8624 | 9290 | **52.8** | 176× | 4.2× |
+| 13g | 10192 | 9822 | **53.5** | 184× | 4.1× |
+| 18×4 | 14112 | 10323 | **53.3** | 194× | 4.0× |
+
+**Flat in both $p$ and $h$** — 48→56 over the order range and 52.8→53.3 over the
+mesh range — while Jacobi grows by a factor of two in each.  This is the
+$h$-refinement study that LOW_MEMORY_PATCH_SOLVERS.md §3.1 left outstanding, and
+it comes on a geometry with different boundary conditions from either case
+already measured.
+
+**Time step, i.e. the $c$-regime** (11×4, $N=6$):
+
+| $\Delta t$ | $c=\mathrm{fac}_1/\Delta t$ | Jacobi it (max) | patch it | ratio | wall speed-up |
+|---|---|---|---|---|---|
+| $10^{-1}$ | 15 | 3883 (3917) | 108.8 | 36× | 0.9× |
+| $10^{-2}$ | 150 | 9393 (10512) | 53.8 | 175× | 3.8× |
+| $10^{-3}$ | 1500 | 13687 (25647) | **44.2** | 309× | 6.7× |
+
+This is the clearest statement of the regime argument anywhere in the project.
+As $c$ grows the patch preconditioner gets **better** — 109 → 54 → 44 iterations
+— while Jacobi degrades from 3883 to 13687 with its worst solve reaching 25647.
+At the largest step the patch is not worth its cost (0.9×); by $\Delta t=10^{-3}$
+it is 6.7× faster in wall clock and 309× fewer iterations.  The crossover is
+near $c\approx15$–$150$, consistent with $c^\ast\approx\nu p^4/h^2$ for this grid.
+
+**The other outlet condition** (`free`: outflow plane unknown, pressure pinned at
+one corner) gives 46.7 patch iterations against 6623 for Jacobi, 142×, so the
+result does not depend on which of the two outflow treatments is used.

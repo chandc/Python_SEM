@@ -130,9 +130,19 @@ affordable by static condensation that is *exact*.
 | 3D, $N=4\to10$ | 1158 → 4802 | **36–38, flat** |
 | minimal channel, production | 4675 per stage | **72**, step identical to every logged digit |
 
-*Outstanding:* **an $h$-refinement study to match the $p$-study** (2 days), and
-ideally one problem class beyond cavity and channel to show it is not tuned
-(3 days).
+**Third geometry, done 2026-09-12** (`scratch/gartling_precond.py`,
+LOW_MEMORY_PATCH_SOLVERS.md §4): Gartling's backward-facing step at $Re=800$ —
+inflow/outflow rather than closed or periodic, a re-entrant corner, non-uniform
+and graded grids.  Patch iterations **flat in both $p$ and $h$** (48→56 over
+orders 5–7; 52.8→53.3 over three meshes including a graded one) while Jacobi
+doubles in each; ratios 123–204×, wall speed-up 3–4×.  Independent of which of
+the two outflow treatments is used (142× with the free outlet).
+
+And the sharpest statement of the regime argument in the project: sweeping
+$\Delta t$ at fixed mesh, the patch preconditioner gets **better** as $c$ grows
+(109 → 54 → 44 iterations at $c$ = 15, 150, 1500) while Jacobi degrades
+(3883 → 13687, worst solve 25647).  At the largest step it is not worth its cost
+(0.9× wall); by $c=1500$ it is 6.7× faster.  *Outstanding: nothing.*
 
 ### Level 5 — Making it fast (done, one confirmation outstanding)
 
