@@ -224,6 +224,25 @@ The theory is stated as propositions with proofs where they are proofs
 well-posedness of the scaled limit).  No claim is dressed above its evidence;
 the one place we tried and failed to prove something is reported as such.
 
+## Drafting status (2026-09-12)
+
+`PAPER_DRAFT.md`, 8,300 words.
+
+| section | state |
+|---|---|
+| 1 Introduction | written |
+| 2 The weighted step, 3 The fixed point | written (Level 0) |
+| 4 Closed form, 5 Accuracy cost, 6 Benchmarks | written (Levels 1–3) |
+| 7 The same parameter in the operator | written (Level 4 diagnosis) |
+| 8 The patch preconditioner | written, including the Gartling geometry and the $c$-sweep |
+| 9 Implementation and cost | written, three machines |
+| 10 DNS and the RKW3 exception | exception written; **blocked on the long A100 run** |
+| Appendix A Energy argument | outlined |
+| References | 20 entries, complete for §§2–9 |
+
+Remaining writing is Section 10's statistics and Appendix A. Everything else on
+the critical path is now a computation, not a drafting task.
+
 ## Schedule
 
 | | work | days |
