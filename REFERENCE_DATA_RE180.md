@@ -213,3 +213,47 @@ vorticity, which is the quantity FOSLS carries as a primary unknown. The
 demonstration that FOSLS can do DNS stands on this run; the open items are
 statistical (a longer window for u′ and −u′v′) and formulational (the H⁻¹
 momentum norm for ω and p accuracy, ADN_FOSLS.md §6.5), not dynamical.
+
+## 7. Is the time step set by physics or by the scheme? (2026-09-12, `scratch/dns_timescales.py`)
+
+A DNS time step has to resolve the fastest motion in the flow.  It must also stay
+inside the scheme's stability limit, but a DNS whose step is set by *stability*
+is one whose scheme is in the way of the physics.  Which of the two binds is a
+measurement, not an assumption, so it is measured here on run01's own fields —
+the dissipation from velocity gradients (not from the stored ω, which is an
+independent VVP unknown left free at the walls, exactly where dissipation
+peaks), the Kolmogorov time τ_η = √(ν/ε) plane by plane, and the convective CFL
+on the true smallest GLL spacing against the RKW3 limit √3.
+
+| checkpoint | $t$ | $u_\tau$ | $\Delta t^+$ | min $\tau_\eta$ | $\tau_\eta/\Delta t$ | CFL | largest stable $\Delta t$ | largest $\Delta t$ resolving $\tau_\eta/10$ |
+|---|---|---|---|---|---|---|---|---|
+| 0002600 | 2.08 | 0.958 | 0.132 | 5.54e−3 | 6.9 | 1.185 | 1.17e−3 | 5.54e−4 |
+| 0006200 | 4.96 | 0.994 | 0.142 | 5.19e−3 | 6.5 | 1.113 | 1.24e−3 | 5.19e−4 |
+
+The minimum of τ_η is at the wall (y⁺ = 0), as it must be; the pointwise minimum
+is 2.7e−3, half the plane-averaged value.
+
+**Physics binds, by a factor of 2.4.** Resolving the Kolmogorov time to a tenth
+requires Δt ≤ 5.2e−4; RKW3 stability on the same field allows 1.24e−3.  The
+production Δt = 8e−4 sits between them: it resolves τ_η by 6.5× and runs at 64 %
+of the stability limit, which is Δt⁺ = 0.14 in the units the channel literature
+quotes.  Three consequences.
+
+1. **The step was not chosen to appease the solver**, and could not be enlarged
+   to save time without under-resolving the dissipation range: the ceiling is
+   physical.  Taking the strict τ_η/10 convention instead would cost 54 % more
+   steps for the same simulated time and is the direction to move if the
+   dissipation statistics ever look suspect, not the other way.
+2. **The two limits are within a factor of 2.4 of each other at this Reynolds
+   number**, so explicit convection is not obviously the wrong choice here.  It
+   becomes the wrong choice at higher Re_τ, where the CFL limit tightens like the
+   grid while τ_η only falls like Re_τ^{−1/2} in wall units — the regime in which
+   implicit convection, and therefore the weighting result of the 2D work, starts
+   to matter for this code.
+3. **It is why the preconditioner matters.** A DNS is forced to small Δt by the
+   physics, and small Δt means large c = fac₁/Δt, which is precisely the regime
+   where pointwise relaxation cannot see the divergence-free modes
+   (ADN_FOSLS.md §3, §5.3).  The Gartling sweep measures the same thing from the
+   other side: the patch preconditioner's advantage grows from 36× to 309× as c
+   rises from 15 to 1500 (LOW_MEMORY_PATCH_SOLVERS.md §6).  The small step is not
+   a choice the solver can talk us out of, so the solver has to be built for it.

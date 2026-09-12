@@ -906,6 +906,25 @@ modes. The criterion of Section 5.1 applies to a step whose *fixed point* is the
 intended solution, which means implicit convection; a projection stage has no
 fixed point to degenerate toward.
 
+**The step is set by the physics, not by the scheme.** A direct simulation must
+resolve the fastest motion in the flow, and it is worth checking which of the two
+candidate limits actually binds. Measuring the dissipation from the velocity
+gradients of the computed field gives a minimum Kolmogorov time
+$\tau_\eta=\sqrt{\nu/\varepsilon}$ of $5.2\times10^{-3}$ at the wall, while the
+convective CFL of the same field is 1.11 against the RKW3 limit of $\sqrt3$. So
+resolving $\tau_\eta$ to a tenth requires $\Delta t\le5.2\times10^{-4}$ and
+stability permits $1.24\times10^{-3}$: the physical requirement is the tighter of
+the two by a factor of 2.4. The production step $\Delta t=8\times10^{-4}$ sits
+between them, resolving $\tau_\eta$ by a factor of 6.5 at $\Delta t^+=0.14$.
+
+This matters for Section 7 rather than for Section 5. A direct simulation is
+*forced* to a small time step by the flow it is resolving, a small step means a
+large $c$, and large $c$ is exactly the regime in which the divergence-free
+directions are invisible to pointwise relaxation. The step cannot be enlarged to
+suit the solver, so the solver has to be built for the step — which is the same
+statement as the backward-facing step's $c$-sweep in Section 8.4, read from the
+other end.
+
 **The simulation.** Minimal-channel DNS at $Re_\tau=180$, statistics against five
 reference databases. *(Long run pending.)*
 
