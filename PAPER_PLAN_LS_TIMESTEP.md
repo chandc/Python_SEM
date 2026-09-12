@@ -1,3 +1,9 @@
+> **SUPERSEDED 2026-09-12 by `PAPER_PLAN_PRACTICAL.md`.**  That plan keeps this
+> one's theory as its Levels 0–2 and builds outward to the solver, the
+> production DNS and a practitioner's recipe.  Everything below remains valid
+> as the detailed record of the theory half, including the novelty assessment
+> and the venue analysis.
+
 # Paper plan: the time-step weighting of least-squares finite element methods
 
 **Working title.** *How the time step is weighted decides what a least-squares
