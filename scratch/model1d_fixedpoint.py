@@ -225,6 +225,31 @@ def manufactured(B, k, nu, kind):
     return U, f
 
 
+def field_errors(B, U, Ue):
+    """Relative error per field.  The limit operator K0 = Pi_u^H W A + C^H W C has
+    NO ROWS in the pressure component (Pi_u^H selects u, v rows; C does not involve
+    p at all), so pressure is determined only through the Gauss-Newton term a A^H W A
+    -- i.e. at O(a).  The velocity and vorticity blocks are the ones with a genuine
+    dt-independent limit.  Splitting the error by field is how that shows."""
+    ng = B['ng']
+    out = {}
+    for f, nm in ((U_, 'u'), (V_, 'v'), (P_, 'p'), (W_, 'om')):
+        idx = np.arange(ng)*NF + f
+        d = np.linalg.norm(U[idx] - Ue[idx]); n = np.linalg.norm(Ue[idx])
+        out[nm] = d/max(n, 1e-300)
+    return out
+
+
+def limit_operator(B, free, kind='balanced'):
+    """The dt -> 0 limit of the fixed-point operator, after the scaling that makes
+    it finite:  balanced -> Pi_u^H W A + C^H W C ;  legacy -> C^H W C (momentum gone)."""
+    A, C, Pu, W = B['A'], B['C'], B['Pu'], B['W']
+    K0 = (C.conj().T @ (W[:, None]*C))
+    if kind == 'balanced':
+        K0 = K0 + Pu.conj().T @ (W[:, None]*A)
+    return K0[np.ix_(free, free)]
+
+
 def zigzag(B, U, field=V_):
     """Node-to-node sign alternations of the increment along x -- the discrete
     signature of a mesh-scale mode."""
@@ -265,7 +290,67 @@ def run(E=4, N=4, k=2.0, nu=1.0/180.0, kind='trig', dts=(1e-1, 1e-2, 1e-3, 1e-4,
         Us = steady_ls(B, free, np.sqrt(dt), f)
         row.append(f'{np.sqrt(np.sum(np.abs(Us - Ue)**2))/nrm:13.3e}')
         print(' '.join(row), flush=True)
+    # per-field errors and the limit operators
+    print(f'  per-field relative error         {"u":>10} {"v":>10} {"p":>10} {"omega":>10}')
+    for name, (m, a) in (('legacy  ', (1.0, dts[-1])), ('balanced', (1.0/np.sqrt(dts[-1]), np.sqrt(dts[-1])))):
+        U, _ = fixed_point(B, free, m, a, f)
+        fe = field_errors(B, U, Ue)
+        print(f'  {name} at dt={dts[-1]:.0e}        ' + ' '.join(f'{fe[q]:10.3e}' for q in ('u', 'v', 'p', 'om')))
+    for kind in ('balanced', 'legacy'):
+        K0 = limit_operator(B, free, kind)
+        sv = np.linalg.svd(K0, compute_uv=False)
+        print(f'  limit operator ({kind:8s}): smallest/largest singular value {sv[-1]:.3e} / {sv[0]:.3e}'
+              f'  -> cond {sv[0]/max(sv[-1], 1e-300):.2e}')
     return B, out
+
+
+def scaling_study(E=4, N=4, k=2.0, nu=1.0/180.0, kind='trig',
+                  dts=(1e-1, 1e-2, 1e-3, 1e-4, 1e-5, 1e-6)):
+    """IS THERE A NORM IN WHICH THE FIXED-POINT PROBLEM IS UNIFORMLY WELL POSED?
+
+    The operator's block structure (rows x columns, fields ordered u,v | omega | p;
+    note A U = grad p + nu curl omega has no u,v columns, and C has no p columns):
+
+        rows u,v :  (1/a) C^H W C   +   m (cross, into p and omega)
+        rows om  :  (1/a) C^H W C   +   a A^H W A
+        rows p   :                      a A^H W A          <- O(a), nothing else
+
+    so the candidate scaling is: velocity and vorticity rows by a, pressure rows by
+    1/a.  Under the balanced choice this makes the condition number INDEPENDENT of
+    dt; under the legacy choice nothing does, for a reason that needs no search:
+
+    PROPOSITION (scaling-invariance).  Within the velocity row block the constraint
+    contribution and the momentum contribution stand in the ratio
+
+        || (1/a) C^H W C || / || m Pi_u^H W A ||  ~  1/(m a),
+        m a = w_mass * w_mom * fac1 / dt,
+
+    and any row or column scaling multiplies both equally, so the ratio is invariant.
+    The momentum equation therefore survives the dt -> 0 limit if and only if
+    w_mass*w_mom = O(dt).  Combined with the time-consistency requirement
+    w_mom/w_mass = 1 (otherwise the scheme integrates dt_eff = dt*w_mom/w_mass, see
+    lssem2d.lssem.ls_coeffs), this determines the weighting uniquely:
+
+        w_mom = w_mass = sqrt(dt).
+
+    Legacy (w = dt) gives m a = dt -> 0: momentum is lost.  Unit (w = 1) gives
+    m a = 1/dt -> infinity: the constraints are lost instead, which is the measured
+    stall of that variant.  Only the balanced choice keeps both.
+    """
+    B = blocks(E, N, k, nu)
+    free = free_dofs(B, k)
+    A, C, Pu, W = B['A'], B['C'], B['Pu'], B['W']
+    fld = np.tile(np.arange(NF), B['ng'])[free]
+    print(f'--- scaling study, {kind}: E={E} N={N} k={k}: condition number of the fixed-point operator')
+    print(f'{"dt":>8} | {"m*a":>8} {"legacy raw":>11} {"legacy scaled":>13} | {"m*a":>8} {"balanced raw":>12} {"balanced scaled":>15}')
+    for dt in dts:
+        row = [f'{dt:8.0e} |']
+        for m, a in ((1.0, dt), (1.0/np.sqrt(dt), np.sqrt(dt))):
+            K = (m*(Pu.conj().T @ (W[:, None]*A)) + a*(A.conj().T @ (W[:, None]*A))
+                 + (1.0/a)*(C.conj().T @ (W[:, None]*C)))[np.ix_(free, free)]
+            sc = np.where(fld == P_, 1.0/a, a)          # p rows / a, the rest * a
+            row.append(f'{m*a:8.1e} {np.linalg.cond(K):11.2e} {np.linalg.cond(sc[:, None]*K):13.2e} |')
+        print(' '.join(row), flush=True)
 
 
 if __name__ == '__main__':
@@ -276,3 +361,7 @@ if __name__ == '__main__':
     run(kind='trig', E=4, N=4)
     print()
     run(kind='trig', E=8, N=6)
+    print()
+    scaling_study(E=4, N=4)
+    print()
+    scaling_study(E=8, N=6)

@@ -559,3 +559,77 @@ Reading, and these are the paper's Section 2.
 4. **Conditioning.** The legacy fixed-point operator reaches $\kappa=5\times10^{13}$
    at $\Delta t=10^{-5}$ on the finer mesh — in double precision its fixed point is
    no longer numerically reachable — against $10^{8}$–$10^{9}$ balanced.
+
+### 4.10 The weighting is unique, and the balanced problem is uniformly well posed
+
+Two further results from the same model, and together they are the theoretical
+core of the paper.
+
+**(a) The balanced fixed-point problem is uniformly well conditioned in a
+field-weighted norm; the legacy one is not.**  The operator's block structure
+(fields $u,v\mid\omega\mid p$; note $AU=\nabla p+\nu\nabla\times\omega$ has no
+velocity columns and $C$ has no pressure columns) is
+
+$$
+\begin{array}{r|ccc}
+ & u,v & \omega & p\\\hline
+u,v & \tfrac1a C^HWC & \tfrac1a C^HWC + m\,(\cdot) & m\,(\cdot)\\
+\omega & \tfrac1a C^HWC & \tfrac1a C^HWC + a A^HWA & a A^HWA\\
+p & 0 & a A^HWA & a A^HWA
+\end{array}
+$$
+
+so the pressure rows are $O(a)$ and the rest $O(1/a)$.  Scaling the velocity and
+vorticity rows by $a$ and the pressure rows by $1/a$ gives (`scaling_study`):
+
+| $\Delta t$ | legacy raw | legacy scaled | balanced raw | **balanced scaled** |
+|---|---|---|---|---|
+| $10^{-1}$ | 5.2e7 | 5.2e7 | 5.2e6 | 5.2e6 |
+| $10^{-3}$ | 1.6e10 | 1.6e10 | 2.0e7 | 2.0e7 |
+| $10^{-4}$ | 5.3e11 | 1.7e11 | 1.2e8 | **2.2e7** |
+| $10^{-5}$ | 5.3e13 | 1.7e12 | 1.2e9 | **2.2e7** |
+| $10^{-6}$ | 5.2e15 | 1.7e13 | 1.2e10 | **2.2e7** |
+
+(8 elements, $N=6$.)  The balanced condition number is **flat in $\Delta t$** once
+scaled — the defining property of a balanced norm — while the legacy one keeps
+growing like $1/\Delta t$ under the same scaling.
+
+**(b) The weighting is unique.**  No search over scalings is needed to know the
+legacy case cannot be repaired, because within the velocity row block the
+constraint and momentum contributions stand in the ratio
+
+$$
+\frac{\lVert a^{-1}C^HWC\rVert}{\lVert m\,\Pi_u^HWA\rVert}\;\sim\;\frac1{ma},
+\qquad ma=\frac{w_{\rm mass}\,w_{\rm mom}\,\mathrm{fac}_1}{\Delta t},
+$$
+
+and **any row or column scaling multiplies both equally**, so the ratio is
+invariant.  The momentum equation survives the limit if and only if
+$w_{\rm mass}w_{\rm mom}=O(\Delta t)$.  Time consistency independently requires
+$w_{\rm mom}/w_{\rm mass}=1$, since otherwise the scheme integrates
+$\Delta t_{\rm eff}=\Delta t\,w_{\rm mom}/w_{\rm mass}$ (this is already stated in
+`lssem2d.lssem.ls_coeffs`).  The two conditions together give
+
+$$
+\boxed{\;w_{\rm mom}=w_{\rm mass}=\sqrt{\Delta t}\;}
+$$
+
+uniquely.  Legacy ($w=\Delta t$) has $ma=\Delta t\to0$ and loses momentum; the
+unit weighting ($w=1$) has $ma=1/\Delta t\to\infty$ and loses the constraints
+instead — which is exactly the measured behaviour of that variant, whose
+divergence and solver stall were recorded in §4.1 and CAVITY_N15_MARCH.md.  The
+balanced choice is not one option among several; it is the only one that is both
+time-consistent and non-degenerate.
+
+**(c) Which field the legacy weighting damages most: pressure.**  Per-field
+relative error at $\Delta t=10^{-5}$, 8 elements $N=6$:
+
+| | $u$ | $v$ | $p$ | $\omega$ |
+|---|---|---|---|---|
+| legacy | 1.7e−7 | 3.9e−7 | **1.9e−4** | 5.4e−6 |
+| balanced | 2.5e−9 | 5.8e−9 | **1.6e−8** | 1.7e−7 |
+
+Pressure is three orders worse than velocity under the legacy weighting and a
+factor $10^4$ worse than under the balanced one — the same near-null pressure
+direction that FOSLS_TIME_DEPENDENT.md §2 identifies at large $c$, here seen as a
+consequence of the weighting rather than of the operator.

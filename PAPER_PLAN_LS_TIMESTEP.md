@@ -85,6 +85,37 @@ term made visible, and it explains why the defect is invisible on manufactured
 solutions that the space represents exactly (a trap for anyone verifying such a
 code).
 
+### 2.4 The weighting is unique, and the scaled problem is uniformly well posed
+
+Two results obtained while trying to prove the obvious thing, which is false.
+
+**The naive limit operator is singular.** $\Pi_u^HWA+C^HWC$ has *no rows* in the
+pressure component ($\Pi_u^H$ selects velocity rows, $C$ does not involve $p$), so
+its smallest singular value is numerically zero. Pressure is carried only by the
+Gauss–Newton term $aA^HWA$, i.e. at $O(a)$. The right statement is therefore not
+"the limit is nonsingular" but a **balanced-norm statement**: scaling the velocity
+and vorticity rows by $a$ and the pressure rows by $1/a$, the balanced operator's
+condition number becomes **independent of $\Delta t$** (2.2e7, flat from
+$\Delta t=10^{-4}$ to $10^{-6}$, 8 elements $N=6$), while the legacy operator under
+the same scaling still grows like $1/\Delta t$ (1.7e11 → 1.7e13).
+
+**Uniqueness, and it needs no search over scalings.** Within the velocity row
+block the constraint and momentum contributions stand in the ratio $1/(ma)$ with
+$ma=w_{\rm mass}w_{\rm mom}\mathrm{fac}_1/\Delta t$, and any row or column scaling
+multiplies both equally — the ratio is scaling-invariant. So the momentum equation
+survives the limit **iff** $w_{\rm mass}w_{\rm mom}=O(\Delta t)$. Time consistency
+independently forces $w_{\rm mom}/w_{\rm mass}=1$ (otherwise the scheme integrates
+$\Delta t_{\rm eff}=\Delta t\,w_{\rm mom}/w_{\rm mass}$). Together:
+$w_{\rm mom}=w_{\rm mass}=\sqrt{\Delta t}$, **uniquely**. The legacy weighting has
+$ma=\Delta t$ and loses momentum; the unit weighting has $ma=1/\Delta t$ and loses
+the constraints, which is the measured stall of that variant. This is the paper's
+main theoretical statement and it is a one-paragraph argument.
+
+**Pressure is the field the legacy weighting damages most** — three orders worse
+than velocity at $\Delta t=10^{-5}$, and $10^4$ worse than balanced — which
+identifies the near-null pressure direction known at large $c$ as a consequence of
+the weighting rather than of the operator.
+
 ### 2.3 Numerical evidence in 2D and 3D (already measured)
 
 | evidence | result | where |
@@ -109,7 +140,7 @@ explicit-convection projection stage, and we can say why.
 |---|---|---|
 | A transient **manufactured solution** convergence table in 2D, both weightings, several $\Delta t$ and two mesh resolutions | 1 day | the referee's first request; the Poiseuille and Richardson studies are suggestive but neither is a clean MMS |
 | Extend the 1D model to **BDF2** and confirm the same structure with $\mathrm{fac}_1=3/2$ | half a day | the production scheme is BDF2; the derivation above is BDF1 |
-| A **statement and proof** that the balanced limit operator $\Pi_u^HWA+C^HWC$ is nonsingular for the model problem, with a constant independent of $\Delta t$ | 2–3 days | turns an observation into a result; decides whether SISC is reachable |
+| ~~A statement and proof that the balanced limit operator is nonsingular~~ — **done differently, see §2.4**: the naive limit operator is *singular* (it has no pressure rows); the correct statement is uniform well-posedness in a field-weighted norm, plus a uniqueness argument. What remains is writing the nonsingularity of the *scaled* limit as a proof rather than a computation | 1–2 days | this is the SISC-grade result |
 | Convert the 1D model to a **figure**: error vs $\Delta t$ for both weightings on the three cases, plus the symmetry defect | half a day | this is the paper's Figure 1 |
 | Library check of Bochev & Gunzburger §12 and a forward citation search from arXiv:1709.00385 | 1 day | priority |
 | Decide whether the preconditioning story is a **second paper** or a section | — | it is a second paper; mixing them weakens both |
@@ -140,5 +171,8 @@ in Fluids** or **Journal of Scientific Computing**, both of which host the LSSEM
 literature (Proot & Gerritsma, Gerritsma) and would take the paper largely as it
 stands.
 
-**Recommendation:** target JCP, and write §2.1 and the missing proof (item 3) to a
-standard that leaves SISC open as a resubmission target rather than a rewrite.
+**Recommendation:** target JCP, and write §2.1/§2.4 to a standard that leaves SISC
+open as a resubmission target rather than a rewrite. The uniqueness argument of
+§2.4 is short enough to state as a proposition with a two-line proof, which is
+what moves the paper from "we tried a scaling that worked" to "this is the only
+scaling that can work".
