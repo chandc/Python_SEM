@@ -246,25 +246,21 @@ def plot(res, Ns, dts, out='figs_fosls_vs_fs/mms2d_temporal.png'):
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
-    fig, ax = plt.subplots(1, 2, figsize=(11, 4.4))
-    cols = plt.cm.viridis(np.linspace(0.15, 0.8, len(Ns)))
-    for a, wname in zip(ax, ('legacy', 'balanced')):
-        for c, N in zip(cols, Ns):
-            e = [res[(N, dt, wname)]['uv'] for dt in dts]
-            a.loglog(dts, e, 'o-', color=c, label=f'N = {N}')
-            rh = res[(N, dts[-1], wname)]['Rh']
-            a.axhline(min(e), color=c, ls=':', lw=0.8)
-        d = np.array(dts)
-        a.loglog(d, e[0]*(d/d[0])**2, 'k--', lw=1, label='$\\Delta t^2$')
-        a.set(xlabel='$\\Delta t$', ylabel='relative error in $(u,v)$ at $T$',
-              title=f'{wname} weighting')
-        a.grid(alpha=.3, which='both')
-        a.legend(fontsize=8)
-    lo = min(res[k]['uv'] for k in res)*0.5
-    hi = max(res[k]['uv'] for k in res)*2
-    for a in ax:
-        a.set_ylim(lo, hi)
-    fig.suptitle('Transient manufactured solution: the spatial residual sets a floor under the legacy weighting')
+    fig, a = plt.subplots(figsize=(6.6, 5.2))
+    cols = plt.cm.viridis(np.linspace(0.12, 0.78, len(Ns)))
+    d = np.array(dts)
+    for c, N in zip(cols, Ns):
+        el = [res[(N, dt, 'legacy')]['uv'] for dt in dts]
+        eb = [res[(N, dt, 'balanced')]['uv'] for dt in dts]
+        a.loglog(dts, el, 'o--', color=c, mfc='none', lw=1.2, label=f'$N={N}$, legacy')
+        a.loglog(dts, eb, 'o-', color=c, lw=1.6, label=f'$N={N}$, balanced')
+    ref = res[(Ns[-1], dts[0], 'balanced')]['uv']
+    a.loglog(d, ref*(d/d[0])**2, 'k:', lw=1.4, label='$\\Delta t^2$')
+    a.set(xlabel='$\\Delta t$', ylabel='relative error in $(u,v)$ at $T$')
+    a.grid(alpha=.3, which='both')
+    a.legend(fontsize=7.5, ncol=2)
+    fig.suptitle('Same $\\Delta t^2$ behaviour; different floor\n'
+                 'dashed: legacy, solid: balanced', fontsize=11)
     fig.tight_layout()
     fig.savefig(out, dpi=130)
     print('wrote', out)

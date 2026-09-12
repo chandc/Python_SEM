@@ -745,3 +745,65 @@ formulation is far more sensitive, 1.58e−6 against the balanced 2.20e−9 — 
 **amplifies solver error by some 700×** — so it not only reaches a worse answer
 but demands a much tighter solve to reach it.  That is the same conditioning
 defect §4.10 measures, seen from the user's side.
+
+### 4.13 The analysis is scheme-independent, and the scaled limit is nonsingular (`bdf_study`, `limit_study`)
+
+**Any BDF order, same structure.**  The derivation in §4.9 was written for BDF1.
+It holds for every BDF order without change, because the consistency condition
+$\mathrm{fac}_1=\sum_m\alpha_m$ is exactly what makes the mass and history terms
+cancel identically at a fixed point, whatever the order; only the value of
+$m=a_{\rm mass}$ changes, carrying $\mathrm{fac}_1$.  So
+$ma=w_{\rm mass}w_{\rm mom}\mathrm{fac}_1/\Delta t$ and everything else follows.
+Measured at BDF2 ($\mathrm{fac}_1=3/2$), 4 elements $N=4$, balanced:
+
+| | $ma$ | symmetry defect | error at $\Delta t=10^{-2}$ | at $10^{-4}$ | at $10^{-6}$ |
+|---|---|---|---|---|---|
+| BDF1 | 1.00 | 2.04e−2 | 2.800e−3 | 2.912e−3 | 2.914e−3 |
+| BDF2 | 1.50 | 3.06e−2 | 2.167e−3 | 2.197e−3 | 2.197e−3 |
+
+The symmetry defect is $ma$ to three digits in both rows (3.06e−2 = 1.5 × 2.04e−2),
+the error is flat in $\Delta t$ for both, and BDF2's fixed point is slightly
+*better* — because its effective momentum weight is $\mathrm{fac}_1=3/2$ rather
+than 1, exactly as the algebra says.
+
+**The scaled limit is nonsingular, but not uniformly in $h$ and $p$.**  Smallest
+singular value and condition number of the row-scaled limit operator
+(§4.10, `limit_scaled`), BDF2:
+
+| elements | $N$ | $\sigma_{\min}$ ($k=2$) | cond | $\sigma_{\min}$ ($k=8$) | cond |
+|---|---|---|---|---|---|
+| 2 | 4 | 3.54e−4 | 1.5e5 | 6.37e−4 | 9.7e4 |
+| 2 | 8 | 6.84e−5 | 2.6e6 | 8.96e−5 | 2.0e6 |
+| 4 | 8 | 3.24e−5 | 1.1e7 | 3.83e−5 | 9.3e6 |
+| 8 | 8 | 1.58e−5 | 4.5e7 | 1.72e−5 | 4.1e7 |
+| 8 | 12 | 7.00e−6 | 2.2e8 | 7.33e−6 | 2.1e8 |
+
+Nonsingular in every case, so **the balanced fixed-point problem is well posed
+with constants independent of $\Delta t$** — which is the claim.  Its
+conditioning does degrade under mesh refinement, roughly like $1/(EN^2)$, but
+that is the conditioning of the FOSLS normal equations themselves
+($\kappa(A)=\kappa(L)^2$, 3D_STATUS.md §7U) inherited by the limit, not an
+artefact of the weighting: the *legacy* operator carries the same $h,p$ growth
+**and** a further $1/\Delta t$ on top of it (§4.10).
+
+**Proof sketch** (what remains is to make the two analytic ingredients precise).
+Let $\bar K U=0$ and write $q=AU=\nabla p+\nu\nabla\times\omega$, $d=\nabla\!\cdot u$,
+$r=\omega-\nabla\times u$.  The three row blocks give
+
+1. pressure rows: $\langle q,\nabla\delta p\rangle=0$ for all $\delta p$;
+2. vorticity rows: $\langle r,\delta\omega\rangle=0$ for all $\delta\omega$, hence
+   $r=0$, i.e. $\omega=\nabla\times u$ *exactly* in the discrete space;
+3. velocity rows: $\langle d,\nabla\!\cdot\delta u\rangle+\mathrm{fac}_1\langle q,\delta u\rangle=0$
+   for all $\delta u$ (the $r$ term having vanished).
+
+Taking $\delta u=u$ in 3 and integrating by parts ($u=0$ on $\partial\Omega$),
+$\lVert d\rVert^2-\mathrm{fac}_1\langle p,d\rangle+\mathrm{fac}_1\nu\lVert\omega\rVert^2=0$;
+taking $\delta p=p$ in 1, $\lVert\nabla p\rVert\le\nu\lVert\nabla\times\omega\rVert$.
+With a discrete Poincaré inequality for the pinned pressure and an inverse
+inequality $\lVert\nabla\times\omega\rVert\le C_{\rm inv}\lVert\omega\rVert$, these
+combine to $d=0$ and $\omega=0$ whenever
+$\mathrm{fac}_1\,\nu\,C_P^2C_{\rm inv}^2<2$; then $\nabla\times u=\nabla\!\cdot u=0$
+with zero trace gives $u=0$ on a simply connected domain, and 1 gives $p=0$.
+The sufficient condition involves $C_{\rm inv}\sim N^2/h$, which is precisely why
+$\sigma_{\min}$ decays under refinement — and the computation above shows the
+limit remains nonsingular well beyond where that sufficient condition fails.

@@ -154,9 +154,25 @@ def free_dofs(B, k, pin_p=None):
 
 # ------------------------------------------------------------------ the two solves
 
+def weights(dt, kind, fac1=1.0):
+    """(m, a) = (a_mass, a_flux) for a weighting, at BDF order fac1.
+
+    a_mass = w_mass*fac1/dt, a_flux = w_mom, so m*a = w_mass*w_mom*fac1/dt -- the
+    quantity the whole analysis turns on.  fac1 = 1 is BDF1, 3/2 is BDF2."""
+    w = {'legacy': dt, 'balanced': np.sqrt(dt), 'unit': 1.0}[kind]
+    return w*fac1/dt, w
+
+
 def fixed_point(B, free, m, a, f):
     """Solve [ m Pu^H W A + a A^H W A + (1/a) C^H W C ] U = m Pu^H W f + a A^H W f,
-    the fixed point of the least-squares step map (derivation in the docstring)."""
+    the fixed point of the least-squares step map.
+
+    SCHEME-INDEPENDENT.  For any BDF order the history scaling and the mass
+    coefficient satisfy a_mass = fac1*hist with fac1 = sum_m alpha_m (the BDF
+    consistency condition), so at a fixed point U* = U^n = U^{n-1} = ... the mass
+    and history terms cancel IDENTICALLY and the momentum residual collapses to
+    a_flux*(A U* - f) whatever the order.  Only the value of m changes: BDF2
+    carries fac1 = 3/2."""
     A, C, Pu, W = B['A'], B['C'], B['Pu'], B['W']
     WA = W[:, None]*A
     K = m*(Pu.conj().T @ WA) + a*(A.conj().T @ WA) + (1.0/a)*(C.conj().T @ (W[:, None]*C))
@@ -250,6 +266,32 @@ def limit_operator(B, free, kind='balanced'):
     return K0[np.ix_(free, free)]
 
 
+def limit_scaled(B, free, fac1=1.0):
+    """The dt -> 0 limit of the ROW-SCALED balanced fixed-point operator.
+
+    Scaling the velocity and vorticity rows by a and the pressure rows by 1/a
+    (sec 4.10) and letting a -> 0 with m*a = fac1 fixed leaves
+
+        rows u,v :  C^H W C  +  fac1 * Pi_u^H W A      (both O(1): m*a = fac1)
+        rows om  :  C^H W C                            (the a^2 A^H W A term drops)
+        rows p   :  A^H W A                            (was O(a), now O(1))
+
+    and the neglected terms are O(a^2) = O(dt).  Nonsingularity of THIS operator
+    is what "the balanced problem has a uniformly well-posed limit" means; the
+    unscaled limit is singular (it has no pressure rows at all)."""
+    A, C, Pu, W = B['A'], B['C'], B['Pu'], B['W']
+    CC = C.conj().T @ (W[:, None]*C)
+    AA = A.conj().T @ (W[:, None]*A)
+    PA = Pu.conj().T @ (W[:, None]*A)
+    fld = np.tile(np.arange(NF), B['ng'])
+    K = np.zeros_like(CC)
+    uv = np.isin(fld, (U_, V_)); om = fld == W_; pr = fld == P_
+    K[uv] = CC[uv] + fac1*PA[uv]
+    K[om] = CC[om]
+    K[pr] = AA[pr]
+    return K[np.ix_(free, free)]
+
+
 def zigzag(B, U, field=V_):
     """Node-to-node sign alternations of the increment along x -- the discrete
     signature of a mesh-scale mode."""
@@ -302,6 +344,48 @@ def run(E=4, N=4, k=2.0, nu=1.0/180.0, kind='trig', dts=(1e-1, 1e-2, 1e-3, 1e-4,
         print(f'  limit operator ({kind:8s}): smallest/largest singular value {sv[-1]:.3e} / {sv[0]:.3e}'
               f'  -> cond {sv[0]/max(sv[-1], 1e-300):.2e}')
     return B, out
+
+
+def limit_study(nu=1.0/180.0, fac1=1.5, ks=(2.0, 8.0), cases=((2, 4), (2, 8), (4, 4), (4, 8), (8, 4), (8, 8), (8, 12))):
+    """Is the scaled limit nonsingular, and is it uniform in h, p and k?
+
+    Reports sigma_min and the condition number of limit_scaled over a range of
+    element counts, orders and wavenumbers.  A limit that is nonsingular but
+    whose sigma_min decays under refinement would still give a dt-independent
+    problem at fixed mesh -- the weaker, and honest, statement."""
+    print(f'--- scaled limit operator, fac1 = {fac1} (BDF2): sigma_min and cond')
+    print(f'{"E":>3} {"N":>3} | ' + ' | '.join(f'k={k:<4g} {"sigma_min":>10} {"cond":>9}' for k in ks))
+    for E, N in cases:
+        row = [f'{E:3d} {N:3d} |']
+        for k in ks:
+            B = blocks(E, N, k, nu)
+            free = free_dofs(B, k)
+            sv = np.linalg.svd(limit_scaled(B, free, fac1), compute_uv=False)
+            row.append(f'{"":>6} {sv[-1]:10.3e} {sv[0]/sv[-1]:9.2e} |')
+        print(' '.join(row), flush=True)
+
+
+def bdf_study(E=4, N=4, k=2.0, nu=1.0/180.0, kind='trig', dts=(1e-2, 1e-4, 1e-6)):
+    """The fixed-point structure is the same for BDF1 and BDF2: only m*a changes,
+    by the factor fac1."""
+    B = blocks(E, N, k, nu)
+    free = free_dofs(B, k)
+    Ue, f = manufactured(B, k, nu, kind)
+    nrm = np.sqrt(np.sum(np.abs(Ue)**2))
+    print(f'--- BDF1 vs BDF2, {kind} E={E} N={N}: error and symmetry defect (= m*a)')
+    print(f'{"dt":>8} | ' + ' | '.join(f'{"fac1="+str(fc):>10} {"err":>10} {"m*a":>8} {"sym":>9}'
+                                       for fc in (1.0, 1.5)))
+    for dt in dts:
+        row = [f'{dt:8.0e} |']
+        for fc in (1.0, 1.5):
+            for kind_w in ('legacy', 'balanced'):
+                m, a = weights(dt, kind_w, fc)
+                U, K = fixed_point(B, free, m, a, f)
+                if kind_w == 'balanced':
+                    err = np.sqrt(np.sum(np.abs(U - Ue)**2))/nrm
+                    sym = np.linalg.norm(K - K.conj().T)/np.linalg.norm(K)
+                    row.append(f'{"balanced":>10} {err:10.3e} {m*a:8.2f} {sym:9.2e} |')
+        print(' '.join(row), flush=True)
 
 
 def scaling_study(E=4, N=4, k=2.0, nu=1.0/180.0, kind='trig',
@@ -365,3 +449,7 @@ if __name__ == '__main__':
     scaling_study(E=4, N=4)
     print()
     scaling_study(E=8, N=6)
+    print()
+    bdf_study()
+    print()
+    limit_study()
