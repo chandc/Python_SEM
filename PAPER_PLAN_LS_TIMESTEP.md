@@ -32,10 +32,43 @@ where it was placed (§2.3).
 | Adler, MacLachlan, Madden, *First-order system least squares finite-elements for singularly perturbed reaction-diffusion equations* (arXiv:1909.08598; SINUM) | weighted FOSLS inducing a **balanced norm** for a **steady** singularly perturbed reaction-diffusion problem on Shishkin meshes | the same scaling idea, in a steady setting and for layer resolution; no time step, no constraints, no fixed-point/consistency question |
 | **Führer & Karkulik**, *New a priori analysis of first-order system least-squares finite element methods for parabolic problems* (arXiv:1805.04147) | the a priori theory for **time-stepping** LSFEM on parabolic first-order systems: an elliptic projection in a non-symmetric bilinear form, optimal estimates in the natural norm and in $L^2$ | the closest *analysis* of the setting we work in, and it treats the weighting as given: the "natural norm" is assumed, not chosen. It is also **unconstrained** (reaction–convection–diffusion, no divergence constraint), and our mechanism needs constraint rows for the solution to hide in — a delimitation worth stating explicitly in the paper |
 | Adler, Lashuk, MacLachlan & Zikatanov, *Discrete Energy Laws for the First-Order System Least-Squares Finite-Element Approach*, LNCS 10665 (2018); arXiv:1709.00385 | **time-stepping** FOSLS (Crank–Nicolson) for heat and Stokes; energy laws converge at $O(h^{2p})$ | **the nearest miss, and it names our gap**: its constants are $C(\tau)=O(1/\tau^2)$ and the authors remark that *"a rescaling of the equations may ameliorate this worst-case scenario"* — and do not pursue it. Our $\Delta t^2$ momentum-to-constraint ratio is exactly that $1/\tau^2$, and the rescaling is exactly what we identify and measure |
-| Bochev & Gunzburger, *Least-Squares Finite Element Methods* (Springer 2009); SINUM 1994 analysis of LSFEM for Navier–Stokes | the norm-equivalence framework, ADN ellipticity, the VVP formulation and its non-equivalence under some boundary conditions | steady theory; weighting discussed for mass conservation and for Reynolds number, not for the time step |
+| **Bochev & Gunzburger, *Finite Element Methods of Least-Squares Type*, SIAM Review 40(4) (1998) 789–837** — read 2026-09-12, and the paper's framing should be built on it | the canonical framework: ADN ellipticity, the a priori estimate (3.34), the VVP formulation ("despite the fact that it is not a fully $H^1$-coercive system"), and a three-class taxonomy — basic $L^2$, **weighted $L^2$** (mesh-dependent or other weights), and $H^{-1}$ methods | **It supplies the slot our result fills, and says the slot is empty.** See the framing note below |
+| Bochev & Gunzburger, *Least-Squares Finite Element Methods* (Springer 2009) | the book-length version | **not consulted** — neither of us has access. The review above covers the framework, the taxonomy and the VVP treatment; the residual risk is confined to the book's time-dependent chapter, and is small because the review's own scope statement (below) suggests there was little to say in 1998 |
 | Weighted/nonlinear-weight LSFEM (Chen et al., Deang & Gunzburger, and the viscoelastic and generalized-Newtonian literature) | weights on the continuity row and nonlinear residual weights to improve mass conservation | weights chosen against *mass conservation* at fixed $\Delta t$; the $\Delta t$-dependence of the weighting is not the subject |
 | Space–time LSFEM (Pontaza & Reddy, JCP 2004; Gerritsma and co-workers; recent adaptive space–time LSFEM, arXiv:2509.11955, 2309.14300) | minimise the residual over a space–time slab, so time is a coordinate and the question does not arise in this form | a different discretisation; our result is a statement about *time-marching* LSFEM, which is what practical codes use. Worth citing as the alternative that avoids the problem at higher cost |
 | Proot & Gerritsma; Pontaza & Reddy (LSSEM foundations) | least-squares spectral elements, $hp$ convergence without $H^1$-coercivity | the discretisation we use; no treatment of the temporal weighting |
+
+**The framing, from the 1998 review itself.**  Two sentences in it do most of our
+positioning work.
+
+*First*, its a priori estimate (3.34) for the velocity–vorticity–pressure system,
+
+$$
+\lVert\omega\rVert_{q+1}+\lVert p\rVert_{q+1}+\lVert u\rVert_{q+2}
+\;\le\;C\big(\lVert\nu\,\mathrm{curl}\,\omega+\mathrm{grad}\,p\rVert_{q}
++\lVert \mathrm{curl}\,u-\omega\rVert_{q+1}+\lVert\mathrm{div}\,u\rVert_{q+1}\big),
+$$
+
+already places the **momentum residual and the constraint residuals in norms that
+differ by one Sobolev order**, and §4.2 exists precisely because that difference
+must be emulated on a finite element space: "essentially all norms can be replaced
+by $L^2$-norms weighted by the respective equivalence constants."  Their weighted
+class is then motivated by, and only by, "lack of full $H^1$-coercivity,
+inhomogeneous boundary conditions, singular solutions, and computations in regions
+with corners", with three worked purposes: replacing $H^1$ norms by $L^2$,
+replacing boundary norms, and handling singularities.  **None is
+parameter-dependent.**  Our result is the missing fourth member of that class: when
+the system carries a large reaction coefficient — which every implicit time step
+does, with coefficient $1/\Delta t$ — the correct relative weight between the
+momentum row and the constraints *depends on that coefficient*, and is uniquely
+$\sqrt{\Delta t}$.  That is how the paper should open: inside their framework,
+not beside it.
+
+*Second*, their concluding remarks: "The limited space did not allow us to consider
+many other important areas, such as hyperbolic problems, **time-dependent
+problems**, and time-space least-squares."  The canonical framework paper places
+our setting outside its own scope, which is as clean a statement of the gap as one
+could ask for, and it removes most of the risk of the unread book.
 
 **Where the mechanism does and does not apply.** It needs (a) a time-marching
 least-squares discretisation, so the space–time formulations are outside it, and
@@ -178,7 +211,7 @@ explicit-convection projection stage, and we can say why.
 | nonsingularity of the limit — **§2.5 / ZIGZAG §4.14: the energy argument is disposed of.** Its constants are computable exactly, and the sufficient condition is violated by up to three orders while $\sigma_{\min}$ stays positive, *and* it wants small $\nu$ whereas the limit actually degenerates as $\nu\to0$. A proof matching the observation needs a discrete Helmholtz decomposition plus an inf-sup argument | **1 week**, not 1 day | this is what separates a JCP paper from a SISC one; **decision needed** |
 | ~~extend the 1D model to BDF2~~ — **done**: the analysis is order-independent because fac₁ = Σαₘ is what makes the mass and history terms cancel at a fixed point; measured $ma$ = 1.5 and symmetry defect 3.06e−2 = 1.5 × the BDF1 value | — | done |
 | Convert the 1D model to a **figure**: error vs $\Delta t$ for both weightings, plus the symmetry defect | half a day | this is the paper's Figure 1; the MMS figure (merged to one panel, dashed legacy / solid balanced per order) is Figure 2 |
-| ~~Forward citation search from arXiv:1709.00385~~ — **done 2026-09-12**: no follow-up pursues the rescaling; the nearest time-stepping analysis (Führer & Karkulik) treats the weighting as given. Remaining: Bochev & Gunzburger §12 (needs the book, not web search) | half a day | priority |
+| ~~Literature/priority check~~ — **done 2026-09-12**: no follow-up to arXiv:1709.00385 pursues the rescaling; Führer & Karkulik treat the weighting as given; the 1998 review supplies the weighted-$L^2$ taxonomy our result extends and puts time-dependent problems outside its own scope. The 2009 book stays unread by both of us and is cited but not relied on | — | done |
 | Decide whether the preconditioning story is a **second paper** or a section | — | it is a second paper; mixing them weakens both |
 
 ---
