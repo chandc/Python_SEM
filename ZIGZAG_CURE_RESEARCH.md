@@ -473,3 +473,89 @@ driven.  The 3D price of the legacy weighting is the one §4.5 measured in
 2D — time accuracy below $\Delta t\approx0.1$ in cavity units — not the
 spatial zigzag; and the balanced remedy is blocked in 3D by the divergence
 of the explicit convective increment (BALANCED_CONDENSED_PLAN.md gate 5.3).
+
+### 4.9 The mechanism in closed form: a 1D model problem (`scratch/model1d_fixedpoint.py`)
+
+Everything above is a measurement.  This section is the derivation, on a model
+small enough that the fixed point can be written down and solved in one linear
+solve rather than marched to.
+
+**The fixed-point equation.**  With BDF1 ($\mathrm{fac}_1=1$) the history scaling
+equals the mass coefficient, $\mathrm{hist}=a_{\rm mass}=:m$, so at a fixed point
+$U^\ast=U^n$ the momentum residual collapses to $a_{\rm flux}(AU^\ast-f)$, and
+stationarity of the step functional gives, after dividing by $a_{\rm flux}=:a$,
+
+$$
+\Big[\;\underbrace{m\,\Pi_u^{H}WA}_{\text{non-symmetric}}\;+\;\underbrace{a\,A^{H}WA}_{\text{Gauss--Newton}}\;+\;\underbrace{\tfrac1a\,C^{H}WC}_{\text{constraints}}\Big]U^\ast
+\;=\;m\,\Pi_u^{H}Wf+a\,A^{H}Wf ,
+$$
+
+with $A$ the spatial momentum operator, $C$ the constraint rows and $\Pi_u$ the
+velocity selection.  **Every individual time step is a symmetric positive-definite
+problem; its fixed point is not.**  Nor is it the minimiser of any steady
+least-squares functional — that would be $[a^2A^HWA+C^HWC]U=a^2A^HWf$, which has
+no cross term.
+
+**What the weighting decides.**  The three terms scale as
+
+| weighting | cross | Gauss–Newton | constraints | momentum : constraints |
+|---|---|---|---|---|
+| legacy ($w_{\rm mom}=w_{\rm mass}=\Delta t$) | $1$ | $\Delta t$ | $1/\Delta t$ | $\Delta t^{2}$ |
+| **balanced** ($w=\sqrt{\Delta t}$) | $1/\sqrt{\Delta t}$ | $\sqrt{\Delta t}$ | $1/\sqrt{\Delta t}$ | $1$ |
+
+Under the legacy scaling the momentum equation enters the fixed-point problem
+*only* through the non-symmetric cross term, $\Delta t^{2}$ below the constraints:
+the fixed point is any constraint-satisfying field, selected at $O(\Delta t^2)$,
+and that selection is what appears as a mesh-scale mode.  Under the balanced
+scaling the cross term and the constraints stay at the same order for every
+$\Delta t$, and multiplying through by $\sqrt{\Delta t}$ leaves the
+$\Delta t$-independent limit $[\Pi_u^HWA+C^HWC]U=\Pi_u^HWf$.
+
+**The model.** One Fourier mode (wavenumber $k$ in $y$) of the 2D
+velocity–vorticity–pressure Stokes system reduced to a two-point boundary-value
+problem in $x$ — exactly the per-mode structure of the 3D channel code —
+discretised with C⁰ spectral elements, residuals collocated at the GLL nodes and
+summed with the GLL weights, as `lssem3d` does.  Measured (relative error of the
+fixed point against the exact state; "sym defect" is
+$\lVert K-K^H\rVert/\lVert K\rVert$; "zz" is the mean node-to-node increment of the
+error in $v$):
+
+*Control, solution in the discrete space* (2 elements, $N=6$, polynomial data;
+irreducible residual $10^{-15}$):
+
+| $\Delta t$ | legacy err | legacy cond | balanced err | balanced cond |
+|---|---|---|---|---|
+| $10^{-1}$ | 1.8e−12 | 7.0e6 | 2.4e−13 | 7.3e5 |
+| $10^{-3}$ | 7.2e−10 | 9.8e8 | 4.8e−13 | 1.2e6 |
+| $10^{-5}$ | 4.0e−08 | 3.4e12 | 3.5e−11 | 8.2e7 |
+
+*Unresolved, $\psi=\sin^2\pi x$* (4 elements, $N=4$; irreducible residual
+9.8e−4 momentum / 2.6e−2 constraints):
+
+| $\Delta t$ | legacy err | sym defect | zz | balanced err | sym defect | zz |
+|---|---|---|---|---|---|---|
+| $10^{-1}$ | 9.3e−3 | 2.0e−3 | 6.9e−3 | 2.3e−3 | 2.0e−2 | 1.7e−3 |
+| $10^{-2}$ | 1.7e−2 | 2.0e−4 | 1.2e−2 | 2.8e−3 | 2.0e−2 | 2.1e−3 |
+| $10^{-3}$ | 1.8e−2 | 2.0e−5 | 1.2e−2 | 2.9e−3 | 2.0e−2 | 2.2e−3 |
+| $10^{-5}$ | 1.8e−2 | 2.0e−7 | 1.2e−2 | 2.9e−3 | 2.0e−2 | 2.2e−3 |
+
+Reading, and these are the paper's Section 2.
+
+1. **No irreducible residual, no pathology.** In the control both weightings
+   return the exact state for every $\Delta t$; the only degradation is
+   conditioning.  This *is* the $C_1\Delta t\lVert R_h\rVert$ term of §4.7: the
+   defect is proportional to what the discrete space cannot satisfy.
+2. **The legacy fixed-point error grows as $\Delta t$ falls and then plateaus**
+   at 6× the balanced error (and 60× on the finer 8×$N$=6 mesh), with 5× the
+   mesh-scale content, while the balanced error is flat in $\Delta t$ at the
+   best-approximation level.  Refining the step makes the answer worse and then
+   stops improving — the behaviour §4.5 measured on the growth rate.
+3. **The symmetry defect *is* the momentum weight.**
+   $\lVert K-K^H\rVert/\lVert K\rVert$ is exactly $m a$: $\Delta t$ under the
+   legacy scaling (2.0e−3 → 2.0e−7, linear over four decades) and constant under
+   the balanced one.  The legacy fixed-point system becomes *symmetric* as
+   $\Delta t\to0$, and that symmetry is the disease: what remains is the
+   constraints alone.
+4. **Conditioning.** The legacy fixed-point operator reaches $\kappa=5\times10^{13}$
+   at $\Delta t=10^{-5}$ on the finer mesh — in double precision its fixed point is
+   no longer numerically reachable — against $10^{8}$–$10^{9}$ balanced.
