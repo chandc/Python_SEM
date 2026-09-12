@@ -132,6 +132,23 @@ than velocity at $\Delta t=10^{-5}$, and $10^4$ worse than balanced — which
 identifies the near-null pressure direction known at large $c$ as a consequence of
 the weighting rather than of the operator.
 
+### 2.5 What is proved, and what is only observed (2026-09-12)
+
+Stated plainly, because the distinction decides the venue:
+
+| statement | status |
+|---|---|
+| the fixed-point equation, and that every step is SPD while its fixed point is not | **proved** (algebra, §2.1) |
+| the relative size of the non-symmetric part is $ma$, hence $\Delta t$ legacy and $1$ balanced | **proved**, and verified to three digits |
+| scheme-independence over BDF order via $\mathrm{fac}_1=\sum\alpha_m$ | **proved**, verified at BDF2 |
+| **uniqueness of $w=\sqrt{\Delta t}$** from scaling-invariance plus time consistency | **proved** (two lines, §2.4) |
+| nonsingularity of the scaled limit | **observed** across $h,p,k,\nu$; the energy argument covers only a sufficient condition that nothing satisfies and has the $\nu$-dependence backwards (§4.14) |
+| the two-term error model and the crossover $\Delta t^\ast$ | **measured**, and the crossover verified as a prediction |
+
+So the theoretical core — the mechanism and the uniqueness — is rigorous, and the
+one gap is a well-posedness statement that is numerically solid and analytically
+incomplete.
+
 ### 2.3 Numerical evidence in 2D and 3D (already measured)
 
 | evidence | result | where |
@@ -158,7 +175,7 @@ explicit-convection projection stage, and we can say why.
 |---|---|---|
 | ~~A transient **manufactured solution** convergence table~~ — **done 2026-09-12**, §4.11 and the figure; it also corrected the error model (the second term is a floor, not a first-order term) | — | done |
 | Extend the 1D model to **BDF2** and confirm the same structure with $\mathrm{fac}_1=3/2$ | half a day | the production scheme is BDF2; the derivation above is BDF1 |
-| ~~nonsingularity of the limit~~ — **§2.4 and ZIGZAG §4.13**: proof sketch complete (three row blocks ⟹ ω = ∇×u exactly, then an energy identity plus a discrete Poincaré and an inverse inequality give u = ω = p = 0 under fac₁ν C_P²C_inv² < 2); nonsingularity verified numerically well beyond that sufficient condition. What remains is making $C_P$, $C_{\rm inv}$ precise for the GLL space and deciding whether to claim more than fixed-mesh uniformity | 1 day | this is the SISC-grade result |
+| nonsingularity of the limit — **§2.5 / ZIGZAG §4.14: the energy argument is disposed of.** Its constants are computable exactly, and the sufficient condition is violated by up to three orders while $\sigma_{\min}$ stays positive, *and* it wants small $\nu$ whereas the limit actually degenerates as $\nu\to0$. A proof matching the observation needs a discrete Helmholtz decomposition plus an inf-sup argument | **1 week**, not 1 day | this is what separates a JCP paper from a SISC one; **decision needed** |
 | ~~extend the 1D model to BDF2~~ — **done**: the analysis is order-independent because fac₁ = Σαₘ is what makes the mass and history terms cancel at a fixed point; measured $ma$ = 1.5 and symmetry defect 3.06e−2 = 1.5 × the BDF1 value | — | done |
 | Convert the 1D model to a **figure**: error vs $\Delta t$ for both weightings, plus the symmetry defect | half a day | this is the paper's Figure 1; the MMS figure (merged to one panel, dashed legacy / solid balanced per order) is Figure 2 |
 | ~~Forward citation search from arXiv:1709.00385~~ — **done 2026-09-12**: no follow-up pursues the rescaling; the nearest time-stepping analysis (Führer & Karkulik) treats the weighting as given. Remaining: Bochev & Gunzburger §12 (needs the book, not web search) | half a day | priority |
@@ -190,8 +207,12 @@ in Fluids** or **Journal of Scientific Computing**, both of which host the LSSEM
 literature (Proot & Gerritsma, Gerritsma) and would take the paper largely as it
 stands.
 
-**Recommendation:** target JCP, and write §2.1/§2.4 to a standard that leaves SISC
-open as a resubmission target rather than a rewrite. The uniqueness argument of
+**Recommendation, revised 2026-09-12:** target **JCP now**.  The mechanism and the
+uniqueness result are rigorous, the evidence is unusually complete, and the one
+analytical gap (well-posedness of the scaled limit) is honestly reportable as a
+numerical result — JCP will take that; SISC would not.  Going for SISC means a
+week of analysis first (discrete Helmholtz plus inf-sup) with no guarantee, and
+it delays a result whose practical warning is worth publishing now. The uniqueness argument of
 §2.4 is short enough to state as a proposition with a two-line proof, which is
 what moves the paper from "we tried a scaling that worked" to "this is the only
 scaling that can work".

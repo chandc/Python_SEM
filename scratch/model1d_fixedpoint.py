@@ -346,6 +346,74 @@ def run(E=4, N=4, k=2.0, nu=1.0/180.0, kind='trig', dts=(1e-1, 1e-2, 1e-3, 1e-4,
     return B, out
 
 
+def constants(B, free, k):
+    """The two analytic ingredients of the proof sketch, computed for THIS space
+    rather than bounded: they are generalised eigenvalue problems.
+
+      C_inv^2 = sup ||curl omega||^2 / ||omega||^2 = k^2 + lam_max(D^H W D, W)
+      C_P^2   = sup ||p||^2 / ||grad p||^2,  ||grad p||^2 = ||p_x||^2 + k^2||p||^2
+
+    both on the discrete spaces with their own boundary treatment.  The proof
+    closes when fac1 * nu * C_P^2 * C_inv^2 < 2, so this says how far from that
+    condition a given discretisation sits."""
+    import scipy.linalg as sla
+    A, C, W = B['A'], B['C'], B['W']
+    ng, nres = B['ng'], B['nres']
+    fld = np.tile(np.arange(NF), ng)
+    # scalar mass and stiffness on ONE field, read off the assembled blocks:
+    # the vorticity row of C contains +1 on omega, the momentum rows contain the
+    # derivative acting on omega and on p, so build them directly instead.
+    x, gid, h, wq, D = mesh1d(B['x'].shape[0], B['x'].shape[1] - 1)
+    n = B['x'].shape[1]
+    M = np.zeros((ng, ng)); K = np.zeros((ng, ng))
+    Dx = (2.0/h)*D
+    for e in range(B['x'].shape[0]):
+        for i in range(n):
+            w = wq[i]*h/2.0
+            M[gid[e, i], gid[e, i]] += w
+            for a_ in range(n):
+                for b_ in range(n):
+                    K[gid[e, a_], gid[e, b_]] += w*Dx[i, a_]*Dx[i, b_]
+    lam = sla.eigh(K, M, eigvals_only=True)
+    Cinv2 = k*k + lam.max()
+    # pressure: free everywhere except the pin at k = 0; here k != 0 so grad p
+    # always carries k^2||p||^2 and C_P^2 <= 1/k^2
+    CP2 = 1.0/max(k*k + lam.min(), 1e-300)
+    return np.sqrt(Cinv2), np.sqrt(CP2)
+
+
+def condition_study(nu=1.0/180.0, fac1=1.5, k=2.0,
+                    cases=((2, 4), (2, 8), (4, 8), (8, 8), (8, 12))):
+    """How far is the proof's sufficient condition from what is observed?
+
+    Reports fac1*nu*C_P^2*C_inv^2 (the proof needs < 2) beside sigma_min of the
+    scaled limit, which is positive throughout.  If the condition is violated by
+    orders of magnitude while sigma_min stays healthy, the smallness requirement
+    is an artefact of the energy argument, not a property of the operator -- and
+    the paper must say so rather than present a condition nobody meets."""
+    print(f'--- proof condition vs observed nonsingularity (nu = {nu:g}, fac1 = {fac1}, k = {k})')
+    print(f'{"E":>3} {"N":>3} | {"C_inv":>10} {"C_P":>8} | {"fac1*nu*C_P^2*C_inv^2":>21} {"< 2?":>6} | {"sigma_min":>10}')
+    for E, N in cases:
+        B = blocks(E, N, k, nu); free = free_dofs(B, k)
+        Ci, Cp = constants(B, free, k)
+        cond = fac1*nu*Cp*Cp*Ci*Ci
+        sv = np.linalg.svd(limit_scaled(B, free, fac1), compute_uv=False)
+        print(f'{E:3d} {N:3d} | {Ci:10.3e} {Cp:8.4f} | {cond:21.3e} {"yes" if cond < 2 else "NO":>6} | {sv[-1]:10.3e}', flush=True)
+
+
+def nu_study(fac1=1.5, k=2.0, E=4, N=8, nus=(1e-4, 1e-3, 1e-2, 1e-1, 1.0, 10.0)):
+    """Is the smallness condition real?  It requires nu small.  Sweep nu and watch
+    sigma_min of the scaled limit: a flat sigma_min says the condition is an
+    artefact of the argument; a decaying one says it is capturing something."""
+    print(f'--- sigma_min of the scaled limit vs nu (E={E}, N={N}, k={k}, fac1={fac1})')
+    print(f'{"nu":>9} | {"fac1*nu*C_P^2*C_inv^2":>21} | {"sigma_min":>11} {"cond":>10}')
+    for nu in nus:
+        B = blocks(E, N, k, nu); free = free_dofs(B, k)
+        Ci, Cp = constants(B, free, k)
+        sv = np.linalg.svd(limit_scaled(B, free, fac1), compute_uv=False)
+        print(f'{nu:9.0e} | {fac1*nu*Cp*Cp*Ci*Ci:21.3e} | {sv[-1]:11.3e} {sv[0]/sv[-1]:10.2e}', flush=True)
+
+
 def limit_study(nu=1.0/180.0, fac1=1.5, ks=(2.0, 8.0), cases=((2, 4), (2, 8), (4, 4), (4, 8), (8, 4), (8, 8), (8, 12))):
     """Is the scaled limit nonsingular, and is it uniform in h, p and k?
 
@@ -453,3 +521,7 @@ if __name__ == '__main__':
     bdf_study()
     print()
     limit_study()
+    print()
+    condition_study()
+    print()
+    nu_study()

@@ -807,3 +807,63 @@ with zero trace gives $u=0$ on a simply connected domain, and 1 gives $p=0$.
 The sufficient condition involves $C_{\rm inv}\sim N^2/h$, which is precisely why
 $\sigma_{\min}$ decays under refinement — and the computation above shows the
 limit remains nonsingular well beyond where that sufficient condition fails.
+
+### 4.14 The energy argument is not the right proof (`constants`, `condition_study`, `nu_study`)
+
+§4.13 closed the nonsingularity of the scaled limit with an energy estimate,
+under the sufficient condition $\mathrm{fac}_1\nu C_P^2C_{\rm inv}^2<2$.  The
+next step was to make $C_P$ and $C_{\rm inv}$ precise for the GLL space.  Both
+are computable exactly — they are generalised eigenvalue problems on the
+discrete spaces, $C_{\rm inv}^2=k^2+\lambda_{\max}(K,M)$ and
+$C_P^2=1/(k^2+\lambda_{\min}(K,M))$ — and computing them disposes of the
+argument.
+
+**The condition is not sharp.**  With $\nu=1/180$, $\mathrm{fac}_1=3/2$, $k=2$:
+
+| elements | $N$ | $C_{\rm inv}$ | $C_P$ | $\mathrm{fac}_1\nu C_P^2C_{\rm inv}^2$ | $<2$? | $\sigma_{\min}$ |
+|---|---|---|---|---|---|---|
+| 2 | 4 | 27.2 | 0.500 | 1.54 | yes | 3.54e−4 |
+| 2 | 8 | 92.9 | 0.500 | 18.0 | no | 6.84e−5 |
+| 4 | 8 | 185.7 | 0.500 | 71.8 | no | 3.24e−5 |
+| 8 | 8 | 371.4 | 0.500 | 287 | no | 1.58e−5 |
+| 8 | 12 | 798.9 | 0.500 | 1330 | no | 7.00e−6 |
+
+Only the coarsest discretisation satisfies it; everything else violates it by up
+to three orders of magnitude while $\sigma_{\min}$ stays comfortably positive.
+
+**And its dependence on $\nu$ points the wrong way.**  The condition wants $\nu$
+*small*.  Sweeping $\nu$ at 4 elements $N=8$:
+
+| $\nu$ | condition value | $\sigma_{\min}$ |
+|---|---|---|
+| 1e−4 | 1.29 | 7.01e−7 |
+| 1e−3 | 12.9 | 6.21e−6 |
+| 1e−2 | 129 | 5.66e−5 |
+| 1e−1 | 1.29e3 | 2.93e−4 |
+| 1 | 1.29e4 | 1.71e−4 |
+| 10 | 1.29e5 | 1.05e−5 |
+
+$\sigma_{\min}\propto\nu$ for small $\nu$ — the limit degenerates **as $\nu\to0$**,
+which is the regime the condition declares safe, and is healthiest near
+$\nu\approx0.1$ where the condition is violated by three orders.  The mechanism is
+visible in the operator: $\nu$ is what couples $\omega$ into the momentum rows
+through $\nu\nabla\times\omega$, so as $\nu\to0$ that coupling, and with it the
+$\omega$ block's only link to the rest, disappears.
+
+**Conclusion.**  The energy estimate of §4.13 is a true statement about a
+sufficient condition that essentially nothing satisfies, and it gets the
+viscosity dependence backwards.  It should not be presented as *the* proof.  What
+is actually established is:
+
+* the fixed-point derivation and the **uniqueness of the weighting** (§4.9, §4.10) —
+  algebraic, complete, and independent of any inequality;
+* nonsingularity of the scaled limit as a **verified numerical property** across
+  $h$, $p$, $k$ and $\nu$, with $\sigma_{\min}>0$ in every case tested;
+* a partial energy argument, worth an appendix, flagged as non-sharp.
+
+A proof that matches the observation would go through the three row blocks
+directly — the vorticity rows give $\omega=\nabla\times u$ exactly, and what is
+needed is a discrete Helmholtz decomposition of the velocity space plus an
+inf-sup argument for the pressure block, rather than absorbing terms into a
+viscosity-weighted energy.  That is a week of analysis, not a day, and it is the
+difference between a JCP paper and a SISC one.
