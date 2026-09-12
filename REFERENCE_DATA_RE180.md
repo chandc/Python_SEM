@@ -257,3 +257,7 @@ quotes.  Three consequences.
    other side: the patch preconditioner's advantage grows from 36× to 309× as c
    rises from 15 to 1500 (LOW_MEMORY_PATCH_SOLVERS.md §6).  The small step is not
    a choice the solver can talk us out of, so the solver has to be built for it.
+
+*The continuation run that extends this record is driven from Colab in overnight
+sessions; the procedure, the settings and the failure modes are in
+COLAB_DNS_RUNBOOK.md.*

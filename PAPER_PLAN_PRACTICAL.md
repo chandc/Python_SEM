@@ -236,7 +236,7 @@ the one place we tried and failed to prove something is reported as such.
 | 7 The same parameter in the operator | written (Level 4 diagnosis) |
 | 8 The patch preconditioner | written, including the Gartling geometry and the $c$-sweep |
 | 9 Implementation and cost | written, three machines |
-| 10 DNS and the RKW3 exception | exception written; **blocked on the long A100 run** |
+| 10 DNS and the RKW3 exception | exception and the time-step justification written; **blocked on the long A100 run** (COLAB_DNS_RUNBOOK.md) |
 | Appendix A Energy argument | outlined |
 | References | 20 entries, complete for §§2–9 |
 

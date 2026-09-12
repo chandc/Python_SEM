@@ -570,6 +570,11 @@ the assembled ring.
 
 ## 8b. Resource estimates: Jacobi vs patch + coarse on the production channel
 
+*Operationally, the long run itself is driven from Colab in overnight sessions:
+see COLAB_DNS_RUNBOOK.md (notebook `colab/lssem_channel_dns.ipynb`, supervisor
+`colab/run_channel_dns.py`).  The step is physics-limited rather than
+stability-limited, measured in REFERENCE_DATA_RE180.md §7.*
+
 Anchors (measured): run01, minimal channel 6×18 elements N=8 nz=32
 (17 modes), $\Delta t=8\times10^{-4}$, cuda backend on the GB10: **≈60 s/step**
 (run01's own log: 594 s per 10 steps near $t=5$; a 10-step replay of its
