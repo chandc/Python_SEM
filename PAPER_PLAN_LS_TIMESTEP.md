@@ -12,8 +12,12 @@ the constraints, so that refining the time step degrades the solution and the
 scheme converges to a constraint-satisfying field that is not the intended one;
 rescaling the momentum row by $\sqrt{\Delta t}$ — the balanced-norm scaling known
 for steady singularly perturbed problems — removes the defect, and the transient
-error separates as $C_2\Delta t^2 + C_1\Delta t\lVert R_h\rVert$ with $R_h$ the
-irreducible spatial least-squares residual.
+error separates as $C_2\Delta t^2 + \Phi(w)\lVert R_h\rVert$ with $R_h$ the
+irreducible spatial least-squares residual and $\Phi$ a weighting-dependent
+constant, measured at $0.19$ for the conventional weighting and $0.05$ for the
+balanced one.  The consequence is not a loss of temporal order — there is none —
+but a floor: **at a given mesh there is an accuracy the conventional weighting
+cannot reach at any time step.**
 
 ---
 
@@ -123,7 +127,8 @@ the weighting rather than of the operator.
 | lid-driven cavity, $Re=1000$, $N=15$ | legacy steady state is $\Delta t$-dependent and non-monotone (rms vs Ghia 0.0095 / 0.0256 / 0.0122 at $\Delta t=1/0.1/0.01$), carries a node-to-node mode under the lid (7–8 of 8 sign changes); balanced is flat over three decades (0.0061–0.0062) with no sign changes | ZIGZAG_CURE_RESEARCH.md §4.1, §4.6 |
 | the same mode in an independent implementation and in the original Fortran code | reproduced (6 of 8 sign changes in Fortran) — not a bug in one code | CAVITY_N15_MARCH.md |
 | Orr–Sommerfeld growth rate, $Re=7500$, known answer $\sigma=0.00223497$ | legacy off by 3–6 % at $\Delta t=0.02$ and $0.01$ with a local rate drifting −10 %→+4 % within one run, and *worse* when the linear solver is tightened; balanced within 0.02–0.08 % | ZIGZAG_CURE_RESEARCH.md §4.5 |
-| temporal order, start-up Poiseuille | 2.04 balanced (2.039 legacy) — the cure costs no order | §4.4 |
+| temporal order, start-up Poiseuille | 2.04 balanced (2.039 legacy) — the cure costs no order, and the test cannot discriminate because its solution is representable | §4.4 |
+| **transient manufactured solution, 2D nonlinear Navier–Stokes, four orders × six time steps** | the two error terms separated: identical $\Delta t^2$ behaviour for both weightings (five digits at $N=12$, order 1.98), then floors at $0.19\lVert R_h\rVert$ (legacy) against $0.05\lVert R_h\rVert$ (balanced), the constants stable over three decades of $\lVert R_h\rVert$; the $N=10$ floor predicted from $N=6,8$ to within 1 % | §4.11, `figs_fosls_vs_fs/mms2d_temporal.png` |
 | Richardson self-convergence, regularised vs singular cavity lid | smooth: order → 2 for balanced, 0.6–0.7 legacy; singular lid: 0.3 for both, at a level an order below the spatial error, separating the two error terms | §4.7 |
 | 3D channel, explicit convection (the delimiting negative result) | balanced weighting makes $\nabla\!\cdot\mathbf u$ grow (3e−1 → 6e−1 in ten steps against legacy's 8e−4), because the RKW3 stage is a Stokes *projection* whose right-hand side is not solenoidal; physics identical to four digits | BALANCED_CONDENSED_PLAN.md §1.5, §5.3 |
 | 3D channel, legacy weighting | the 2D mode is *absent* — same node-alternation statistics as a fractional-step field and less top-mode energy | §4.8 |
@@ -138,7 +143,7 @@ explicit-convection projection stage, and we can say why.
 
 | item | effort | why it matters |
 |---|---|---|
-| A transient **manufactured solution** convergence table in 2D, both weightings, several $\Delta t$ and two mesh resolutions | 1 day | the referee's first request; the Poiseuille and Richardson studies are suggestive but neither is a clean MMS |
+| ~~A transient **manufactured solution** convergence table~~ — **done 2026-09-12**, §4.11 and the figure; it also corrected the error model (the second term is a floor, not a first-order term) | — | done |
 | Extend the 1D model to **BDF2** and confirm the same structure with $\mathrm{fac}_1=3/2$ | half a day | the production scheme is BDF2; the derivation above is BDF1 |
 | ~~A statement and proof that the balanced limit operator is nonsingular~~ — **done differently, see §2.4**: the naive limit operator is *singular* (it has no pressure rows); the correct statement is uniform well-posedness in a field-weighted norm, plus a uniqueness argument. What remains is writing the nonsingularity of the *scaled* limit as a proof rather than a computation | 1–2 days | this is the SISC-grade result |
 | Convert the 1D model to a **figure**: error vs $\Delta t$ for both weightings on the three cases, plus the symmetry defect | half a day | this is the paper's Figure 1 |

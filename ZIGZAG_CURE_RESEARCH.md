@@ -425,9 +425,13 @@ Reading.
 2. **The legacy weighting is below first order even on the smooth problem**
    (0.68), consistent with §4.5: its momentum row loses weight as $\Delta t^2$,
    so refining $\Delta t$ changes what the step enforces.
-3. Practical consequence: the FOSLS transient error is
-   $C_2\,\Delta t^2 + C_1\,\Delta t\,\lVert R_h\rVert$ with $R_h$ the spatial
-   least-squares residual.  Where $R_h$ is negligible (Poiseuille order 2.04,
+3. Practical consequence: the FOSLS transient error separates as
+   $C_2\,\Delta t^2 + \Phi(w)\,\lVert R_h\rVert$ with $R_h$ the spatial
+   least-squares residual and $\Phi$ a weighting-dependent constant (§4.11
+   measures $\Phi\approx0.19$ legacy, $0.05$ balanced; an earlier draft of this
+   line wrote the second term as $C_1\Delta t\lVert R_h\rVert$, which the
+   manufactured-solution study disproves: the term is a $\Delta t$-independent
+   floor, not a first-order term).  Where $R_h$ is negligible (Poiseuille order 2.04,
    Orr–Sommerfeld <0.1 %) the scheme is second order; on the regularised
    cavity at N = 15 the second term appears at the $10^{-6}$ level, three
    orders below the spatial error.  On a problem with a boundary singularity
@@ -633,3 +637,56 @@ Pressure is three orders worse than velocity under the legacy weighting and a
 factor $10^4$ worse than under the balanced one — the same near-null pressure
 direction that FOSLS_TIME_DEPENDENT.md §2 identifies at large $c$, here seen as a
 consequence of the weighting rather than of the operator.
+
+### 4.11 The two error terms separated: a transient manufactured solution (`scratch/mms2d_temporal.py`)
+
+The test the earlier sections could not do.  Start-up Poiseuille gives order 2 for
+*both* weightings because its solution is essentially representable, so
+$\lVert R_h\rVert\approx0$ and the second term is invisible — a null test, exactly
+as §4.9's control case predicts.  Orr–Sommerfeld measures a growth rate, not a
+norm error.  Richardson measures differences between step sizes, not errors.  So:
+a transcendental transient solution the space cannot represent at any order,
+$\psi=\cos t\,\sin^2\pi x\,\sin^2\pi y$ on the unit square (divergence-free by
+construction, $u=v=0$ on all four walls for every $t$), full nonlinear
+Navier–Stokes with the convective term carried in the manufactured forcing,
+$\nu=0.01$, $T=0.2$, 2×2 elements, BDF2 seeded exactly at both levels, Newton to
+$10^{-13}$, CG to $10^{-12}$ relative with the condensed patch preconditioner.
+Relative weighted-$L^2$ error in $(u,v)$ at $T$.  Figure
+`figs_fosls_vs_fs/mms2d_temporal.png`.
+
+| $N$ | $\lVert R_h\rVert$ | regime over $\Delta t\in[7.8\times10^{-4},2.5\times10^{-2}]$ | legacy floor | balanced floor | worst ratio |
+|---|---|---|---|---|---|
+| 6 | 5.4e−3 | floor only | 9.8e−4 = 0.18 $\lVert R_h\rVert$ | 3.0e−4 = 0.056 | 4.1 |
+| 8 | 6.0e−5 | floor only | 1.14e−5 = 0.19 | 2.6e−6 = 0.044 | 5.4 |
+| 10 | 4.1e−7 | **crossover** | 7.86e−8 = 0.19 | ≤1.4e−8 = ≤0.035 | 5.5 |
+| 12 | 1.9e−9 | $\Delta t^2$ only | not reached | not reached | 1.0 |
+
+and the $N=10$ curve, which is the whole result in six lines:
+
+| $\Delta t$ | legacy | order | balanced | order | ratio |
+|---|---|---|---|---|---|
+| 2.5e−2 | 3.413e−6 | | 3.412e−6 | | 1.0 |
+| 1.25e−2 | 9.387e−7 | 1.86 | 9.339e−7 | 1.87 | 1.0 |
+| 6.25e−3 | 2.609e−7 | 1.85 | 2.448e−7 | 1.93 | 1.1 |
+| 3.13e−3 | 1.059e−7 | **1.30** | 6.394e−8 | 1.94 | 1.7 |
+| 1.56e−3 | 8.252e−8 | **0.36** | 2.072e−8 | 1.63 | 4.0 |
+| 7.81e−4 | 7.859e−8 | **0.07** | 1.417e−8 | 0.55 | 5.5 |
+
+Reading.
+
+1. **The weighting is not a temporal-order effect.**  While the $\Delta t^2$ term
+   dominates the two weightings give the *same* error — to five digits at $N=12$
+   (3.4117e−6 against 3.4118e−6) and to 1 % at $N=10$ — with order 1.98–1.99.
+   Any study in that regime, which includes every order study we ran before,
+   cannot distinguish them.
+2. **The weighting sets the floor.**  Each curve flattens at
+   $\Phi\lVert R_h\rVert$ with $\Phi=0.19$ (legacy) and $0.04$–$0.06$ (balanced),
+   *constant across three decades of $\lVert R_h\rVert$*.  The $N=10$ legacy floor
+   predicted from the $N=6$ and $N=8$ constants is $0.19\times4.10\times10^{-7}
+   =7.8\times10^{-8}$; measured $7.86\times10^{-8}$.
+3. **So at a given mesh there is an accuracy the legacy weighting cannot reach at
+   any time step, and the balanced weighting reaches it.**  That is the practical
+   statement, and it is stronger than the transient-accuracy claim we started
+   with: the defect is in the *spatial* accuracy of a time-dependent computation.
+4. The floor is visible in pressure too, and larger there
+   (§4.10(c) measured the same asymmetry in the 1D fixed point).
