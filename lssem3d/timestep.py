@@ -29,6 +29,36 @@ WHY THIS SCHEME, honestly accounted (3D_DEVELOPMENT_PLAN.md sec 0.4):
     larger dt does not quite cancel it: 6/3.46 = 1.73 vs 1.50.  Any claim that
     RK3 relieves the a_mass problem is wrong; it mildly aggravates it.  Budget
     max_k 1/(beta_k*dt) against the measured stability window, NOT 1.5/dt.
+
+THE a_mass PENALTY IS NOW PAID BY THE PRECONDITIONER, NOT BY THE RUN (2026-09-11).
+That last minus was written when Jacobi was the only preconditioner and its
+iteration count grew with c, so three stages at c = 6/dt cost far more than the
+solve count suggests.  The condensed vertex-patch Schwarz preconditioner
+(`lssem3d.precond.VertexSchwarzBatched3D`, BALANCED_CONDENSED_PLAN.md sec 4b/8b)
+holds **71 iterations per stage across c = 5400-7500** -- flat, by construction:
+a patch solve is exact on the (u, omega) pair the large-c regime couples.  With
+the cost per solve independent of c, the scheme comparison reduces to solves per
+unit PHYSICAL time, where three stages at CFL sqrt(3) beat one stage at the
+CFL ~ 0.5 an AB2 convective term survives at:
+
+    scheme                    solves/step   usable CFL   solves per h/u_tau
+    RKW3 + Crank-Nicolson          3           1.73            1.73
+    AB2  + Crank-Nicolson          1           ~0.5            2.0
+
+So RKW3 is ~13% cheaper per unit physical time AND third order on convection AND
+the only one of the two with a genuine imaginary-axis interval -- which is the
+argument that actually decides it on a DNS grid, where the convective eigenvalues
+are nearly imaginary.  Measured on the GB10 and an A100 with the patch
+preconditioner: 213 preconditioner applies per step (3 stages x 71), step 25 s
+and ~2 s respectively, against 60 s and 22 s with Jacobi.
+
+WHAT WOULD ACTUALLY REDUCE THE SOLVE COUNT is not a different explicit scheme but
+IMPLICIT CONVECTION (BDF2 + Newton, as lssem2d does): dt then follows accuracy
+rather than the CFL, one solve per step at a plausibly ~5x larger step, and it is
+the regime in which the balanced row weighting works (BALANCED_CONDENSED_PLAN.md
+sec 1.5).  The price is that the operator stops being fixed, so the one-time
+preconditioner build becomes a periodic refresh -- affordable (the 2D cavity ran
+on a preconditioner frozen for 50-100 steps) but no longer free.
 """
 from fractions import Fraction as _F
 

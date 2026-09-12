@@ -214,6 +214,20 @@ channel; §4b).  Two further steps are available only because of it:
    the diagonal cannot see) are the same at every step; compute them once
    and deflate them from CG.  A small addition to the existing solver.
 
+**Why three stages per step is not the waste it looks like.**  RKW3 runs the
+implicit solve three times per step, which was worth re-examining once the
+preconditioner changed.  The comparison is solves per unit *physical* time:
+RKW3 is stable to CFL $\sqrt3$, an AB2 convective term has no imaginary-axis
+interval at all and survives at CFL $\approx0.5$, so three stages at the larger
+step cost 1.73 solves per $h/u_\tau$ against AB2's 2.0 — about 13 % *fewer*,
+with third-order convection and two storage registers as well.  The old
+counterargument (the worst RKW3 stage sees $c=6/\Delta t$ against BDF2's
+$1.5/\Delta t$, i.e. ~15 % worse conditioning) was decisive only while the
+iteration count grew with $c$; the vertex patch holds 71 iterations per stage
+across $c$ = 5400–7500, so the cost per solve is now flat in $c$ and the
+penalty is paid by the preconditioner rather than by the run
+(`lssem3d/timestep.py` carries the same accounting).
+
 **The trade with implicit convection.**  Making convection implicit (as in
 2D) would restore the balanced weighting's benefits — larger $\Delta t$,
 smaller $c$, $\Delta t$-independent steady states — but the operator would then
