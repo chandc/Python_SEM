@@ -31,8 +31,11 @@ def lgl_nodes(N):
             
         return P1, dP1
 
-    # Newton iteration
-    for _ in range(100):
+    # N = 1 has no interior nodes: the two LGL points ARE the endpoints, and the
+    # loop below would reduce over an empty array.  The `if N > 1` guard on the
+    # assignment already anticipated this case; only the iteration was missing it.
+    # Needed for a p = 1 coarse level (COARSE_AND_ITERATIONS_PLAN.md a2).
+    for _ in range(100 if x.size else 0):
         P_N, dP_N = legendre_and_deriv(N, x)
         d2P_N = (2 * x * dP_N - N * (N + 1) * P_N) / (1 - x**2)
         

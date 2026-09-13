@@ -50,10 +50,11 @@ def element_blocks(state, fu, fv):
 class VertexSchwarz2D:
     name = 'vschwarz'
 
-    def __init__(self, state, fu, fv, pin_p=False, coarse=None, verbose=False):
+    def __init__(self, state, fu, fv, pin_p=False, coarse=None, verbose=False, pou=False):
         t0 = time.time()
         m = state.mesh; n = m.N + 1; N = m.N
         self.state, self.fu, self.fv, self.pin_p = state, fu, fv, pin_p
+        self.pou = pou
         self.mask = state.get_global_mask(pin_p=pin_p)                      # 0 = fixed
         mult = gather_scatter(m, np.ones((m.nelem, n, n, NV)))
         self.mw = 1.0/np.where(mult < 1e-10, 1.0, mult)
@@ -103,20 +104,42 @@ class VertexSchwarz2D:
             except sla.LinAlgError:
                 fac = ('lu', sla.lu_factor(Ks, check_finite=False)); self.n_lu_fallback = getattr(self, 'n_lu_fallback', 0) + 1
             self.patches.append((dofs, sc, fac))
+        self._build_pou([d for d, _, _ in self.patches])
         self.setup_time = time.time() - t0
         self.npatch = len(self.patches); self.maxdofs = max(d.size for d, _, _ in self.patches)
         if verbose:
             print(f'  VertexSchwarz2D: {self.npatch} patches, max {self.maxdofs} dofs, '
                   f'setup {self.setup_time:.1f}s ({blocks.shape[1]} probes)')
 
+    def _build_pou(self, patch_dof_lists):
+        """Partition-of-unity weight D = 1/(patch count), applied as D^1/2 on both
+        sides so the preconditioner stays SPD:
+
+            M^-1 = D^1/2 ( sum_v R_v^T A_v^-1 R_v ) D^1/2  (+ coarse, unweighted).
+
+        Without it an interior dof is corrected once per patch that contains it --
+        four times in 2D -- and the additive sum over-corrects by that factor.
+        Weighting by the inverse multiplicity is standard for overlapping Schwarz
+        on spectral elements (Fischer 1997; Lottes & Fischer 2005; Stiller 2016
+        measures 1.5-3x fewer iterations from it).  Default off: dw = 1 reproduces
+        the unweighted method exactly."""
+        self.dw = np.ones(self.ndof)
+        if not getattr(self, 'pou', False):
+            return
+        cnt = np.zeros(self.ndof)
+        for dofs in patch_dof_lists:
+            cnt[dofs] += 1.0
+        self.dw = 1.0/np.sqrt(np.maximum(cnt, 1.0))
+
     def __call__(self, r):
         r = r*self.mask
-        rg = np.bincount(self.g.ravel(), weights=(r*self.mw).ravel(), minlength=self.ndof)
+        rg = np.bincount(self.g.ravel(), weights=(r*self.mw).ravel(), minlength=self.ndof)*self.dw
         zg = np.zeros(self.ndof)
         for dofs, sc, (kind, fac) in self.patches:
             rs = rg[dofs]*sc
             zg[dofs] += sc*(sla.cho_solve(fac, rs, check_finite=False) if kind == 'chol'
                             else sla.lu_solve(fac, rs, check_finite=False))
+        zg *= self.dw
         z = zg[self.g]*self.mask
         if self.coarse is not None:
             z = z + self.coarse(r)
@@ -141,10 +164,11 @@ class VertexSchwarzCondensed2D(VertexSchwarz2D):
     """
     name = 'vschwarz-condensed'
 
-    def __init__(self, state, fu, fv, pin_p=False, coarse=None, verbose=False):
+    def __init__(self, state, fu, fv, pin_p=False, coarse=None, verbose=False, pou=False):
         t0 = time.time()
         m = state.mesh; n = m.N + 1; N = m.N
         self.state, self.fu, self.fv, self.pin_p = state, fu, fv, pin_p
+        self.pou = pou
         self.mask = state.get_global_mask(pin_p=pin_p)
         mult = gather_scatter(m, np.ones((m.nelem, n, n, NV)))
         self.mw = 1.0/np.where(mult < 1e-10, 1.0, mult)
@@ -194,6 +218,9 @@ class VertexSchwarzCondensed2D(VertexSchwarz2D):
             S = 0.5*(S + S.T); sc = 1.0/np.sqrt(np.diag(S))
             self.patches.append((Bp, emaps, sc, sla.cho_factor(S*sc[:, None]*sc[None, :], lower=True, check_finite=False)))
             self.bytes += Bp.size*(Bp.size+1)//2*8
+        # a patch corrects its edge dofs AND the interiors of its own elements
+        self._build_pou([np.concatenate([Bp] + [self.eint[e] for e, _ in emaps])
+                         for Bp, emaps, _, _ in self.patches])
         self.setup_time = time.time() - t0
         self.npatch = len(self.patches); self.maxdofs = max(p[0].size for p in self.patches)
         if verbose:
@@ -202,7 +229,7 @@ class VertexSchwarzCondensed2D(VertexSchwarz2D):
 
     def __call__(self, r):
         r = r*self.mask
-        rg = np.bincount(self.g.ravel(), weights=(r*self.mw).ravel(), minlength=self.ndof)
+        rg = np.bincount(self.g.ravel(), weights=(r*self.mw).ravel(), minlength=self.ndof)*self.dw
         zg = np.zeros(self.ndof)
         for Bp, emaps, sc, cf in self.patches:
             rB = rg[Bp].copy(); ys = []
@@ -211,6 +238,7 @@ class VertexSchwarzCondensed2D(VertexSchwarz2D):
             zB = sc*sla.cho_solve(cf, sc*rB, check_finite=False); zg[Bp] += zB
             for (e, cols), y in zip(emaps, ys):
                 zg[self.eint[e]] += y - self._isolve(e, self.eKIB[e] @ zB[cols])
+        zg *= self.dw
         z = zg[self.g]*self.mask
         if self.coarse is not None:
             z = z + self.coarse(r)

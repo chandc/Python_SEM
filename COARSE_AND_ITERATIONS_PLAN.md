@@ -30,6 +30,61 @@ the channel. Single-precision factors would halve every $t_{\rm pc}$ entry and
 are a one-line switch; they are **not assumed** anywhere here, per the standing
 fp64 decision.
 
+## WEEK 1 RESULTS (2026-09-13)
+
+Measured, not estimated.  Two items land, two are rejected, and one rejection
+kills a planned fortnight of work.
+
+| item | verdict | number |
+|---|---|---|
+| **a2** $p_c = 1$ coarse | **accepted** | +5 % iterations (41→43 at $N=6$, 40→42 at $N=8$) for **13× less coarse memory** |
+| **a1** fp32 coarse factor | **accepted**, pending the channel gate | **identical iterations**, exactly half the bytes, agrees with fp64 to 4e−8…2e−7 |
+| **b1** partition-of-unity weighting | **rejected**, with the mechanism measured | **30× worse** at $c=5405$ (31→913 iterations) |
+| **b3** richer coarse ($p_c = 3, 4$) | **rejected at large $c$** | 2D 31→32→32 ($N=8$), 26→25→25 ($N=12$); 3D 41→41→41 |
+| **a3** sparse device coarse | **no longer needed** | its purpose was to afford b3, and b3 buys nothing |
+
+**a2 + a1 together, projected to the production channel:** coarse factor
+5.3 GB → 0.41 GB ($p_c=1$) → **0.20 GB** (fp32); the coarse read 4.3 ms → ~0.2 ms;
+the apply 8.3 → ~4.2 ms; iterations 72 → ~76.  Step
+$3\times76\times(1.6+4.2)\,\mathrm{ms}\approx\mathbf{1.3\ s}$ against 2.1 s — the
+"coarse read removed" row of the table below, reached with two flags instead of
+a sparse solver.  Both flags exist now (`pc=1`, `coarse_fp32=True`); neither is
+a default, and the channel's ten-step restart gate has not been run yet.
+
+**b1 is the interesting failure.** The patch contributions were being summed
+without the inverse-counting weight that overlapping Schwarz on spectral
+elements normally carries (Fischer 1997; Lottes & Fischer 2005), and adding it
+made the preconditioner 30× worse.  That is far too large for what it is — the
+weight varies only between $1/\sqrt9$ and $1/\sqrt4$, a factor of 1.5, and a
+uniform rescaling changes nothing (control: 31 → 33 iterations).  The cause is
+specific to this operator and was measured directly: for a random residual with
+$\lVert\nabla\!\cdot\mathbf u\rVert/\lVert\mathbf u\rVert = 62$, the unweighted
+patch correction comes back at **0.25** and the weighted one at **3.31**, 13×
+worse.  Multiplying a correction by a spatially varying diagonal destroys its
+discretely divergence-free character, and preserving exactly that is what the
+patch solves are *for* in the $H(\mathrm{div})$ regime.  Consistent with this
+reading, the damage is regime-dependent: 30× at $c=5405$ and 5–6× at $c=1$,
+where there is no dominant kernel to break.  The standard weighting is right for
+$H^1$/Poisson problems and wrong here.
+
+**b3's rejection is regime-dependent too, in the same direction.** At $c=1$ a
+richer coarse space *does* pay (2D, $8\times8$: 33 → 26 → 25 for $p_c = 2,3,4$),
+at $c=5405$ it does not.  Above $c^\ast$ the coarse level cannot reach the
+kernel modes that limit convergence, so enlarging it is wasted.  This is the
+same statement as §7.3 of the paper, arriving from the coarse-space side.
+
+**One core fix was required.** `lgl_nodes(1)` reduced over an empty array, so no
+$p=1$ level could be built anywhere in the code (the `if N > 1` guard on the
+node assignment shows the case was intended; only the Newton loop missed it).
+Fixed, and verified against the exact two-point values — nodes $[-1,1]$, weights
+$[1,1]$, $D=[[-\tfrac12,\tfrac12],[-\tfrac12,\tfrac12]]$ — with $N=2..12$
+unchanged.
+
+**What is left of the plan:** b2 (symmetrised hybrid combination) and b4 (GenEO
+spectral coarse space), plus the channel gate for a1/a2.  b4 is now the only
+route to a large further gain, since the coarse space cannot be enriched by
+brute force.
+
 ## The three rigs, and the gate
 
 Every item below is measured in this order, and nothing advances to the next rig

@@ -772,7 +772,7 @@ class _DenseCoarseDevice:
     a 40 GB A100, so it is the default when the device is CUDA; on the CPU the
     sparse host solver (DirectCoarseE) stays the default."""
 
-    def __init__(self, level, dev):
+    def __init__(self, level, dev, dtype=None):
         import torch
         m, shape, mask = level.m, level.shape, level.mask
         nelem, n, _, nvar, nk = shape
@@ -794,19 +794,34 @@ class _DenseCoarseDevice:
         # reads the same 5.3 GB once and is bandwidth-bound (~4 ms on an A100,
         # ~50 ms on the GB10).  The inverse of an SPD matrix from its Cholesky
         # factor is accurate to kappa*eps, ample for a preconditioner.
-        Ainv = torch.empty((nk, ndof, ndof), dtype=torch.float64, device=dev)
+        # STORAGE PRECISION.  The coarse inverse is read in full on every CG
+        # iteration -- 5.3 GB for the production channel -- and on a bandwidth-
+        # bound device that read IS the apply (4.3 ms of 8.3 on an A100).
+        # Halving it exactly would need a batched symmetric matvec, which torch
+        # does not have (cholesky_solve's triangular solves are sequential and
+        # were 12x slower; that is why the explicit inverse is stored at all).
+        # What is available is storage precision: the preconditioner is an
+        # approximation by construction and does not enter the answer -- CG
+        # requires only that it be a fixed SPD operator -- so holding the coarse
+        # inverse in fp32 halves the traffic while the state, the operator and
+        # the solution stay fp64.  Off by default: it changes the preconditioner,
+        # so it must be measured (iterations, and the channel's step-matches-
+        # Jacobi gate) before it is trusted.
+        st_dtype = torch.float64 if dtype is None else dtype
+        Ainv = torch.empty((nk, ndof, ndof), dtype=st_dtype, device=dev)
         for k in range(nk):
             A = np.zeros((ndof, ndof))
             np.add.at(A, (rows, cols), Aloc[:, k].reshape(-1))
             d = np.diag(A); dead = np.abs(d) <= 1e-300
             A[dead, dead] = 1.0
             A = 0.5*(A + A.T)
-            Ainv[k] = torch.cholesky_inverse(torch.linalg.cholesky(torch.as_tensor(A, device=dev)))
+            Ainv[k] = torch.cholesky_inverse(torch.linalg.cholesky(torch.as_tensor(A, device=dev))).to(st_dtype)
         self.Ainv, self.ndof, self.gd = Ainv, ndof, torch.as_tensor(gd.ravel(), device=dev)
+        self.st_dtype = st_dtype
         self.mw = torch.as_tensor(level.mw, device=dev)
         self.mask = torch.as_tensor(level.mask, device=dev)
         self.shape = shape
-        self.bytes = 8*Ainv.numel()
+        self.bytes = Ainv.element_size()*Ainv.numel()
 
     def __call__(self, r):
         import torch
@@ -814,7 +829,10 @@ class _DenseCoarseDevice:
         rw = (r*self.mw).reshape(nelem*n*n*nvar, nk).T.contiguous()          # (nk, nlocal)
         g = torch.zeros((nk, self.ndof), dtype=r.dtype, device=r.device)
         g.index_add_(1, self.gd, rw)
-        z = torch.bmm(self.Ainv, g[:, :, None])[:, :, 0]                       # (nk, ndof): one batched GEMV
+        if self.st_dtype != g.dtype:                 # fp32 factor, fp64 everything else
+            z = torch.bmm(self.Ainv, g[:, :, None].to(self.st_dtype))[:, :, 0].to(g.dtype)
+        else:
+            z = torch.bmm(self.Ainv, g[:, :, None])[:, :, 0]                   # (nk, ndof): one batched GEMV
         return z[:, self.gd].T.reshape(self.shape)*self.mask
 
 
@@ -823,7 +841,7 @@ class VertexSchwarzBatched3D:
 
     def __init__(self, mesh, nk, nz, nu, c, kz, kap=0.0, rw=None, mask=None,
                  pin_p=False, coarse='element', pc=2, device=None, verbose=False,
-                 share=True, coarse_dense=None):
+                 share=True, coarse_dense=None, coarse_fp32=False):
         import time
         import torch
         from . import backend as BK
@@ -1044,7 +1062,9 @@ class VertexSchwarzBatched3D:
             if coarse_dense is None:
                 coarse_dense = (self.dev.type == 'cuda')
             if coarse_dense:
-                self.coarse_dev = _DenseCoarseDevice(self.lev_c, self.dev)
+                import torch as _t
+                self.coarse_dev = _DenseCoarseDevice(
+                    self.lev_c, self.dev, dtype=(_t.float32 if coarse_fp32 else None))
                 self.P_t, self.R_t = T(self.P), T(self.R)
                 self.mask_c_t = T(self.lev_c.mask)
                 self.bytes += self.coarse_dev.bytes

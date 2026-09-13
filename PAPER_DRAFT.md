@@ -811,9 +811,30 @@ from the patch interior alone, or the local kernel modes are cut by the
 artificial boundary. Each local matrix is symmetrically equilibrated before
 factorisation, since the row scales of a least-squares operator span several
 orders. And the coarse level carries the pressure null-space treatment of the
-fine problem. Element-sized overlap is what makes Schwarz $p$-independent for
+fine problem. Its degree can be lower than one would guess: $p_c=1$ costs 5 % in
+iterations against $p_c=2$ for a factor of 13 in storage, while $p_c=3$ and 4 buy
+nothing at all at large $c$ — above $c^\ast$ a coarse space cannot reach the
+kernel modes that limit convergence, so enriching it is wasted. Below $c^\ast$ it
+is not: at $c=1$ the same enrichment takes 33 iterations to 25. Element-sized overlap is what makes Schwarz $p$-independent for
 spectral elements, and the vertex star is the standard relaxation for
-divergence-free kernels; neither idea is new here. What is new is the pairing
+divergence-free kernels; neither idea is new here.
+
+One standard ingredient is deliberately absent, and its absence is a result
+rather than an oversight. Overlapping Schwarz on spectral elements normally
+weights each local solve by the inverse of the number of patches covering a
+degree of freedom, and that weighting is reported to buy a factor of 1.5 to 3.
+Here it costs a factor of 30: 31 iterations become 913 on the cavity operator at
+$c=5405$. The reason is specific to this regime and is directly measurable. For a
+residual whose velocity part has
+$\lVert\nabla\!\cdot\mathbf u\rVert/\lVert\mathbf u\rVert=62$, the unweighted
+patch correction returns 0.25 and the weighted one 3.31 — multiplying a
+correction by a spatially varying diagonal destroys its discretely
+divergence-free character, which is the one property the local solves exist to
+supply. The weight itself is nearly uniform (it varies by a factor of 1.5, and a
+uniform rescaling changes nothing), so this is not a conditioning effect; and the
+damage is regime-dependent, 30× at $c=5405$ against 5–6× at $c=1$, exactly as the
+kernel argument predicts. A preconditioner for the $H(\mathrm{div})$ regime must
+leave its corrections in the kernel, and pointwise rescaling does not. What is new is the pairing
 with the regime diagnosis of §7 — which says when the expense is necessary — and
 with the condensation of §8.2, which is what makes it affordable at spectral
 order.
