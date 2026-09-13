@@ -105,6 +105,23 @@ def sync(out, drive, keep=3, archive=2500):
     return n
 
 
+def safe_sync(out, drive, tag=''):
+    """A sync failure must never end the run.  Colab's Drive FUSE mount can go
+    unresponsive or drop in a long session, and shutil.copy2 then raises; the
+    previous form let that exception out of the loop and take a ten-hour run
+    with it.  The local checkpoints keep accumulating either way, so a failed
+    sync costs nothing but the copy -- the next one, ten minutes later, picks
+    up the newest file."""
+    try:
+        sync(out, drive)
+        return True
+    except Exception as e:
+        print(f'  [!] sync to Drive FAILED{tag}: {type(e).__name__}: {e}\n'
+              f'      the run continues and local checkpoints are intact; '
+              f'if this repeats, remount Drive from another cell', flush=True)
+        return False
+
+
 def resolve_start(out, drive, seed):
     """Local checkpoint, else Drive, else the seed.  Returns (resume_path, step)."""
     ck, st = newest_ckpt(out)
@@ -229,9 +246,9 @@ def main():
                 break
             now = time.perf_counter()
             if now >= next_sync:
-                sync(a.out, a.drive)
+                if safe_sync(a.out, a.drive):
+                    print(f'  [synced to Drive at t+{(now-t0)/3600:.2f} h]', flush=True)
                 next_sync = now + a.sync_min*60
-                print(f'  [synced to Drive at t+{(now-t0)/3600:.2f} h]', flush=True)
             if now >= deadline and not stopping:
                 stopping = True
                 print(f'\n  >> wall-clock budget reached ({a.hours:g} h); stopping at the next '
@@ -243,12 +260,19 @@ def main():
     except KeyboardInterrupt:
         print('\n  >> interrupted; stopping the run and syncing', flush=True)
         child.send_signal(signal.SIGINT)
+    except Exception as e:                       # a supervisor fault must still sync
+        print(f'\n  >> supervisor error: {type(e).__name__}: {e}; syncing what exists',
+              flush=True)
+        try:
+            child.send_signal(signal.SIGINT)
+        except Exception:
+            pass
     finally:
         try:
             child.wait(timeout=240)
         except Exception:
             child.kill()
-        sync(a.out, a.drive)
+        safe_sync(a.out, a.drive, tag=' (final)')
 
     ck, st = newest_ckpt(a.out)
     el = (time.perf_counter() - t0)/3600
