@@ -233,7 +233,7 @@ the one place we tried and failed to prove something is reported as such.
 | 1 Introduction | written |
 | 2 The weighted step, 3 The fixed point | written (Level 0) |
 | 4 Closed form, 5 Accuracy cost, 6 Benchmarks | written (Levels 1–3) |
-| 7 The same parameter in the operator | written (Level 4 diagnosis) |
+| 7 The same parameter in the operator | written (Level 4 diagnosis), now including the 2D steady $p$-multigrid study as the positive control and the same-code $c$-sweep |
 | 8 The patch preconditioner | written, including the Gartling geometry and the $c$-sweep |
 | 9 Implementation and cost | written, three machines |
 | 10 DNS and the RKW3 exception | exception and the time-step justification written; **blocked on the long A100 run** (COLAB_DNS_RUNBOOK.md) |

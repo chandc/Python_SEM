@@ -561,8 +561,35 @@ $\nu\nabla\times\omega\approx\nu\nabla\times\nabla\times\mathbf u$. Eliminating
 $\omega$, the velocity is controlled in divergence *and* curl, whose
 intersection is $H^1$ on our domains; every block is Laplacian-like and the
 functional is $H^1$-elliptic in each variable. This is the regime in which
-Jacobi-smoothed $p$-multigrid for least-squares systems is provably optimal, and
-in which we measure it to be $p$-independent.
+Jacobi-smoothed $p$-multigrid for least-squares systems is provably optimal.
+
+It is also where standard high-order practice works, and we establish that as a
+measurement rather than inheriting it, because the rest of this section is a
+claim about where the same methods stop working. On the lid-driven cavity at
+$Re=1000$ — genuine nonlinear convection, the preconditioner rebuilt at every
+Newton step, marched to a steady state at $10^{-8}$ — a $p$-multigrid ladder that
+halves the polynomial degree at each level, with an exact $p=2$ coarse solve, is
+flat in both refinement directions:
+
+| | Jacobi | $p$-multigrid ladder |
+|---|---|---|
+| $N=8\to30$, $4\times4$ elements (58,564 dofs at $N=30$) | 606 → 3186 (5.3×) | **32.4 → 37.1** (1.14×) |
+| $2\times2\to8\times8$ elements at $N=12$ | 527 → 1981 (3.8×) | **37.7 → 26.5** (0.70×) |
+
+At $N=30$ that is 86 times fewer iterations and three times less wall-clock time,
+and the wall-clock advantage is still growing with order. Under $h$-refinement the
+count falls rather than rises.
+
+Two details of that result matter later. **Depth is the whole story**: measured
+on the same cavity operator over $N=5$ to 30, fixed two- and three-level schemes
+degrade by 7.9× and 5.6× while the halving ladder grows 1.41×, so only the ladder
+is $p$-robust — which is why the failures below cannot be dismissed as a poorly
+built multigrid. And **the coarse level does the $h$-work**: because the $p=2$
+level is solved exactly and grows with the mesh, it absorbs the mesh scale, and
+its share of the wall time *falls* with order (24% at $N=8$, 8% at $N=30$), since
+it scales with the element count rather than the degree. The preconditioner of
+Section 8 keeps that same coarse level for that same reason, and changes only the
+smoother.
 
 For $c\gg c^\ast$ the momentum row degenerates to $\lVert\mathbf u\rVert^2$. The
 curl row makes $\omega$ an order-zero slave of $\nabla\times\mathbf u$, and
@@ -658,6 +685,43 @@ point Jacobi, node-block Jacobi, per-variable blocks, and $p$-multigrid with
 Jacobi or Chebyshev smoothing and either a Galerkin or a direct coarse solve —
 each of which needed thousands of iterations per stage at the channel's $c$, and
 each of which we had previously suspected of being an implementation fault.
+
+The sharpest form of that evidence holds the implementation fixed and moves only
+$c$. The ladder of §7.1 — flat from $N=8$ to 30 on the steady cavity — is applied
+to the same cavity operator at the channel's $c$:
+
+| $c$ | mesh, $N$ | Jacobi | $p$-multigrid ladder | vertex patch + $p=2$ coarse |
+|---|---|---|---|---|
+| 1 | $4\times4$, 8–16 | 1191–2644 | **60 → 54** | 27 → 26 |
+| 1 | $8\times8$, 8 | 2232 | **51** | 33 |
+| 5405 | $4\times4$, 8 | 1286 | 178 | **31** |
+| 5405 | $4\times4$, 12 | 2239 | 329 | **26** |
+| 5405 | $4\times4$, 16 | 3497 | 522 | **25** |
+| 5405 | $8\times8$, 8 | 2938 | 372 | **41** |
+
+Same code, same operator, same meshes, same coarse space: at $c=1$ the ladder is
+$p$-independent at 51–60 iterations; at $c=5405$ it grows threefold with
+polynomial order, while the patch preconditioner is flat — slightly *falling* —
+in both regimes. The failure is a property of the operator at large $c$, not of
+multigrid, of the ladder depth, or of the coarse solve, each of which is held
+fixed across the table.
+
+It also localises what has to change. Both methods carry the *same* exact $p=2$
+coarse level and differ only in the smoother. Below $c^\ast$ a pointwise smoother
+suffices and the coarse level supplies $h$-robustness; above it the smoother must
+be large enough to contain the local divergence-free modes, and no coarse space
+repairs a smoother that cannot see them. That is the whole design of Section 8:
+keep the coarse level, enlarge the local solve.
+
+One caveat on the loads these are measured with. A smooth right-hand side does
+not exercise the kernel: starting the same $c=2000$ computation from rest, Jacobi
+needs 650 iterations per step, exactly what it needs at $c=10$, because the
+laminar start-up residual projects onto few modes. Perturbing the field with 10%
+random noise, which is closer to what a turbulent step presents, separates the
+three at once — Jacobi doubles to 1177 iterations (worst 1422), the ladder
+triples to 150, and the patch method rises from 24 to 33 and stays there as the
+noise decays. A preconditioner study driven by smooth manufactured residuals can
+miss this entirely.
 
 Two remedies that work for high-order Poisson problems fail here for the same
 reason, and both are worth recording because both are natural things to try.
@@ -948,6 +1012,8 @@ avoid, not because it establishes the result.
   boundary conditions*, CPAM **12** (1959) 623-727; **17** (1964) 35-92.
 - K.-A. Mardal and R. Winther, *Preconditioning discretizations of systems of
   partial differential equations*, Numer. Linear Algebra Appl. **18** (2011) 1-40.
+- J. J. Heys, T. A. Manteuffel, S. F. McCormick and L. N. Olson, *Algebraic
+  multigrid for higher-order finite elements*, JCP **204** (2005) 520–532.
 - Z. Cai, T. A. Manteuffel and S. F. McCormick, *First-order system least squares
   for the Stokes equations, with application to linear elasticity*, SINUM **34**
   (1997) 1727-1741.
