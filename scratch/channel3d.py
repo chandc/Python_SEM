@@ -322,7 +322,8 @@ def make_precond(s, dt, kap, rowweight=False, like=None, precond='jacobi',
         elif precond == 'vsbatch':
             out.append(VertexSchwarzBatched3D(s['m'], s['nk'], s['nz'], s['nu'], cc, s['kz'],
                                               kap, rw, mask=s['mask'], pc=pkw.get('pc', 2), verbose=verbose,
-                                              coarse_dense=pkw.get('coarse_dense')))   # None: dense on CUDA, sparse host on CPU
+                                              coarse_dense=pkw.get('coarse_dense'),
+                                              coarse_fp32=bool(pkw.get('coarse_fp32', False))))   # None: dense on CUDA, sparse host on CPU
         else:
             out.append(VertexSchwarz3D(s['m'], s['nk'], s['nz'], s['nu'], cc, s['kz'],
                                        kap, rw, mask=s['mask'],

@@ -146,6 +146,8 @@ def main():
     ap.add_argument('--weighting', default='legacy')
     ap.add_argument('--share', type=int, default=1)
     ap.add_argument('--coarse-dense', default='', help='1 device dense coarse, 0 host sparse LU; empty = automatic')
+    ap.add_argument('--pc', type=int, default=2, help='coarse level degree (2 validated; 1 is 13x smaller for +5%% iterations)')
+    ap.add_argument('--coarse-fp32', type=int, default=0, help='hold the coarse inverse in fp32 (half the read); state and solution stay fp64')
     ap.add_argument('--from-scratch', action='store_true',
                     help='allow starting from the tripped initial condition when no '
                          'checkpoint is found (a fresh transition, ~10 turnovers of '
@@ -176,7 +178,8 @@ def main():
     cmd = [sys.executable, '-u', 'scratch/minchan.py', 'run',
            f'out={a.out}', f'nstep={nstep}', f'dt={a.dt:g}', f'every={a.every}',
            f'backend_name={a.backend}', f'precond={a.precond}',
-           f'weighting={a.weighting}', f'share_precond={a.share}']
+           f'weighting={a.weighting}', f'share_precond={a.share}',
+           f'pc={a.pc}', f'coarse_fp32={a.coarse_fp32}']
     if a.coarse_dense != '':
         cmd.append(f'coarse_dense={int(a.coarse_dense)}')
     if resume:
