@@ -80,10 +80,51 @@ Fixed, and verified against the exact two-point values — nodes $[-1,1]$, weigh
 $[1,1]$, $D=[[-\tfrac12,\tfrac12],[-\tfrac12,\tfrac12]]$ — with $N=2..12$
 unchanged.
 
-**What is left of the plan:** b2 (symmetrised hybrid combination) and b4 (GenEO
-spectral coarse space), plus the channel gate for a1/a2.  b4 is now the only
-route to a large further gain, since the coarse space cannot be enriched by
-brute force.
+### b4's go/no-go gate, run (`scratch/week1_b4_gate.py`)
+
+3D_STATUS.md §7S.3 killed deflation for a reason that would kill GenEO in the
+same way: the soft set of the operator was a **constant 13 % of the dofs**,
+growing with the mesh, so deflating a fixed number of modes bought 1.1×.  A
+GenEO coarse space *is* "the modes below a threshold", so before spending three
+weeks the same question has to be asked of the **patch-preconditioned** operator
+rather than the Jacobi-preconditioned one.  Forming $M^{-1}A$ densely and taking
+its spectrum:
+
+| mesh | $N$ | free | $\lambda_{\min}$ | $\lambda_{\max}$ | $\kappa$ | modes $<0.1\lambda_{\max}$ | per patch |
+|---|---|---|---|---|---|---|---|
+| 2×2 | 6 | 579 | 1.028 | 9.055 | 8.8 | 0 | 0 |
+| 2×2 | 8 | 1027 | 1.009 | 9.020 | 8.9 | 0 | 0 |
+| 4×4 | 6 | 2307 | 0.210 | 9.133 | 43.4 | 43 | 4.8 |
+| 4×4 | 8 | 4099 | 0.336 | 9.067 | 27.0 | 38 | 4.2 |
+| 6×6 | 6 | 5187 | 0.151 | 9.152 | 60.6 | 126 | 5.0 |
+
+**The gate passes, and three things fall out.**
+
+1. $\lambda_{\max}=9.0$–$9.2$ on every mesh and order.  That is the colouring
+   constant — the largest number of patches covering one dof, and the patch-count
+   histogram measured for b1 is exactly $\{4, 6, 9\}$.  Classical additive
+   Schwarz theory bounds $\lambda_{\max}$ by that number and it is attained.
+   There is nothing to gain at the top of the spectrum.
+2. **All of the degradation is in $\lambda_{\min}$**: 1.03 → 0.21 → 0.15 as the
+   mesh refines at fixed order, so $\kappa$ runs 8.8 → 43 → 61.  The $p=2$ coarse
+   space is not delivering the $h$-independence a two-level method is supposed to
+   provide; this is the same growth visible as 31 → 41 iterations from 4×4 to 8×8
+   and as the channel's 72 against the small rig's 36.
+3. **The bad modes number about five per patch, independent of $h$ and $p$**
+   (4.8, 4.2, 5.0), not a constant fraction of the dofs.  That is precisely the
+   condition GenEO needs and precisely what deflation failed: 13 % of the dofs is
+   a second solve, five vectors per patch is a small coarse space.  For the
+   channel that is $114\times(5\text{–}15)\approx600$–1700 vectors per Fourier
+   mode against the present $p=2$ space of 6216 — **a better coarse space that is
+   also an order of magnitude smaller.**
+
+Expected outcome if the bound is attained: $\kappa\to O(\lambda_{\max})\approx9$,
+iterations from 72 to roughly 20, and with a1+a2 already in hand a step of
+$3\times20\times(1.6+3)\,\mathrm{ms}\approx\mathbf{0.3\ s}$.
+
+**What is left of the plan:** b2 (symmetrised hybrid combination) and b4, plus
+the channel gate for a1/a2.  b4 is now both the only route to a large further
+gain and a measured prospect rather than a hope.
 
 ## The three rigs, and the gate
 
