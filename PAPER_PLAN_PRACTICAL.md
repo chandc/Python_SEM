@@ -243,6 +243,15 @@ the one place we tried and failed to prove something is reported as such.
 Remaining writing is Section 10's statistics and Appendix A. Everything else on
 the critical path is now a computation, not a drafting task.
 
+## After the reviewer's cost objection
+
+The per-step decomposition $t_{\rm step}=3\,n_{\rm it}(t_{\rm op}+t_{\rm pc})$
+puts 84 % of the A100 step in the preconditioner apply, most of that in reading
+the 5.3 GB coarse inverse.  COARSE_AND_ITERATIONS_PLAN.md lays out the two
+levers — the coarse read and the iteration count — with the prize quantified
+(2.1 s → ≈0.3 s in fp64 if both land) and a three-rig measurement order.  Week 1
+of it is existing switches and two-line changes.
+
 ## Schedule
 
 | | work | days |

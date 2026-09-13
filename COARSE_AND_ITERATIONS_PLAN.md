@@ -1,0 +1,149 @@
+# Closing the per-step gap: the coarse read (a) and the iteration count (b)
+
+**Where the A100 step goes.** With the condensed vertex-patch preconditioner the
+production channel step (6×18 elements, $N=8$, 17 modes, 1.55 M free unknowns) is
+
+$$t_{\rm step}=3\ \text{stages}\times n_{\rm it}\times(t_{\rm op}+t_{\rm pc})
+= 3\times72\times(1.6+8.3)\,\mathrm{ms}\approx2.1\ \mathrm s,$$
+
+operator 16 %, preconditioner 84 %. Of the 8.3 ms preconditioner apply, 4.3 ms is
+reading the 5.3 GB dense $p=2$ coarse inverse (17 modes × 6216² doubles) at the
+A100's bandwidth, ~2 ms the patch GEMMs, ~2 ms interior solves and
+back-substitution. The operator is at its bandwidth floor and is not a lever.
+
+Two levers remain, and they multiply: **(a)** the coarse read, which sets
+$t_{\rm pc}$, and **(b)** the iteration count, which the exact two-block
+preconditioner shows can be 13 (κ ≈ 3) where the patch method sits at 72.
+
+| configuration | $n_{\rm it}$ | $t_{\rm pc}$ | step | how |
+|---|---|---|---|---|
+| today | 72 | 8.3 ms | 2.1 s | — |
+| (a) coarse read halved | 72 | 6.1 | 1.7 s | symmetric-packed inverse, 1 day |
+| (a) coarse read removed | 72 | ~4.5 | 1.3 s | sparse device solve, 1–2 weeks |
+| (b) partition-of-unity weighting | 35–50 | 4.5 | 0.65–0.9 s | literature 1.5–3×, 2 days to test |
+| (b) spectral coarse space | ~15–20 | ~5 | 0.3–0.4 s | GenEO-type, 2–3 weeks |
+| all of it in fp64 | ~15 | ~4.5 | **≈0.3 s** | |
+
+That last line is the reviewer's 0.1–0.3 s, in double precision, and every row
+of it is a measurement we can make on the rigs we already have before touching
+the channel. Single-precision factors would halve every $t_{\rm pc}$ entry and
+are a one-line switch; they are **not assumed** anywhere here, per the standing
+fp64 decision.
+
+## The three rigs, and the gate
+
+Every item below is measured in this order, and nothing advances to the next rig
+until it passes on the previous one:
+
+1. **2D harness** (`scratch/vertex_schwarz2d.py`, `adn_schwarz_condensed.py`):
+   Re = 1000 cavity operator at $c = 5405$, cold random right-hand side, CG to
+   $10^{-8}$. Iteration counts in seconds to minutes. This is where anything
+   algorithmic is tried first.
+2. **3D rig** (`scratch/vs3d_check.py`, 4×4 elements, $N = 4$–8, 5 modes):
+   iterations and the condensed-vs-dense agreement; a few minutes per
+   configuration on the Mac.
+3. **Channel** (`scratch/minchan.py price` / a ten-step restart from run01):
+   the production number, with the standing gate — **the step must reproduce
+   the Jacobi step to every logged digit** ($u_\tau$, divergence, energy,
+   dissipation). A preconditioner cannot change the answer; anything that does
+   is a bug, however fast.
+
+## (a) The coarse read
+
+**a1. Symmetric-packed inverse — half the traffic for nothing.** The stored
+inverse is symmetric and the batched GEMV reads all $n^2$ of it. Storing the
+upper triangle and applying with a symmetric matrix-vector product reads $n^2/2$:
+5.3 GB → 2.65 GB, 4.3 → ~2.2 ms. `torch` has no batched `symv`; cuBLAS does
+(`cublasDsymv`, one call per mode, 17 launches inside the existing CUDA graph),
+or the triangle can be applied as one GEMV on the packed upper part plus a
+transposed GEMV on the same data. Pure implementation, no algorithmic risk,
+identical result to round-off. **One day.**
+
+**a2. `pc = 1` — an 11× smaller coarse space, if iterations allow.** The flag
+exists (`VertexSchwarzBatched3D(pc=...)`). At $p = 1$ the coarse space has
+$7\times19 = 133$ nodes per mode against 481, so the dense inverse is
+28 MB per mode, 0.47 GB in all: the read drops to ~0.4 ms. The question is
+purely what it costs in iterations, and the 2D $p$-multigrid study
+(PMG_ALGORITHM.md §6.6) warns that coarsening too far is what breaks
+$p$-robustness. Measure on rig 1 then rig 2: if $n_{\rm it}$ rises by less than
+the ~1.8× the coarse term is worth at all, it is a net win. **Half a day, and
+the answer decides whether a3 is needed.**
+
+**a3. Sparse device coarse solve — removes the read entirely.** The $p = 2$
+coarse operator per mode is a 2D spectral-element matrix on 6216 unknowns:
+sparse, with nested-dissection fill of a few MB per mode. Options in order of
+preference: cuDSS (batched sparse LU/Cholesky on the device, the right tool);
+a banded solve after RCM ordering (`gbtrf`/`gbtrs`; bandwidth ~ one element row
+× 14 fields ≈ 400, storage ~60 MB per mode, 1 GB total — 5× below dense,
+batched over modes); or `cupyx.scipy.sparse.linalg` as a fallback. Sparse
+triangular solves are latency-bound rather than bandwidth-bound, so the apply
+may not be faster than a1's 2.2 ms on an A100 — the real point of a3 is that
+**it makes a richer coarse space affordable**, which is where it connects to
+(b). The host sparse LU path already exists (`coarse_dense=0`) and is the
+reference for correctness. **One to two weeks.**
+
+## (b) The iteration count
+
+**b1. Partition-of-unity weighting — the standard fix for overlapping Schwarz,
+and we do not have it.** The patch contributions are currently summed plainly,
+so a dof in the interior of the mesh receives four patch corrections (in 2D)
+and is over-corrected by that factor. Overlapping Schwarz on spectral elements
+is normally applied with inverse-multiplicity weights (Fischer 1997; Lottes &
+Fischer 2005), and Stiller (2016) measures 1.5–3× fewer iterations from
+non-uniform weights. CG requires the preconditioner symmetric, so the weighting
+goes on both sides, $M^{-1}=D^{1/2}\big(\sum_v R_v^{\mathsf T}A_v^{-1}R_v\big)D^{1/2}$
+with $D$ the inverse patch-count, which is SPD. Implementation: one
+elementwise multiply before the gather and one after the scatter, in both the
+2D harness and `VertexSchwarzBatched3D`. **Two days including all three rigs.**
+
+**b2. Hybrid (symmetrised multiplicative) coarse–patch combination.** Applying
+the coarse correction, then the patches on the updated residual, then the
+coarse again is SPD and typically halves the iteration count against pure
+additive, at the cost of one extra operator apply per preconditioner call
+(1.6 ms, cheap against 8 ms). Net gain ~1.3–1.6×; test on rig 1 in a day. Only
+worth doing after b1, since the two interact.
+
+**b3. Richer coarse space — needs a3.** The exact $(\mathbf u,\omega)\|p$
+preconditioner reaches κ ≈ 3 because it solves the coupled block exactly;
+patches approximate it locally and the $p = 2$ coarse level catches only the
+smoothest part of the divergence-free kernel. A $p = 3$ or $p = 4$ coarse level
+catches more of it. At $p = 4$ that is ~25 k unknowns per mode, which a dense
+inverse cannot hold (5 GB *per mode*) and a sparse factorisation can. Measure
+$n_{\rm it}$ against $p_c$ on rig 1 with the host sparse solver *now* — that is
+free — so the case for a3 is quantified before it is built.
+
+**b4. Spectral coarse space (GenEO-type) — the principled route to κ = O(1).**
+The slow modes of the patch-preconditioned operator are known: smooth,
+divergence-free, curl-rich, invisible to the local solves. GenEO builds a coarse
+space from exactly those, via a generalised eigenproblem on each patch
+(patch operator against its partition-of-unity-weighted version), and comes
+with a bound κ ≤ C(1 + 1/τ) independent of $h$, $p$ and the coefficients. Costs:
+a per-patch eigensolve at build (batched, same shapes as the factors), and a
+coarse space of (patches × modes-per-patch) columns — a few thousand per Fourier
+mode, dense-solvable. The expected result is the two-block number, ~13–20
+iterations, and it is the only item here that reaches the bottom row of the
+table. Prototype on rig 1 in a week; port to 3D in a second. **Two to three
+weeks, and it is a paper section of its own if it works.**
+
+## Order, and what each step decides
+
+| week | do | decides |
+|---|---|---|
+| 1 | a2 (`pc=1`), b1 (PoU weights), a1 (packed inverse), b3 with the host solver | whether the coarse read can simply be shrunk; how much PoU buys; how much a richer coarse space would buy |
+| 2 | a3 if b3 says a richer coarse space pays; b2 | the coarse solver the rest is built on |
+| 3–4 | b4 | the O(1)-κ preconditioner |
+
+Week 1 is all measurement on existing switches or two-line changes, and by its
+end the table above has measured entries in place of literature estimates. The
+channel is touched only at the end of each week, through the ten-step restart
+gate.
+
+## What this does to the paper
+
+Section 9 gains the decomposition
+$t_{\rm step}=3\,n_{\rm it}(t_{\rm op}+t_{\rm pc})$ with its measured entries,
+and the fractional-step comparison on the same box (K-path, 1.33 s/step on a
+CPU at $\Delta t = 3.5\times10^{-4}$). Anything from week 1 that holds goes into
+§8–9 as an implementation improvement. b4 is a new section if it delivers
+$O(1)$ conditioning, since it would be the first spectral coarse space for a
+velocity–vorticity–pressure least-squares system.
