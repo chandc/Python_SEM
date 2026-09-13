@@ -1,5 +1,28 @@
 """Does the minimal-channel DNS depend on its time step?
 
+DO NOT RELAUNCH THIS.  The question that motivates the paragraph below is
+CLOSED: for 3D the convective terms are integrated explicitly by RKW3, so each
+implicit stage is a Stokes projection, the legacy weighting is the correct
+choice, and tests establishing that were run before this file existed
+(BALANCED_CONDENSED_PLAN.md sec 1.5, PAPER_DRAFT.md sec 10).  Writing the same
+question as a Richardson order check does not make it a new one.  This script
+was launched on 2026-09-12, ran 5 GPU-hours on Spark and was killed after one
+step; it is kept for the two things in it that are worth keeping and for the
+record of the mistake, not as work to finish.
+
+WHAT IS WORTH KEEPING.  (1) Changing dt across a restart is exact here because
+RKW3 has ZETA[0] = 0 -- see the note below; that fact is reusable.  (2) The
+tolerance lesson: tol = 1e-12 was chosen so solver noise could not swamp a
+second-order signal of ~1e-8, which is the right requirement and an unreachable
+one.  This operator is a squared one, so the attainable relative residual in
+fp64 is about kappa*eps ~ 1e-10; 1e-12 put CG below its own floor, where it
+stagnated at the 20000-iteration cap -- two hours per step, every stage pinned
+at the cap.  If a temporal-order check is ever wanted for another reason, the
+lever is a BIGGER SIGNAL (Richardson at dt = 3.2e-3 vs 1.6e-3, where the
+difference is ~100x larger), never a tighter solver.
+
+--- original motivation, retained verbatim; its premise is the closed question ---
+
 run01 ran at dt = 8e-4 with the legacy weighting, which puts the momentum
 equation at m*a = 1/c = 1.3e-4 against the constraints -- four orders below the
 safe value, and a hundred times deeper into the affected regime than the

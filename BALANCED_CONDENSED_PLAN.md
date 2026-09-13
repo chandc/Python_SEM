@@ -164,6 +164,17 @@ less memory and 2–4× faster applies.
 
 ### 1.5 The 3D stage is a Stokes problem — consequences for weights and preconditioner (2026-09-11)
 
+> **CLOSED DECISION — do not reopen.**  3D uses the legacy weighting.  The
+> convective terms are explicit RKW3, so each implicit stage is a Stokes
+> projection with a non-solenoidal right-hand side; the constraint rows must
+> dominate, and the balanced weighting drives the divergence from 8.6e−4 to
+> 3.3e−1 in one step.  The $ma$ criterion of the 2D work does not apply to a
+> stage that has no fixed point.  The evidence is below and in
+> ZIGZAG_CURE_RESEARCH.md §4.8 (run01's fields carry no mesh-scale mode).
+> Studies that re-test this — including a Richardson time-step sweep on run01,
+> which is the same question wearing a different hat — are not to be launched.
+> One was, on 2026-09-12, and cost five GPU-hours (`scratch/minchan_dtsens.py`).
+
 With convection explicit (RKW3), each implicit stage of the channel solves
 
 $$
