@@ -374,6 +374,68 @@ so **the same variable $\omega$ enters one row $\nu$ times weaker than the
 other** and no single $H^1$ norm bounds both tightly. Classical Stokes FOSLS
 avoids this by rescaling the variables (Bochev & Gunzburger).
 
+### F1 addendum (2026-09-13): the balanced weighting's row, and what saturates where
+
+`scratch/ellipticity_weightings.py`, same machinery and same $H^1$ assembly, so
+the numbers are comparable to the tables above row for row.  F1 swept legacy and
+`w_mom=1`; the balanced weighting $w_{\rm mom}=w_{\rm mass}=\sqrt{\Delta t}$ did
+not exist yet, and the obvious question about it is whether the accuracy fix was
+bought with conditioning.  **It was not.**
+
+$c_2/c_1$, $4\times4$ elements, $N=4$, $\nu=0.01$ ($\sqrt{c_2/c_1}$, the CG
+proxy, in brackets):
+
+| $\Delta t$ | legacy | **balanced** | unit ($w_{\rm mom}=1$) |
+|---|---|---|---|
+| $10^{-3}$ | 8.47e6 (2910) | **7.69e6 (2774)** | 2.06e9 (45339) |
+| $10^{-2}$ | 1.15e6 (1073) | **2.73e5 (523)** | 2.68e6 (1637) |
+| $10^{-1}$ | 4.15e5 (644) | **8.74e4 (296)** | 1.15e5 (339) |
+| $1$ | 1.29e4 (114) | 1.29e4 (114) | 1.29e4 (114) |
+| $10^{2}$ | 7.28e6 (2697) | 1.53e5 (390) | **1.50e4 (122)** |
+| $10^{4}$ | 2.00e10 (141577) | 7.24e6 (2690) | **1.53e4 (124)** |
+
+(At $\Delta t = 1$ with $\mathrm{fac}_1 = 1$ all three coincide, which is the trap
+the original sweep fell into.)
+
+**In the unsteady regime the balanced weighting is the best-conditioned of the
+three**, not a compromise between them: equal to legacy at $10^{-3}$ (0.91×) and
+4.2–4.7× better at $10^{-2}$ and $10^{-1}$, while the unit weighting is 267×
+worse than balanced at $10^{-3}$.  In the steady limit the ordering reverses and
+`w_mom=1` wins, as F1 found.  So the accuracy fix of ZIGZAG_CURE_RESEARCH.md
+§4.10 is free in this norm.
+
+**This is not in tension with the measured 2× rise in *Jacobi* iterations under
+the balanced weighting** (BALANCED_CONDENSED_PLAN.md §4b).  $c_2/c_1$ is the
+norm equivalence against $H^1$; Jacobi's count is set by the diagonal of $A$
+after row scaling.  The two need not move together, and here they do not.
+
+**h-refinement, and where the FOSLS saturation result actually lives:**
+
+| mesh | dt = $10^{-3}$ legacy | balanced | unit | | dt = $10^{4}$ legacy | balanced | **unit** |
+|---|---|---|---|---|---|---|---|
+| 1×1 | 6.58e6 | 2.50e6 | 1.98e9 | | 1.29e10 | 1.29e6 | **1.178e4** |
+| 2×2 | 7.54e6 | 4.18e6 | 2.04e9 | | 1.94e10 | 2.93e6 | **1.369e4** |
+| 4×4 | 8.47e6 | 7.69e6 | 2.06e9 | | 2.00e10 | 7.24e6 | **1.530e4** |
+| 6×6 | 9.01e6 | 1.15e7 | 2.06e9 | | 3.09e10 | 1.33e7 | **1.552e4** |
+| step | 1.06× | 1.49× | 1.00× | | 1.54× | 1.84× | **1.01×** |
+
+The last column reproduces F1's C3 table **to four digits** (1.178e4, 1.369e4,
+1.530e4, 1.552e4), which is the harness agreeing with itself across three weeks
+— and it is the only column that saturates.  That is the correct reading rather
+than a defect: `w_mom=1` in the elliptic limit *is* McCormick's steady FOSLS
+functional, momentum weighted $O(1)$ against the constraints, and it is that
+functional the $h$-independence theorem is about.  Legacy and balanced at
+$\Delta t = 10^4$ are not the steady functional at all; they scale momentum by
+$\Delta t$ and $\sqrt{\Delta t}$, and their $H^1$ ratios grow accordingly.
+
+**At production $\Delta t$ nothing saturates, for any weighting, and the
+constants are $10^6$–$10^9$.**  That is not a failure of the theory: it is the
+$c$-regime statement arriving from the ellipticity side.  Above
+$c^\ast\approx\nu p^4/h^2$ the functional is not $H^1$-equivalent — the momentum
+row has degenerated to $\|\mathbf u\|^2$ and the controlling norm is
+$H(\mathrm{div})$ (ADN_FOSLS.md §3) — so an $H^1$ ellipticity constant measured
+there is measured against the wrong norm and has no reason to be bounded.
+
 ### What this means — and a correction
 
 **RETRACTED: "the accuracy-vs-ellipticity conflict is real."** I compared legacy

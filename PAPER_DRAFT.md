@@ -536,6 +536,25 @@ balanced one unchanged, which we confirm below. The fix of Section 5 costs
 nothing in the solver, and the solver of Sections 8–9 is not a workaround for the
 weighting.
 
+It is worth settling the natural suspicion here, since the weighting changes the
+scale of the momentum rows and might be expected to pay for accuracy with
+conditioning. Measured as the $H^1$ ellipticity ratio of §7.1, it does not: at
+$\Delta t=10^{-3}$ the balanced constant is $7.7\times10^6$ against the
+conventional $8.5\times10^6$, and at $10^{-2}$ and $10^{-1}$ it is better by
+factors of 4.2 and 4.7. The unit weighting of §6.4, which fails for accuracy in
+the mirror-image way, is also the worst conditioned of the three by 267× at
+$\Delta t=10^{-3}$. In the *steady* limit the ordering reverses and the unit
+weighting wins, as it must, since with momentum weighted $O(1)$ against the
+constraints it is the classical steady least-squares functional. The balanced
+weighting is thus the best-conditioned member of the family throughout the
+unsteady range where it is also the accurate one.
+
+One caveat on that claim: the ellipticity ratio is norm equivalence against
+$H^1$, whereas an iteration count is set by the preconditioner actually used.
+Under point Jacobi the balanced weighting does cost roughly a factor of two in
+iterations at large $c$. The two measures need not move together, and here they
+do not.
+
 ### 7.1 Two regimes, and the crossover between them
 
 Divide the functional by $a_{\rm flux}^2$ so that the momentum row reads
@@ -562,6 +581,21 @@ $\omega$, the velocity is controlled in divergence *and* curl, whose
 intersection is $H^1$ on our domains; every block is Laplacian-like and the
 functional is $H^1$-elliptic in each variable. This is the regime in which
 Jacobi-smoothed $p$-multigrid for least-squares systems is provably optimal.
+
+The theory's own constant can be measured, and we do. Assembling the discrete
+$H^1$ inner product $H$ through the same element-local probing as $A$ and solving
+$Aq=\lambda Hq$ gives the FOSLS constants $c_1\lVert Q\rVert_1^2\le\mathcal
+F(Q;0)\le c_2\lVert Q\rVert_1^2$ directly. In the elliptic limit the ratio
+**saturates under mesh refinement** — $1.178\times10^4$, $1.369\times10^4$,
+$1.530\times10^4$, $1.552\times10^4$ on $1\times1$ to $6\times6$ elements, the
+step ratio falling to 1.01 — so the steady functional is $H^1$-norm-equivalent
+with an $h$-independent constant, which is exactly what the first-order system
+least-squares framework asserts and what makes multigrid optimal here. The
+constant is not small, and it scales as $\nu^{-2}$: the vorticity enters the
+momentum row a factor $\nu$ more weakly than it enters its own definition row, so
+no single $H^1$ norm bounds both tightly. That is the variable-scaling defect
+classical Stokes least-squares formulations remove by rescaling the unknowns, and
+it is a statement about the functional rather than about any discretisation of it.
 
 It is also where standard high-order practice works, and we establish that as a
 measurement rather than inheriting it, because the rest of this section is a
@@ -610,6 +644,15 @@ with two features that decide everything that follows. The vorticity appears
 *shifted*: the functional is a norm on the pair $(\mathbf u,\omega-\nabla\times
 \mathbf u)$, not on $\mathbf u$ and $\omega$ separately. And the pressure
 decouples, entering only through a scaled Neumann Laplacian.
+
+The same measurement run at a production time step says the second regime is not
+merely different but outside the theory's reach: the $H^1$ ellipticity ratio is
+then $10^6$ to $10^9$ and does **not** saturate under refinement, for any choice
+of the weighting. That is not a failure of the least-squares framework. It is the
+statement of §7.1 arriving from the ellipticity side — once the momentum row has
+degenerated to $\lVert\mathbf u\rVert^2$ the controlling norm is
+$H(\mathrm{div})$, and an $H^1$ constant measured there is measured against the
+wrong norm and has no reason to be bounded.
 
 A production channel simulation at $Re_\tau=180$ with $\Delta t=8\times10^{-4}$
 has $c=5405$ against $c^\ast\approx10^2$: it is two orders into the second
