@@ -997,15 +997,19 @@ solution to every logged digit:
 |---|---|---|---|
 | CPU, 16 cores | 0.21 s (batched solves) | 70 s | ≈80 s |
 | GB10 | 113 ms (matrix products) | **25.4 s** | 60 s |
-| A100 | 71 ms, 8.3 ms after graph capture | 11.5 s, ≈2 s projected | 22.3 s |
+| A100 | 8.3 ms after graph capture | **2.33 s** | 22.3 s |
+| A100, $p_c=1$ coarse in fp32 | 6.9 ms per iteration | **1.67 s** | — |
 
-Each row's step uses 71 to 72 iterations per stage. The GB10 apply is
+Each row's step uses 72 to 80 iterations per stage. The GB10 apply is
 arithmetic-bound in double precision, and there the patch method is 2.4 times
-faster per step than the running Jacobi simulation it replaced. The A100 apply of
-8.3 ms is at that device's bandwidth floor, where reading the coarse factor alone
-accounts for 4.3 ms; its measured 11.5 s step predates both the matrix-product
-apply and graph capture, and the projection is $213\times9.9\,\mathrm{ms}$ of
-applies plus operator work. The
+faster per step than the running Jacobi simulation it replaced. On the A100 the
+apply is at the bandwidth floor, and reading the coarse factor alone accounted
+for 4.3 ms of it — which the last row removes: a $p_c=1$ coarse space held in
+single precision is 5 GB smaller, costs 11 % more iterations, and reproduces the
+baseline solution in every logged digit, the preconditioner's storage precision
+being free to differ because it does not enter the answer. Between them the two
+rows also confirm the cost model: the coarse factor fell by 5.08 GB and the cost
+per iteration by 3.9 ms, against the 4.3 ms the model attributed to that read. The
 useful summary is that a solve which cost 4675 iterations and 60 seconds per step
 now costs 72 iterations and 25 seconds on the same device, with the remaining
 factor of ten visible in the profile rather than hypothetical.

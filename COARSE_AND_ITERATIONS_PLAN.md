@@ -80,6 +80,37 @@ Fixed, and verified against the exact two-point values — nodes $[-1,1]$, weigh
 $[1,1]$, $D=[[-\tfrac12,\tfrac12],[-\tfrac12,\tfrac12]]$ — with $N=2..12$
 unchanged.
 
+### The channel gate, run on the A100 (2026-09-13) — a1 and a2 ACCEPTED
+
+Ten-step restart from run01, production mesh, both configurations in the same
+session:
+
+| | factors | build | s/step (steps 2–10) | CG/stage | ms per CG iteration | µs per step per dof |
+|---|---|---|---|---|---|---|
+| baseline $p_c=2$, fp64 | 7188 MB | 60.2 s | **2.33** | 77, 72 | 10.8 | 1.51 |
+| cheap $p_c=1$, fp32 | **2107 MB** | 31.4 s | **1.67** | 84, 80 | 6.9 | 1.08 |
+
+**Correctness gate passed.** Every printed digit of both diagnostic lines is
+identical between the two configurations *and* to run01's Jacobi reference —
+$u_\tau$ 0.9937, $U_b$ 15.840, rms$_w$ 0.9201, $E$ 897.30, $\varepsilon$ 103.54,
+div 8.64e−4 at $t=4.961$, and again at $t=4.968$.  The preconditioner changed by
+5 GB and the answer did not change at all, which is the only acceptable outcome.
+
+**The cost model is confirmed quantitatively.** The coarse factor fell 5.08 GB
+(5.3 GB → 0.2 GB, exactly the $13\times$ then $2\times$ predicted), and the cost
+per CG iteration fell 10.8 → 6.9 ms, a drop of 3.9 ms against the 4.3 ms of
+coarse read the model attributed to it.  Iterations rose 72 → 80 (+11 %, against
++5 % on the small rig).  Net 1.40× per step.
+
+**And the baseline itself is now measured, not projected:** 2.33 s/step against
+the 11.5 s in the paper's Section 9, which predated the matrix-product apply and
+graph capture.  The projection made from the 8.3 ms apply was 2.1 s.  Build also
+halved, 60 → 31 s.
+
+At 1.67 s/step a ten-hour session covers ~21,500 steps — 17 eddy turnovers
+against 12 at the baseline, so the remaining run is one or two nights rather
+than two or three.
+
 ### b4's go/no-go gate, run (`scratch/week1_b4_gate.py`)
 
 3D_STATUS.md §7S.3 killed deflation for a reason that would kill GenEO in the
