@@ -1023,7 +1023,7 @@ Fused kernels tuned for one device are not portable: our fused path is 20 times
 that silently falls back to interpretation when a shape cache overflows will hide
 all of this; ours did, until the cache limit was raised.
 
-## 10. Direct numerical simulation, and a necessary exception *(to be written)*
+## 10. Direct numerical simulation, and a necessary exception
 
 **The exception first.** With convection treated explicitly by RKW3, each
 implicit stage is a Stokes *projection* whose right-hand side is not solenoidal.
@@ -1059,8 +1059,91 @@ suit the solver, so the solver has to be built for the step — which is the sam
 statement as the backward-facing step's $c$-sweep in Section 8.4, read from the
 other end.
 
-**The simulation.** Minimal-channel DNS at $Re_\tau=180$, statistics against five
-reference databases. *(Long run pending.)*
+### 10.1 The simulation
+
+A minimal channel in the sense of Jiménez and Moin, $L_x^+=565$ and $L_z^+=192$,
+on $6\times18$ spectral elements at $N=8$ with 32 Fourier modes in the spanwise
+direction — 1,549,823 free unknowns across the seven fields and seventeen
+retained modes. The flow is driven at constant pressure gradient with
+$f_x=u_\tau^2/\delta=1$, so $u_\tau=1$ is prescribed rather than fitted and any
+deviation is an error bar on the whole computation. Convection is explicit RKW3
+at $\Delta t=8\times10^{-4}$, and each of the three implicit stages is solved to
+$10^{-6}$ by conjugate gradients with the condensed vertex-patch preconditioner
+of Sections 8 and 9 — 84 iterations per stage against Jacobi's 4,699.
+
+Starting from a tripped Reichardt profile, the computation was carried to
+$t=30$, that is 30 eddy turnovers since $\delta/u_\tau=1$. The cost was 1.62 s
+per step on an A100 and **14.1 hours in total for the 25 turnovers** reported
+here, at 1,250 steps per turnover.
+
+### 10.2 The averaging window is stationary
+
+Statistics are accumulated as running sums every ten steps, so the average over
+any window is the difference of two snapshots, and the window can be chosen after
+the fact. We use $t=5.2$ to 30, discarding the start-up transient: 24.8
+turnovers, 3,101 samples.
+
+Samples ten steps apart are strongly correlated — the integral time scale of
+$u_\tau$ is 0.51 turnovers — so the window holds about 24 *independent* samples,
+and every error bar below uses that count rather than the nominal one. On that
+footing the record shows no significant trend (0.2 standard deviations across the
+window), its two halves agree to 0.2 standard deviations, and the mean friction
+velocity is $1.0025$ against the prescribed 1, giving $Re_\tau=180.5$.
+
+The strongest internal check needs no reference data at all. For a fully
+developed channel the total stress satisfies
+$-\langle u'v'\rangle^++\mathrm{d}U^+/\mathrm{d}y^+=1-y/\delta$ exactly, and the
+computed profiles close that identity to **0.009** over $5<y^+<163$ — against
+0.032 over the first five turnovers, the improvement expected of a longer
+average. Any error in $u_\tau$, in the forcing balance or in the averaging would
+appear here.
+
+### 10.3 Against the published databases, and against a fractional-step method
+on the same grid
+
+The minimal box reproduces the near-wall cycle and not the outer layer, so
+quantities are scored below $y^+=60\approx L_z^+/3$. Five independent $Re_\tau=180$
+databases disagree with each other by 0.5 to 2 % on these quantities; that spread
+is the floor, and agreement inside it is as good as the reference data allows.
+The last column of the table is the sharper comparison: our own fractional-step
+solver on the *same* box, the *same* mesh and the *same* statistics machinery,
+which isolates the discretisation from the domain.
+
+| quantity | **FOSLS** | fractional step | database mean | database spread | FOSLS error | FS error |
+|---|---|---|---|---|---|---|
+| $u'_{\rm rms}$ peak | 2.706 | 2.841 | 2.664 | 0.5 % | **+1.6 %** | +6.7 % |
+| $v'_{\rm rms}$ peak | 0.857 | 0.866 | 0.845 | 1.7 % | **+1.4 %** | +2.5 % |
+| $w'_{\rm rms}$ peak | 1.054 | 1.041 | 1.092 | 1.0 % | **−3.5 %** | −4.7 % |
+| $-\langle u'v'\rangle^+$ max | 0.729 | 0.735 | 0.726 | 1.5 % | **+0.4 %** | +1.2 % |
+| $U^+$ at $y^+=30$ | 13.853 | 14.028 | 13.860 | 0.6 % | **−0.05 %** | +1.2 % |
+| $Re_\tau$ | 180.45 | 182.66 | 180.04 | 2.2 % | **+0.2 %** | +1.5 % |
+
+(Databases: Moser, Kim & Mansour 1999; Lee & Moser 2015; Vreman & Kuerten 2014;
+del Álamo & Jiménez 2003; Abe, Kawamura & Matsuo 2001.)
+
+Four of the six lie inside the spread of the reference data, and the mean
+absolute deviation is **1.2 %**. The least-squares result is closer to the
+databases than the fractional-step result on **all six quantities**, whose mean
+absolute deviation is 2.9 %. The streamwise peak is the clearest case: a minimal
+box is known to overshoot $u'$, and the fractional-step computation does so by
+6.7 %, while the least-squares computation stays at 1.6 %.
+
+Two qualifications belong with that comparison. The fractional-step window is 15
+turnovers against our 24.8, so part of its larger deviation may be sampling; and
+it ran at $\Delta t=3.5\times10^{-4}$ rather than $8\times10^{-4}$. Neither
+difference plausibly accounts for a 6.7 % bias in $u'$, but they should be stated.
+
+### 10.4 What does not agree
+
+The spanwise fluctuation peak is 3.5 % below the databases, outside their 1.0 %
+spread, and the fractional-step computation on the same grid is 4.7 % below — so
+this is a property of the resolution or the box rather than of the least-squares
+formulation. Above the box-validity line the mean profile runs high at the
+centreline, as a minimal channel must, and there the fractional-step twin sits
+closer than we do; the difference is consistent with the mild damping of the
+smallest scales that this discretisation is independently known to produce. We
+report the near-wall quantities as the result and the outer layer as a limitation
+of the domain.
 
 ## Appendix A. An energy argument and why it is not enough *(to be written)*
 
