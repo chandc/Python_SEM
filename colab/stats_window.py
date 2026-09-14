@@ -86,7 +86,7 @@ def window(b, a=None):
         ser = ser[ser[:, 0] > t0]
     utau = float(ser[:, 1].mean()) if ser.size else 1.0
     nu, y = b['nu'], b['y']
-    return dict(y=y, yp=y*utau/nu, Up=U/utau,
+    return dict(y=y, yp=y*utau/nu, Up=U/utau, nu=nu,
                 urms=np.sqrt(np.maximum(uu - U**2, 0))/utau,
                 vrms=np.sqrt(np.maximum(vv, 0))/utau,
                 wrms=np.sqrt(np.maximum(ww, 0))/utau,
