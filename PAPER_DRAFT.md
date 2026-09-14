@@ -1046,7 +1046,9 @@ $\tau_\eta=\sqrt{\nu/\varepsilon}$ of $5.2\times10^{-3}$ at the wall, while the
 convective CFL of the same field is 1.11 against the RKW3 limit of $\sqrt3$. So
 resolving $\tau_\eta$ to a tenth requires $\Delta t\le5.2\times10^{-4}$ and
 stability permits $1.24\times10^{-3}$: the physical requirement is the tighter of
-the two by a factor of 2.4. The production step $\Delta t=8\times10^{-4}$ sits
+the two by a factor of 2.4. Repeating the measurement eighteen eddy turnovers
+later, on a field with no memory of that one, gives the same verdict with a
+margin of 2.1. The production step $\Delta t=8\times10^{-4}$ sits
 between them, resolving $\tau_\eta$ by a factor of 6.5 at $\Delta t^+=0.14$.
 
 This matters for Section 7 rather than for Section 5. A direct simulation is

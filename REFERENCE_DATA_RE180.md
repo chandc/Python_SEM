@@ -229,9 +229,18 @@ on the true smallest GLL spacing against the RKW3 limit √3.
 |---|---|---|---|---|---|---|---|---|
 | 0002600 | 2.08 | 0.958 | 0.132 | 5.54e−3 | 6.9 | 1.185 | 1.17e−3 | 5.54e−4 |
 | 0006200 | 4.96 | 0.994 | 0.142 | 5.19e−3 | 6.5 | 1.113 | 1.24e−3 | 5.19e−4 |
+| 0028500 | 22.80 | 0.945 | 0.129 | 5.80e−3 | 7.2 | 1.167 | 1.19e−3 | 5.80e−4 |
 
 The minimum of τ_η is at the wall (y⁺ = 0), as it must be; the pointwise minimum
 is 2.7e−3, half the plane-averaged value.
+
+**Re-measured at t = 22.80** (run02, 18 turnovers past run01's end, a field with
+no memory of the one above): the verdict is unchanged and the margin is slightly
+wider.  τ_η rose to 5.80e−3 because the dissipation had fallen from 103.5 to
+90.9 at that instant, so the physical limit relaxed to 5.80e−4 while stability
+allowed 1.19e−3 — physics binds by a factor of 2.05 against 2.39 at t = 4.96.
+Δt⁺ fell to 0.129 with the instantaneous u_τ.  The conclusion therefore does not
+rest on one field or one phase of the bursting cycle.
 
 **Physics binds, by a factor of 2.4.** Resolving the Kolmogorov time to a tenth
 requires Δt ≤ 5.2e−4; RKW3 stability on the same field allows 1.24e−3.  The

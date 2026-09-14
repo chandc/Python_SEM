@@ -541,9 +541,39 @@ def run(out='.', nstep=20000, dt=1.0e-3, every=100, backend_name=None,
     if resume:
         stats.load(z)
 
+    # A CLEAN STOP ON SIGINT.  The Colab supervisor sends one at its wall-clock
+    # budget, and the previous behaviour was a traceback from wherever the signal
+    # happened to land -- which reads like a crash and discarded up to `every`
+    # steps of work.  Handling it as a flag, checked after the step completes,
+    # stops at a point where the state is unambiguously step i+1: nothing is lost
+    # and nothing is replayed.  A second SIGINT restores the default and aborts.
+    import signal as _sig
+    _stop = []
+
+    def _on_sigint(sig, frame):
+        _stop.append(True)
+        _sig.signal(_sig.SIGINT, _sig.SIG_DFL)
+        print('\n  (SIGINT: finishing this step, then checkpointing; '
+              'press again to abort)', flush=True)
+
+    try:
+        _sig.signal(_sig.SIGINT, _on_sigint)
+    except ValueError:
+        pass                                   # not on the main thread; leave it
+
     hist, t0 = [], time.perf_counter()
     for i in range(step0, nstep):
         U, Nprev, it = advance(s_run, U, Nprev, dt, Minv, weighting=weighting, mom_exp=mom_exp)
+        if _stop:
+            Uh = DEV.to_host(U); Nh = DEV.to_host(Nprev)
+            _atomic_savez(f'{out}/checkpoint_{i+1:07d}.npz', U=Uh, step=i+1,
+                          Nprev_re=Nh.real, Nprev_im=Nh.imag, t=(i+1)*dt,
+                          **stats.state())
+            _atomic_savez(f'{out}/diag.npz', hist=np.array(hist))
+            stats.save(f'{out}/stats.npz', s['nu'], dt, (i+1)*dt)
+            msg = f'stopped on request at step {i+1} (t = {(i+1)*dt:.3f}); checkpoint written'
+            print(msg, flush=True); log.write(msg + '\n'); log.close()
+            return
         if not bool(np.all(np.isfinite(DEV.to_host(U)))):
             log.write('BLEWUP\n'); log.close()
             raise SystemExit('non-finite state -- aborting')
