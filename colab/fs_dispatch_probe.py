@@ -20,12 +20,19 @@ the Helmholtz/E solves the projection path actually uses.
 
 So the inherited number is not evidence about THIS solve.  This measures it.
 
-HOW.  `cupyx.profiler.benchmark` reports CPU and GPU time separately for the
-same call.  Applied to the fine-level E operator and to one V-cycle:
+HOW -- AND HOW THE FIRST VERSION OF THIS WAS WRONG.  It compared
+`cupyx.profiler.benchmark`'s cpu_times against its gpu_times and called a ratio
+near 1 "device-bound".  That test cannot discriminate: gpu_times is the elapsed
+time between two CUDA events on the stream, and that interval INCLUDES the idle
+gaps while the host issues the next kernel.  A launch-bound loop and a
+device-bound loop both report gpu ~ cpu.  Measured on an A100 it duly returned
+1.00 for both calls, which says nothing.
 
-    gpu_time / cpu_time near 1   -> the device is the limit; a faster GPU helps
-    gpu_time / cpu_time far below 1 -> the host is the limit; graph capture is
-                                       worth the work and a faster GPU is not
+What does discriminate is kernel-level accounting: sum the time the GPU spends
+inside kernels and compare it with the wall clock.  `nsys` reports both, plus the
+kernel count, so `--nsys` runs the same applies under it.  Without nsys the probe
+still reports the wall time per apply against this problem's bandwidth floor,
+which bounds how much room there is without saying where it went.
 
 The setup is not reimplemented: the production driver runs through `runpy` with
 `--tend` equal to the restart time, so it builds everything and takes zero steps,
@@ -94,13 +101,22 @@ def main():
         b = benchmark(fn, n_repeat=a.repeat, n_warmup=3)
         cpu, gpu = b.cpu_times.mean()*1e3, b.gpu_times.mean()*1e3
         ratio = gpu/max(cpu, 1e-12)
-        verdict = ('DEVICE-bound' if ratio > 0.8 else
-                   'HOST-bound (dispatch)' if ratio < 0.4 else 'mixed')
-        print(f'{name:28s} {cpu:9.3f} {gpu:9.3f} {ratio:9.2f}  {verdict}')
+        print(f'{name:28s} {cpu:9.3f} {gpu:9.3f} {ratio:9.2f}  '
+              f'{"(ratio is uninformative -- see the module docstring)":s}')
 
-    print('\nReading: gpu/cpu well below 1 means the GPU finishes and waits while')
-    print('Python issues the next kernel.  In that regime a faster GPU buys nothing')
-    print('and CUDA-graph capture of the CG inner loop buys most of the wall clock.')
+    # How much room is there?  Bandwidth floor for one fine-level E apply.
+    np_ = r[..., 0].size*r.shape[-1]
+    mb = np_*8/1e6
+    traffic = 2*mb + 4*3*mb                    # G, M^-1, G^T with temporaries
+    floor = traffic*1e6/1.555e12*1e3           # ms at the A100's 1555 GB/s
+    print(f'\npressure field {mb:.1f} MB; generous traffic for one E apply '
+          f'{traffic:.0f} MB -> {floor:.3f} ms at 1555 GB/s')
+    print('So the measured apply is far above the floor.  WHERE it goes needs')
+    print('kernel-level accounting -- rerun with --nsys, or under:')
+    print('  nsys profile --stats=true -t cuda python colab/fs_dispatch_probe.py ...')
+    print('and compare total kernel time with wall time; a large gap is launch')
+    print('overhead (graph capture helps), a small gap with thousands of tiny')
+    print('kernels is fusion (graph capture helps less, kernel work helps more).')
 
 
 if __name__ == '__main__':
