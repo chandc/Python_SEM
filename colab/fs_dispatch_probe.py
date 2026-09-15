@@ -104,6 +104,40 @@ def main():
         print(f'{name:28s} {cpu:9.3f} {gpu:9.3f} {ratio:9.2f}  '
               f'{"(ratio is uninformative -- see the module docstring)":s}')
 
+    # ---- THE TEST THAT DISCRIMINATES, and it needs no nsys ----
+    # The V-cycle already holds the SAME operator at three polynomial orders.
+    # Work per apply scales with the dof count, roughly (p+1)^2 per element;
+    # launch cost does not scale at all.  So:
+    #     time roughly proportional to dofs -> the device is doing the work
+    #     time roughly FLAT across a 9x range of dofs -> the host is the limit
+    # This is the same test `cupy_graph.py` used when it found one matvec costing
+    # "11.45 ms regardless of problem size".
+    if lv and len(lv) > 1:
+        print(f'\n{"level":>7s} {"order":>6s} {"dofs/mode":>11s} {"ms":>9s} '
+              f'{"ms/Mdof":>10s}')
+        base = None
+        for i, l in enumerate(lv):
+            shp = l.shape
+            v = cp.zeros(shp, dtype=cp.float64)
+            v[...] = 1.0
+            v = v*l.mask
+            try:
+                l.A(v)
+                b = benchmark(lambda: l.A(v), n_repeat=a.repeat, n_warmup=3)
+            except Exception as e:
+                print(f'{i:7d} {"?":>6s}  level apply failed: {type(e).__name__}')
+                continue
+            ms = b.cpu_times.mean()*1e3
+            nd = int(np.prod(shp[:-1]))*shp[-1]
+            if base is None:
+                base = (ms, nd)
+            print(f'{i:7d} {getattr(l, "p", "?"):>6} {nd/shp[-1]:11,.0f} {ms:9.3f} '
+                  f'{ms/(nd/1e6):10.2f}')
+        if base:
+            print('\n  flat ms down the levels -> launch-bound: fix by fusing or')
+            print('  capturing the sequence.  ms falling with dofs -> the kernels')
+            print('  are doing real work and the fix is fewer/better kernels.')
+
     # How much room is there?  Bandwidth floor for one fine-level E apply.
     np_ = r[..., 0].size*r.shape[-1]
     mb = np_*8/1e6
