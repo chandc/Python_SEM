@@ -210,7 +210,7 @@ start-up, not only as a paragraph.
 | 4 | Orr–Sommerfeld: $\ln E'$ traces and the growth-rate table | built |
 | 5 | iterations vs polynomial order for Jacobi / block Jacobi / p-multigrid / patch, 2D and 3D | to draw from existing data |
 | 6 | apply time and step time across three machines | to draw |
-| 7 | channel statistics vs the five reference databases | exists for run01, to be redone on the long run |
+| 7 | channel statistics vs the five reference databases | **built** — `colab/section10.py`, four panels (mean, fluctuations, shear stress, total-stress balance) over the $t=5.2$–30 window, with the fractional-step twin and the box-validity line |
 
 ## Venue and shape
 
@@ -223,6 +223,16 @@ The theory is stated as propositions with proofs where they are proofs
 (Level 0), and as measured statements where they are measurements (the
 well-posedness of the scaled limit).  No claim is dressed above its evidence;
 the one place we tried and failed to prove something is reported as such.
+
+## Campaign closed (2026-09-15)
+
+The DNS ran to $t=30$: 37,500 steps, 1.62 s/step, 14.1 h of A100 time for 25
+turnovers.  Averaged over $t=5.2$–30 (24.8 turnovers, ~24 independent samples),
+$u_\tau=1.0025$ against a prescribed 1, the total-stress identity closes to
+0.009, four of six quantities fall inside the mutual spread of the five
+databases, and the result is closer to them than the fractional-step twin on all
+six (mean deviation 1.2 % against 2.9 %).  Sections 1–10 of the draft are
+written; only Appendix A is outlined.
 
 ## Drafting status (2026-09-12)
 
