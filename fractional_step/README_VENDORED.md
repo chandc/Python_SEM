@@ -60,6 +60,36 @@ same mesh.  That is structural — a projection method enforces
 $\int q\,\nabla\!\cdot\!\mathbf u = 0$, and the choice of discrete $E$ changes how
 exactly *that* holds, not whether the pointwise divergence is small.
 
+## Profiling (2026-09-15)
+
+`colab/fs_profile.py` in the parent repository profiles this solver without
+reimplementing its setup: it wraps `CV.convective`, `HH.solve` and
+`project_consistent` on their module objects and then runs
+`scratch/fs_minchan_stats.py` unchanged through `runpy`, so what is timed is the
+production path.  Every phase boundary synchronises the device, since an
+unsynchronised timer on an asynchronous backend measures launch overhead.
+
+**Host-side result** (numpy, 3 steps, E path, production mesh):
+
+| phase | s/step | share | iterations/call |
+|---|---|---|---|
+| convective | 0.21 | 0.2 % | — |
+| velocity Helmholtz | 0.67 | 0.8 % | 6 |
+| **pressure (consistent E)** | **85.0** | **99.0 %** | **82** |
+
+The projection path is one solve.  The velocity Helmholtz is already excellent
+at 6 iterations under the FDM preconditioner, and the explicit terms are free.
+The 82 + 6 iterations per substage also reconcile exactly with the `CG=250-300`
+logged by the E production run, which sums both solves over three substages.
+
+That leaves a single optimisation target, and `lssem3d/epmg.py` explains why it
+is hard: $E = G^{\mathsf T}M^{-1}G$ is a mass-weighted Schur complement, not the
+assembled Laplacian, and a $K$-based V-cycle preconditions it at **465**
+iterations against ~15 for $K$ on its own system.  Building the V-cycle on $E$ at
+every level brought that to 82.  `colab/fs_profile_a100.ipynb` repeats the
+profile on an A100 and sweeps the pressure tolerance to separate a
+tolerance-bound solve from a stagnating V-cycle.
+
 ## Why the comparison is worth running
 
 Costs from the E-run's own log (GB10, CuPy, $\Delta t = 3.5\times10^{-4}$):
