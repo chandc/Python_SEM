@@ -1,0 +1,283 @@
+# LSSEM Solver Improvements
+
+This document summarizes the major improvements, architectural changes, and bug fixes made to the Python Least-Squares Spectral Element Method (LSSEM) solver.
+
+## 1. Performance & Vectorization Upgrades
+
+The original Python port implemented the solver logic via manual `for` loops iterating element-by-element, which was incredibly slow in Python. We applied global vectorization to eliminate these loops:
+
+*   **Fully Batched Operators**: Replaced manual `for` loops across elements with vectorized `np.matmul` and `np.einsum` operations across the entire `(nelem, N, N)` tensor space. This allows numpy to dispatch matrix operations to highly optimized BLAS routines under the hood.
+*   **Exact Analytical Preconditioner**: Replaced the slow, iterative unit-vector approach to building the Jacobi preconditioner with an exact analytical diagonal extraction (`compute_jacobi`). Preconditioner assembly time dropped to near zero.
+*   **Memory Optimization (`SolverState`)**: We introduced the `SolverState` class to centrally manage and preallocate all intermediate work arrays (such as `su`, `c`, `tmp_x`, `u_x`, etc.). This completely eliminates expensive and repetitive memory allocations inside the inner implicit solver loops.
+
+**Result**: The lid-driven cavity simulation ($Re=1000$), which previously required significant time to converge, now reaches steady-state convergence (600+ time steps) in approximately 60 seconds.
+
+## 2. Physics & Boundary Condition Fixes
+
+The solver was upgraded from a simple square domain to support complex fluid dynamics problems, exposing and fixing several critical physics bugs:
+
+*   **Complex Geometry Support**: Successfully set up the multi-block **Backward-Facing Step (BFS)** geometry, properly handling re-entrant corners, block connectivity, and heterogeneous boundary condition assignments across the L-shaped domain.
+*   **Fixed the Drifting Pressure Bug**: Discovered that the outlet boundary condition (`bc=4`) lacked the crucial `p=0` Dirichlet condition in both `apply_bc` and `apply_mask`. Without this, the global pressure field was mathematically unconstrained and allowed to drift, which previously ruined the upstream flow physics and washed out flow features.
+*   **Identified Mass Conservation Defect**: By implementing a custom Gauss-Lobatto quadrature script (`check_mass.py`), we calculated the exact mass fluxes across all boundaries. We conclusively proved that the standard unpenalized LSSEM formulation inherently leaks mass at the step singularity, resulting in a ~400% mass defect that washes out the recirculation bubble. (This sets the stage for adding the $W_{cont}$ continuity penalty).
+
+## 3. Architecture & Infrastructure
+
+The project structure was refactored for better usability and separation of concerns:
+
+*   **Configuration Files**: Moved all hardcoded physical (Reynolds number, timestep) and solver (Newton tolerances, PCG limits) parameters into `.toml` files (`cavity.toml` and `bfs.toml`). The core codebase is now entirely decoupled from specific simulation setups.
+*   **Advanced Diagnostics**: Built robust plotting scripts (`plot_bfs.py`, `plot_intermediate_bfs.py`) capable of loading checkpoint restart files (`.npz`) on the fly, allowing for post-processing and intermediate monitoring without blocking the simulation.
+*   **Plotting Artifact Fixes**: Manually masked the solid step region in our matplotlib configurations to prevent `scipy.interpolate.griddata` from interpolating fake velocities inside the solid wall. This solved the visual illusion of "flow coming out of the wall" seen in early stream plots.
+
+---
+
+# 3D extension and solver correctness — 2026-08
+
+Detail and evidence for everything below live in
+[3D_STATUS.md](./3D_STATUS.md); the plan and its gates are in
+[3D_DEVELOPMENT_PLAN.md](./3D_DEVELOPMENT_PLAN.md). This section is the summary.
+
+## 3b. Net-net
+
+The 3D solver works and is verified at its design order — **2.00**, measured two
+independent ways against exact solutions (Stokes decay for the implicit path,
+Taylor–Green for the **convective** path). Production recipe, each element
+decided by measurement: **legacy row weights, no operator-AC, CG tolerance
+1e−06**. Twelve silent bugs found, **none of which raised an exception**.
+M1–M6 done (M6 = the numba backend, §7); M7 remains, and the recipe was
+measured to survive walls.
+
+## 4. `lssem3d`: 3D via a Fourier basis in z
+
+A **new module**. `lssem2d` is called, never edited — the 3D code reuses its
+mesh, GLL and gather-scatter, and works around the two places the 2D API did not
+fit on the 3D side (`deriv.py` re-derives the contractions rank-agnostically;
+`solver3d.gs` folds `(var, mode)` into one axis rather than reimplementing the
+connectivity).
+
+Eight modules, **144 tests**. Five of seven milestones complete: the operator
+reproduces the 2D cavity at `k_z` = 0 (M2), MMS convergence is spectral in `N`
+and exponential in `Nz` (M4), and the `a_mass`/CFL feasibility gate passes in 3D
+with a window spanning ~66× in `dt` (M5).
+
+## 5. Row weights: the second least-squares scaling, which `lssem3d` lacked
+
+`lssem2d` writes the momentum row as `a_mass·u + a_flux·N(u)` with the
+constraints at weight 1 — so **`a_flux` is the weight of momentum against the
+constraints**, and its legacy setting (`a_mass` = 1, `a_flux` = `dt`) makes every
+row O(1).
+
+`lssem2d` offers **two** scalings: legacy (`a_mass` = 1, `a_flux` = `dt`), which
+the Chan validation uses, and `w_mom` = 1 (`a_mass` = `fac1/dt`, `a_flux` = 1),
+which the cavity and BFS studies use. **`lssem3d` hard-coded the second and had
+no way to express the first** — which is why it could not reproduce a 2D result
+the 2D code produces routinely.
+
+| Stokes decay, AC off, `dt` = 5e−3 | σ | rel err | CG |
+|---|---|---|---|
+| no row weights | 9.31809 | 4.68e−04 | 600000 (cap) |
+| **row weights** | **9.31413** | **4.19e−05** | **22047** |
+
+**27× fewer iterations, 11× more accurate — on this benchmark.**
+
+**The weighting is a problem-dependent choice, not a universal fix.** On the
+$Re = 1000$ cavity the legacy scaling is *27× worse* (688 CG/step against 25), and
+AC there is worth 25 against 12320 without it. The plausible discriminant is
+viscosity: legacy scales the momentum row to `u + β·dt·(p_x + ν∇×ω)`, and at
+$\nu$ = 1e−3 that vorticity coupling is ~3e−7, effectively absent. So AC's value is
+Reynolds-number dependent and AC is **not** dispensable — an earlier claim to the
+contrary, drawn from the Stokes case alone, is withdrawn. Choosing the weighting
+per problem is an open design question, exactly as in 2D.
+
+## 6. Accuracy: the scheme now hits its design order
+
+Validated against **Stokes decay** (Chan 1996 Fig. 1), which has an analytic
+decay rate — so the error is absolute rather than self-referential:
+
+| `dt` | 0.01 | 0.005 | 0.0025 | 0.00125 | order |
+|---|---|---|---|---|---|
+| row weights, no operator-AC | 1.68e−04 | 4.19e−05 | 1.05e−05 | **2.61e−06** | **2.00, 2.00, 2.00** |
+| operator-AC, `κ_p` = `a_mass` | 6.48e−03 | 6.06e−03 | 6.06e−03 | 6.07e−03 | 0.00 |
+
+Exactly the design order — RK3's third order applies to the explicit half alone
+(3.025 measured on the coefficient table); Crank–Nicolson caps the mixed scheme
+at 2. This is the **first PDE-level confirmation**: the earlier temporal gate ran
+on a scalar model with no pressure and no constraint rows.
+
+**For the Stokes benchmark** the configuration is legacy row weights with no
+operator-AC. That does **not** transfer to the cavity or to high Reynolds number
+(§5) — a general production recipe is not yet established.
+
+## 7. Performance
+
+* **Mode-parallel solve** (`lssem3d/parallel.py`): whole PCG solves distributed
+  across `k_z` chunks. **6.7×** at Nz=128 on 12 performance cores.
+* Profiling settled three things by measurement: `normal_op` is **99.4%** of a
+  step (FFT and gather-scatter are not worth optimising); BLAS threading buys
+  nothing (95.51 → 94.84 ms, 1→8 threads); and threads **tie** processes, so the
+  ceiling is memory bandwidth, not the GIL. More cores will not help — which
+  re-aims the numba work at *fusing* passes over the data rather than compiling
+  the existing ones.
+* **Numba backend, and it followed that diagnosis** (`lssem3d/kernels_numba.py`,
+  `backend.py`; 3D_STATUS.md §7M). Compiling the NumPy expression tree would buy
+  nothing — it already calls BLAS. Instead the kernels collapse **~30 passes over
+  the state into one**: `to_complex`, 14 einsums, 8 row assemblies, `wq`, `rw`,
+  `to_real` all become a single loop that accumulates in registers, working in
+  real arithmetic directly on the split-real layout. **3.5–6.2× per matvec**
+  (the gain *falls* with size, as a bandwidth-bound kernel should) and
+  **2.4–4.7× end to end** — the spread is real and its cause is not established,
+  so measure it on your case rather than assuming the microbenchmark number.
+* **Net-net for the day: 21.7×** on the Stage 5 channel (15 steps,
+  646.4 s -> 29.9 s, `E/E0` identical), from row-7 (5.39×) x numba (4.01×) --
+  **28.5×** with the thread pool off. A first report of 12.74× is retracted: one
+  leg of that A/B came from a stored JSON written by an earlier, thermally loaded
+  process instead of being measured back to back (3D_STATUS.md L14).
+* **GPU triage (3D_STATUS.md sec 7N), corrected after a retraction.** The
+  operator is bandwidth bound in FP64, so a port hinges on achieved FP64
+  throughput. **MLX cannot do FP64 on the GPU at all** -- Metal has no double
+  precision, and FP32 is not an escape because the LS normal equations square
+  kappa ~ 1e4. An earlier claim that MLX gave 11x at M7 scale was measuring FP32:
+  `mx.array()` silently downcasts float64 -> float32 and complex128 -> complex64.
+  Retracted (lesson L15: assert the dtype before timing).
+  * The LAN DGX Spark (GB10) is the fastest FP64 device available -- **141.8 GB/s
+    against the Mac's best 33.6**, and the only GPU here with FP64 units.
+  * **But a naive torch port ties what we already run:** ~187 ms estimated at
+    full-M7 shape against the fused numba operator's **171.5 ms measured**. Only
+    a *fused* CUDA kernel would buy the next ~7x, and that is an extrapolation
+    that must be measured before anyone commits to it.
+  * Gather-scatter remains uncosted on any GPU.
+* **The thread pool now LOSES at small mode counts** -- 0.90× for numpy, 0.77×
+  for numba, so `workers=1` is fastest. Not a contradiction of the documented
+  6.7×, which was at Nz=128 (65 modes) against this case's 9: pool overhead is
+  roughly fixed per solve, so a faster matvec moves the crossover. Re-calibrating
+  `parallel.n_workers` **with numba active** is the open item.
+  * `nogil=True` is load-bearing: `parallel.pcg` uses a `ThreadPoolExecutor`, and
+    an njit kernel holding the GIL would have serialised it — correct answers,
+    most of the 6.7× silently gone. `bench_numba_threads.py` gates it.
+  * Verified by 33 parity cases (agreement 0 to 1.7e-16, sweeping `kap`, `rw`,
+    `wq`, `k_z`=0 and ≠0, `facx`≠`facy`) and by reproducing the analytic Stokes
+    decay rate to **8 significant figures** on both mode families.
+  * Opt in: `LSSEM3D_BACKEND=numba` or `lssem3d.set_backend('numba')`. An
+    unavailable backend **raises** rather than falling back — a silent fallback
+    turns a missing dependency into a mysterious 4× slowdown.
+  * The 2D module's caveat — per-operator parity does not imply agreement on
+    *accumulated* states, measured as a 1.8× discrepancy on 2D Poiseuille — was
+    re-tested rather than inherited. In 3D the drift is **flat at ~3e-13 over
+    200 steps**. That covers transients, not the steady Newton fixed point where
+    the 2D failure occurred; treat it as open for steady 3D runs.
+* **Jacobi diagonal assembled across elements** — the probe returned
+  `diag/multiplicity`, so `1/diag` over-weighted every element-boundary node by
+  2–4×. Worth **1.41–1.44×** fewer CG iterations.
+
+## 8. Correctness fixes
+
+| fix | why it mattered |
+|---|---|
+| **Row weights** (§5) | the functional itself was mis-scaled |
+| **Jacobi probe contamination** | probing the *assembled* operator with a discontinuous unit vector folded off-diagonal couplings into the diagonal — 1.4% error at every interface node. Probing unassembled and keeping the gather is exact (0.0) |
+| **Nyquist imaginary half unconstrained** | `fourier.py` stated the invariant and tests asserted it, but nothing *enforced* it in the solve; `irfft` discards those components, so CG was filling a physically invisible direction |
+| **True-residual safeguard in `pcg`** | the recursive residual drifts over 10⁴ iterations; CG could declare victory on a number that no longer described the iterate. Now verified against `b − A x`, restarts on drift, and reports the true residual |
+| **Pressure pin covered one copy of a shared node** | on a periodic seam the pinned node is shared 2–4 ways, so the global dof was never pinned *and* the mask disagreed with itself across copies — making the assembled operator **non-symmetric**, which CG requires. Symmetry error 1.5e−07 at multiplicity 2, 5.9e−05 at 4; exactly zero once every copy is pinned. On Taylor–Green it was a **240× error floor** that made the convection-active order measurement impossible |
+| **Jacobi diagonal built by probing** | `2·7·(N+1)²` operator applications per stage — **34–41% of every run**, growing as N². The analytic closed form matches the probed oracle to **3e−16** and is **2000–21000× faster** (168 s → 0.008 s at N=12, `nk`=33) |
+| **CG over-solving** | every 3D solve ran at `tol` = 1e−12 while the 2D driver uses an inexact 1% solve (`cgsfac` = 0.01). Measured policy: **1e−06 costs nothing and saves ~40% of the iterations** |
+| **`jacobi_inverse`** | `1.0/np.maximum(d, 1e-30)` put **1e30** at every prescribed dof and survived only because the masked residual is exactly zero. Now exactly 0 there, and it *raises* on a negative diagonal rather than clamping a bug into a live multiplier |
+
+Twelve distinct bugs have been found in the 3D work so far and **not one raised
+an exception** — every one produced a correctly-shaped, plausible array.
+
+## 8b. The time-splitting is now verified end to end
+
+The last unverified path was the explicit RK3 convective half, which no test
+reached: the Stokes capstone runs with convection **off by construction**, and
+the order-3.025 explicit result runs on a scalar model that bypasses the
+convective assembly entirely. **Taylor–Green decay** — an exact unsteady
+Navier–Stokes solution where `u·∇u` is balanced pointwise by the pressure
+gradient — closes it:
+
+| `dt` | 0.1 | 0.05 | 0.025 | 0.0125 | order |
+|---|---|---|---|---|---|
+| L2 velocity error | 2.53e−06 | 6.33e−07 | 1.58e−07 | 3.95e−08 | **2.00, 2.00, 2.00** |
+
+Supporting: `CV.convective` is spectrally exact against the analytic `u·∇u`
+(4.9e−13 at N = 16), and `mesh.periodic_y` — unused anywhere in the repo until
+this test — is spectrally accurate.
+
+## 8b2. The largest single fix: a redundant row that 2D does not have
+
+Found by asking **why 2D never had these conditioning problems**, given that 3D
+solves a series of 2D problems in Fourier space. That reframing found in three
+measurements what six preconditioner experiments had not.
+
+At `k_z` = 0 the softest eigenmodes of the preconditioned operator carry **100%
+of their energy in `ω_x, ω_y`** and none in `u, v, w, ω_z, p`. Those two fields
+appear in exactly one row 2D lacks: **`∇·ω = 0`**. It is *redundant* — implied by
+`ω = ∇×u` — but at weight 1 it loads their Jacobi diagonal with
+derivative-squared terms while contributing **nothing** to `A` for
+divergence-free vorticity. Large denominator, zero numerator, near-null cluster.
+
+`operator.ROW7_WEIGHT = 1e-4`:
+
+| p | 4 | 6 | 8 | 10 |
+|---|---|---|---|---|
+| cond, w7 = 1 | 4.24e5 | 5.55e6 | 3.95e7 | 1.82e8 |
+| cond, w7 = 1e−4 | 3.04e3 | 1.01e4 | 2.74e4 | 6.32e4 |
+| **gain** | 139× | 552× | 1442× | **2885×** |
+
+**10.5× faster** on a channel with genuine transverse vorticity (11132 → 1063
+iterations), solution unchanged to 1.9e−07, `div ω` still nine orders below
+`|ω|`, and the gain **grows with N**.
+
+It also explains the three preconditioners that failed (§8c): Jacobi cannot
+rescale a near-null mode, block-Jacobi is still pointwise and the cluster is a
+*global* mode, and the p-MG V-cycle stalled at reduction factor exactly 1.0000 on
+those same modes. **One structural defect; three remedies aimed at the symptom.**
+
+**Re-validated, and the asymmetry is the point.** Stage 5 (channel,
+`max|ω_x|`≈8): 3577 → 649 CG/step, 5.4× faster, physics agreeing to 4.13e−10.
+M2 (cavity, `ω_x = ω_y ≡ 0`): **bit-for-bit identical**, 0.000e+00 relative
+difference. Same for Stokes decay and Taylor–Green at `k_z` = 0. A fix that sped
+up everything would be suspicious; this one delivers 5.5× exactly where its
+mechanism applies and provably nothing where it does not.
+
+Not free: a Taylor–Green error floor near 5e−08 appears once the temporal error
+drops below it (order 2.00 → 1.72 at the finest `dt`). That floor is a step
+change from w7 = 1, not a function of the value below it. Problems whose
+transverse vorticity is identically zero see no speed-up at all.
+
+## 8c. Preconditioning: a negative result, established properly
+
+Block-Jacobi (1.10×/1.00×/0.89×) and 3-level p-multigrid (V-cycle factor 0.99,
+unchanged by an exact direct coarse solve) were both implemented, verified
+correct, and **not adopted**. The reason is the operator, not the methods: dense
+spectra at matched parameters give cond = 1.75e8 at p=2 rising to 7.04e9 at p=8,
+so **the ill-conditioning is intrinsic at every polynomial order** and
+p-coarsening yields a coarse problem that is still nearly singular.
+
+Getting there took four wrong turns, all from measurements that depended on
+something other than the thing under test — a random right-hand side, a
+preconditioner's arbitrary scaling, mismatched parameters. See `3D_STATUS.md`
+L12: *reach for the invariant measurement first*.
+
+## 9. Gates that were wrong as written
+
+Four acceptance criteria would each have **failed correct code**. Recording them
+was as valuable as the fixes:
+
+| stated criterion | measurement |
+|---|---|
+| "RKW3 temporal slope 3.0 ± 0.15" | unachievable — CN caps the mixed scheme at 2 |
+| "iterations should fall with `k_z`; flat means a bad preconditioner" | flat is *correct* at production `a_mass`: `ν·k_z²` = 1.42 against 1200 |
+| "M5 feasibility closed" | closed on **2D** evidence, for a plan whose own risk register rates that transfer as high risk |
+| "AC is the enabling technology" | true for the 2D outflow case; in 3D it was compensating for §5 |
+
+## 10. 2D solver
+
+* **Dong (2015) outflow BC** as `bc = 6`, tested through the full ladder — it
+  beats P+Z decisively on truncated domains.
+* **Jacobi diagonal built at the solve linearisation**, and the dead per-step
+  build removed: `newton_step` had been building `M_inv` from the linearisation
+  at `U/2` while solving against the Jacobian at full `U`, and `step_bdf`
+  computed a diagonal every step that `newton_step` immediately shadowed.
+
+The 2D legacy weighting (`a_mass` = 1, `a_flux` = `dt`) is what the Chan (1996)
+validation depends on — it is the canary for any future change to the weighting
+path.

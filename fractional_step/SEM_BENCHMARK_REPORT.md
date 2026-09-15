@@ -1,0 +1,141 @@
+# Spectral Element Method (SEM) Benchmarking Report
+
+This report documents our findings from developing and benchmarking a highly optimized, matrix-free Spectral Element Method (SEM) solver for the 2D Poisson equation on Apple Silicon.
+
+> **⚠️ Partially superseded (2026-08-02).** The Fortran timings in §5, and the
+> NumPy-vs-Fortran conclusions in §4 and §6, were produced with a Fortran build in which
+> `-framework Accelerate` was linked but **inert** (gfortran needs `-fexternal-blas` to
+> route `MATMUL` to BLAS). The "NumPy ties compiled Fortran" claim is an artifact of that
+> build; correctly built, Fortran is ~1.3× faster at `p=15`. §4's statement that NumPy
+> dispatches to *Accelerate* is also incorrect — this NumPy is built on **OpenBLAS**.
+> See **[FORTRAN_VS_NUMPY_BENCHMARK.md](./FORTRAN_VS_NUMPY_BENCHMARK.md)** for corrected
+> measurements. Sections 1–3 (problem, architecture, formulation) and §7 (GPU scaling)
+> are unaffected.
+
+## 1. The Test Problem
+
+To rigorously test both the accuracy and performance of the solver, we used a highly oscillatory exact solution:
+
+$$
+u(x,y) = \sin(4\pi x) \sin(4\pi y)
+$$
+
+This function exhibits $4$ full wave cycles across the computational domain $\Omega = [-1, 1] \times [-1, 1]$. Because the waves are dense, low-order numerical methods suffer from severe "dispersion errors" unless the mesh is extremely fine. By using a high-order spectral method, we demonstrated that we can keep a coarse mesh ($5 \times 15 = 75$ elements) and simply elevate the polynomial degree $p$ to achieve perfect exponential convergence (spectral accuracy).
+
+## 2. Solver Architecture: Matrix-Free PCG
+
+The core of our solver uses the **Preconditioned Conjugate Gradient (PCG)** algorithm. 
+
+To maximize memory bandwidth and performance, the solver is entirely **matrix-free**:
+- We never construct the massive global sparse matrix $A$.
+- The stiffness operator $A x$ is evaluated locally on each element via a highly efficient tensor contraction: 
+
+$$
+v_{local} = K_{1dx} u M_{1dy}^T + M_{1dx} u K_{1dy}^T
+$$
+
+- Global $C^0$ continuity is enforced on the fly using a **Direct Stiffness Summation (DSS)** routine that shares residual boundary values with nearest-neighbor elements.
+- We constructed a **Jacobi (Diagonal) Preconditioner** mathematically by extracting the algebraic diagonal of the local operator and applying the DSS algorithm to it, taming the $\mathcal{O}(p^4)$ condition number scaling of spectral elements without assembling any matrices.
+
+## 3. Mathematical Formulation
+
+The 2D Poisson equation is given by:
+
+$$
+-\nabla^2 u(x,y) = f(x,y) \quad \text{on } \Omega
+$$
+
+Subject to homogeneous Dirichlet boundary conditions $u = 0$ on $\partial\Omega$. 
+
+In the Spectral Element Method (SEM), we decompose the domain into quadrilateral elements $\Omega_e$. Multiplying by a test function $v$ and integrating by parts yields the weak form on each element:
+
+$$
+\int_{\Omega_e} \nabla u \cdot \nabla v \, d\Omega = \int_{\Omega_e} f v \, d\Omega
+$$
+
+We map each element to a reference domain $[-1, 1]^2$ and approximate $u$ and $v$ using tensor products of 1D Lagrange polynomials based on Gauss-Lobatto-Legendre (GLL) nodes. 
+
+By applying GLL quadrature (where the quadrature nodes coincide with the interpolation nodes), the mass matrix becomes perfectly diagonal. The discrete local operator acting on an element's nodal values $\mathbf{u}_e$ is expressed via the 1D Mass matrix $\mathbf{M}$ and 1D Stiffness matrix $\mathbf{K}$:
+
+$$
+(\mathbf{A}_e \mathbf{u}_e)_{i,j} = \sum_{m,n} ( M^{1D}_{y; j,m} K^{1D}_{x; i,n} + K^{1D}_{y; j,m} M^{1D}_{x; i,n} ) u_{e; n,m}
+$$
+
+This can be written compactly as a matrix equation using tensor contractions:
+
+$$
+\mathbf{V}_e = \mathbf{K}_{1Dx} \mathbf{U}_e \mathbf{M}_{1Dy}^T + \mathbf{M}_{1Dx} \mathbf{U}_e \mathbf{K}_{1Dy}^T
+$$
+
+where $\mathbf{U}_e$ is a $(p+1) \times (p+1)$ matrix of the local nodal values.
+
+## 4. The NumPy Performance Trick
+
+The matrix-free tensor contraction equation above is the core computational kernel of our solver. 
+A naive implementation would loop over the elements and perform nested loops for the matrix multiplications. Earlier in our development, we attempted to use **Numba** (`@njit(parallel=True)`) to parallelize explicit `for` loops across the elements. However, this caused severe thread contention and performance degradation on Apple Silicon because the manual threading was fighting with Apple's highly optimized hardware threads.
+
+The **NumPy Performance Trick** we utilized is to strip away all manual parallelization and rely exclusively on NumPy's `@` operator (matrix multiplication) inside a simple, single-threaded Python loop over the elements. Because $\mathbf{M}$ and $\mathbf{K}$ are contiguous $(p+1) \times (p+1)$ arrays, NumPy bypasses Python completely and delegates the tensor contraction `K_1dx @ u @ M_1dy.T` directly to Apple's **Accelerate BLAS framework**. 
+
+Apple's BLAS is written in heavily optimized Assembly and inherently manages its own multi-threading across the M-series Performance (P) and Efficiency (E) cores at the hardware level. By feeding these small, dense matrix multiplications directly to Accelerate BLAS without interference, NumPy executed the $p=15$ global solve in just $\sim 0.05$ seconds, successfully matching the raw speed of compiled Fortran!
+
+## 5. Performance Sweep Results
+
+We ran a $p$-refinement sweep from $p=3$ to $p=15$ and timed the solver execution across four different numerical backends:
+1. **NumPy** (CPU - Accelerate BLAS)
+2. **MLX** (CPU - Compiled Apple Silicon Backend)
+3. **PyTorch** (CPU)
+4. **Modern Fortran** (Compiled - Accelerate BLAS)
+
+### Tabulated Data
+
+| Polynomial Degree ($p$) | Global Nodes ($N$) | Error ($L_\infty$) | MLX CPU (s) | NumPy (s) | PyTorch (s) | Fortran (s) |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| 3 | 736 | 6.25588e-02 | 0.03563 | 0.01335 | 0.03494 | 0.01059 |
+| 4 | 1281 | 1.29143e-02 | 0.04173 | 0.01880 | 0.04096 | 0.01014 |
+| 5 | 1976 | 2.01602e-03 | 0.04491 | 0.01960 | 0.04551 | 0.01739 |
+| 6 | 2821 | 2.77314e-04 | 0.04906 | 0.02656 | 0.04961 | 0.02336 |
+| 7 | 3816 | 3.40327e-05 | 0.04772 | 0.02631 | 0.10753 | 0.03237 |
+| 8 | 4961 | 3.71951e-06 | 0.05290 | 0.04365 | 0.11917 | 0.04137 |
+| 9 | 6256 | 3.89064e-07 | 0.05796 | 0.04488 | 0.11787 | 0.05178 |
+| 10 | 7701 | 3.56790e-08 | 0.06607 | 0.05544 | 0.12767 | 0.06628 |
+| 11 | 9296 | 3.25024e-09 | 0.07058 | 0.05775 | 0.13344 | 0.07979 |
+| 12 | 11041 | 2.58225e-10 | 0.08147 | 0.06569 | 0.14183 | 0.09730 |
+| 13 | 12936 | 2.09169e-11 | 0.08458 | 0.06850 | 0.14474 | 0.11809 |
+| 14 | 14981 | 1.63609e-11 | 0.08722 | 0.06694 | 0.16423 | 0.14112 |
+| 15 | 17176 | 1.26730e-11 | 0.08126 | 0.05352 | 0.15350 | 0.17069 |
+
+### Convergence Plot
+
+![p-Refinement Convergence Plot](./p_convergence_2d_plot.png)
+
+## 6. Key Takeaways and Framework Analysis
+
+### The Accuracy Floor
+At $p=3$, the mesh completely failed to resolve the waves ($L_\infty \approx 0.06$). As $p$ increased, the error plummeted exponentially until it hit a hard floor around $1.2 \times 10^{-11}$ at $p=15$. This floor is not caused by the PCG solver failing to converge, but rather by **quadrature aliasing error**. We integrate the highly oscillatory forcing function using GLL quadrature nodes (which perfectly integrate polynomials of degree $2p-1$). The error in numerically integrating high-frequency sine waves using polynomials in 64-bit floating point math restricts us to this $10^{-11}$ floor.
+
+### Framework Performance Rankings
+1. **NumPy & Fortran (Tie - Fastest):** NumPy on the CPU is incredibly fast ($\sim 0.05$s at $p=15$), practically tying the raw compiled Fortran. This occurs because the bulk of the matrix-free computational work lies in the local tensor contractions (matrix multiplications), which NumPy immediately delegates to the highly optimized Apple Accelerate BLAS library written in C/Assembly.
+2. **Apple MLX (Runner-up):** The MLX framework performed exceptionally well ($\sim 0.08$s). By utilizing `@mx.compile`, the entire PCG loop was compiled into a single execution graph, mitigating Python dispatch overhead. While slightly slower than raw BLAS on the CPU for these specific problem sizes, MLX's graph compilation provides massive scalability benefits for larger tensor networks.
+3. **PyTorch CPU (Slowest):** Un-compiled PyTorch executing tight loops on the CPU was the slowest ($\sim 0.15$s). PyTorch incurs high Python dispatch overhead per tensor operation. Without fusing the kernels, PyTorch is inefficient for high-frequency small loops on a CPU. **However, this implementation is invaluable:** by simply flipping the device flag to `cuda`, this exact code can be dropped onto an NVIDIA Blackwell or Hopper GPU to execute natively on dedicated FP64 datacenter hardware for massive scaling.
+
+## 7. GPU Scaling (NVIDIA A100)
+
+To test the scaling limits of the solver, we deployed the PyTorch benchmark on an NVIDIA A100 Datacenter GPU via Google Colab. We significantly increased the problem size to a $30 \times 30$ element grid at polynomial degree $p=15$, resulting in **203,401 global Degrees of Freedom (DOFs)**.
+
+### Benchmark Results (203,401 DOFs)
+
+| Backend | Time (s) | Iterations |
+| :--- | :--- | :--- |
+| **NumPy (CPU - Accelerate)** | 0.744 s | 101 |
+| **PyTorch (CPU)** | 0.305 s | 101 |
+| **PyTorch (CUDA - Uncompiled)** | 0.107 s | 101 |
+| **PyTorch (CUDA - Compiled)** | 0.066 s | 101 |
+
+### Architectural Insights
+
+1. **The Cache Cliff (NumPy Drops Off):** At 200,000 DOFs, the matrix sizes exceed the L2/L3 cache limits of the CPU. NumPy (Accelerate BLAS) becomes bottlenecked by main memory bandwidth and drops to last place.
+2. **CPU Multi-Threading (PyTorch CPU):** PyTorch on the CPU shines here, running more than twice as fast as NumPy. The PyTorch ATen backend handles thread dispatch for large out-of-cache tensor workloads much more efficiently.
+3. **GPU Memory Bandwidth (PyTorch CUDA):** Offloading the solver to the Nvidia A100 GPU slashes the time to 0.107s. The massive 1.5+ TB/s memory bandwidth of the datacenter GPU effortlessly chews through the 200,000 DOFs.
+4. **Kernel Fusion (PyTorch Compiled):** By using `torch.compile` to fuse the PCG loop (matrix multiplications, Direct Stiffness Summation, additions, and masking) into monolithic CUDA kernels, we eliminated Python dispatch overhead entirely. This resulted in a blistering **0.066s** execution time—an **11.2x speedup** over NumPy.
+
+This perfectly demonstrates the value of the matrix-free tensor formulation: the solver runs efficiently on an Apple M-series laptop for prototyping, yet scales seamlessly onto Datacenter GPUs for massive workloads.

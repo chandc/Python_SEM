@@ -1,0 +1,462 @@
+"""Checkpointed, restartable TGV driver for the CuPy/GPU path.
+
+    python scratch/tgv_gpu_run.py <case> --outdir DIR [--budget SEC] [--price]
+
+Built for Colab, whose VMs expire: a run survives as a chain of sessions, each
+resuming the last checkpoint, working until its wall-clock budget is nearly
+spent, checkpointing, and exiting with a message saying whether more sessions
+are needed.
+
+WHY RESTARTS ARE EXACT HERE.  RKW3's first stage has ZETA[0] = 0, so the
+convective history N_prev is multiplied by zero at the top of every step and
+carries no information ACROSS steps.  A checkpoint taken between steps
+therefore needs only the state and the time -- no history, no stage index --
+and a restarted run is bit-identical to an uninterrupted one, not merely
+close.  `--selftest` proves that rather than asserting it.
+
+WHAT IS WRITTEN (all to --outdir, which on Colab should be under Drive):
+    chk_latest.npz   float64 state + t + step + config fingerprint
+    chk_prev.npz     the previous one, kept so a crash mid-write cannot
+                     destroy the only copy
+    diag.csv         appended every step: t, E, Omega, balance, max|u|, CG
+    frame_####.npz   complex64 snapshots for movies, every `snap` time units
+
+Checkpoints are written to a temporary name and renamed, so a checkpoint file
+is either complete or absent -- never half-written.
+"""
+import argparse, os, sys, time
+sys.path.insert(0, '.'); sys.path.insert(0, 'scratch')
+import numpy as np
+
+import lssem3d
+from lssem3d import device as DEV
+from lssem2d.mesh import build_channel
+from lssem2d.lgl import diff_matrix
+from lssem3d import (operator as OP, solver3d as S3, bc as BC, fourier as FR,
+                     convect as CV, timestep as T)
+
+L = 2*np.pi
+
+
+class Ops:
+    """The handful of array calls where numpy, cupy and torch actually differ.
+
+    Everything else in this driver goes through lssem3d's own DEV shim or is
+    backend-agnostic already.  Kept deliberately small: the temptation is to
+    build a general abstraction layer, but only five calls need one.
+    """
+
+    def __init__(self, name):
+        self.name = name
+        if name == 'torch':
+            import torch
+            self.t = torch
+            self.dev = 'cuda' if torch.cuda.is_available() else 'cpu'
+        elif name == 'cupy':
+            import cupy
+            self.t = cupy
+        else:
+            self.t = np
+
+    def to_dev(self, a):
+        if self.name == 'torch':
+            return self.t.as_tensor(np.ascontiguousarray(a)).to(self.dev)
+        if self.name == 'cupy':
+            return self.t.asarray(a)
+        return a
+
+    def to_host(self, a):
+        if self.name == 'torch':
+            return a.detach().cpu().numpy()
+        if self.name == 'cupy':
+            return self.t.asnumpy(a)
+        return np.asarray(a)
+
+    def zeros_c(self, shape, like):
+        if self.name == 'torch':
+            return self.t.zeros(tuple(shape), dtype=self.t.complex128,
+                                device=like.device)
+        return self.t.zeros(tuple(shape), dtype=complex)
+
+    def cat(self, arrs, axis):
+        return (self.t.cat(arrs, dim=axis) if self.name == 'torch'
+                else self.t.concatenate(arrs, axis=axis))
+
+    def mem(self):
+        """(pool used, pool reserved, device used, device total) in GiB."""
+        if self.name == 'cupy':
+            mp = self.t.get_default_memory_pool()
+            free, total = self.t.cuda.runtime.memGetInfo()
+            return (mp.used_bytes()/2**30, mp.total_bytes()/2**30,
+                    (total-free)/2**30, total/2**30)
+        if self.name == 'torch' and self.dev == 'cuda':
+            free, total = self.t.cuda.mem_get_info()
+            return (self.t.cuda.memory_allocated()/2**30,
+                    self.t.cuda.memory_reserved()/2**30,
+                    (total-free)/2**30, total/2**30)
+        return None
+
+    def sync(self):
+        if self.name == 'torch' and self.dev == 'cuda':
+            self.t.cuda.synchronize()
+        elif self.name == 'cupy':
+            self.t.cuda.Stream.null.synchronize()
+
+
+CASES = {
+    # The CORIA-CFD benchmark case (TGV_VALIDATION.md sec 9): Re = 1600,
+    # integrated to t = 20, referenced to a 512^3 pseudo-spectral solution.
+    # 16x16 elements at N = 8 gives 128 unique points per periodic direction.
+    're1600_128': dict(nu=6.25e-4, N=8, ex=16, ey=16, nz=128, tend=20.0,
+                       snap=1.0, cfl=1.0, tol=1e-6),
+    # Reproduces the Mac's 88^3 Re = 800 run -- a cross-check of the GPU path
+    # against a trajectory already recorded on CPU.
+    're800_88':   dict(nu=1/800., N=8, ex=11, ey=11, nz=88, tend=4*np.pi,
+                       snap=1.0, cfl=1.0, tol=1e-6),
+    # Tiny, for exercising the restart machinery itself in seconds.
+    'smoke':      dict(nu=0.01, N=8, ex=3, ey=3, nz=16, tend=0.4,
+                       snap=0.1, cfl=1.0, tol=1e-8),
+}
+
+
+def setup(cfg, xp, ops):
+    m = build_channel(L, L, cfg['ex'], cfg['ey'], cfg['N'], bcs=(0, 0, 0, 0))
+    m.periodic_x = L; m.periodic_y = L; m.compute_global_indices()
+    nz = cfg['nz']; nk = nz//2 + 1
+    mask = BC.build_mask(m, nk, pin_p=False, nz=nz)
+    BC.pin_dof(m, mask, OP.P_, 0)
+    n = cfg['N'] + 1
+    X = np.empty((m.nelem, n, n)); Y = np.empty_like(X)
+    for e in range(m.nelem):
+        X[e] = m.xnod[e][:, None]; Y[e] = m.ynod[e][None, :]
+    g = ops.to_dev
+    return dict(m=m, D=diff_matrix(cfg['N']), N=cfg['N'], nz=nz, nk=nk,
+                nu=cfg['nu'], kz=FR.wavenumbers(nz, L), mask=mask, X=X, Y=Y,
+                zpl=(L/nz)*np.arange(nz), xp=xp, g=g, ops=ops,
+                Dg=g(diff_matrix(cfg['N'])), kzg=g(FR.wavenumbers(nz, L)),
+                fxg=g(m.facx), fyg=g(m.facy), wqg=g(m.wq), maskg=g(mask))
+
+
+def ic_tgv(s):
+    m, n, nz = s['m'], s['N']+1, s['nz']
+    x = s['X'][..., None]; y = s['Y'][..., None]
+    z = s['zpl'].reshape(1, 1, 1, -1)
+    P = np.zeros((m.nelem, n, n, OP.NVAR, nz))
+    P[..., OP.U_, :] = np.sin(x)*np.cos(y)*np.cos(z)
+    P[..., OP.V_, :] = -np.cos(x)*np.sin(y)*np.cos(z)
+    P[..., OP.OX_, :] = -np.cos(x)*np.sin(y)*np.sin(z)
+    P[..., OP.OY_, :] = -np.sin(x)*np.cos(y)*np.sin(z)
+    P[..., OP.OZ_, :] = 2*np.sin(x)*np.sin(y)*np.cos(z)
+    P[..., OP.P_, :] = (1/16.)*(np.cos(2*x) + np.cos(2*y))*(np.cos(2*z) + 2.)
+    return OP.to_real(FR.to_modes(P))
+
+
+def precond(s, dt):
+    m = s['m']
+    shape = (m.nelem, s['N']+1, s['N']+1, OP.NVAR_R, s['nk'])
+    out, rws = [], []
+    for k in range(T.NSTAGE):
+        cc = T.implicit_coeff(dt, k)
+        rw = OP.momentum_row_weights(cc)
+        rws.append(s['g'](rw))
+        out.append(s['g'](S3.jacobi_inverse(S3.jacobi_diagonal_analytic(
+            shape, s['D'], m.facx, m.facy, s['kz'], s['nu'], cc, m, s['mask'],
+            m.wq, 0.0, rw=rw), s['mask'])))
+    return out, rws
+
+
+def stage(s, U, Nprev, k, dt, Minv, rw, tol, max_iter=60000,
+          check_every=1):
+    xp = s['xp']
+    m, D, kz, mask, nu, nz = (s['m'], s['Dg'], s['kzg'], s['maskg'], s['nu'],
+                              s['nz'])
+    c = T.implicit_coeff(dt, k)
+    Uc = OP.to_complex(U)
+    Nk = -CV.convective(Uc, D, s['fxg'], s['fyg'], kz, nz)
+    # UNWEIGHTED L0 rows, for the explicit viscous term.  Routed through the
+    # bound backend's apply_L with c = 0 and no weights, rather than
+    # OP.apply_L0_complex: that function uses the DEV shim for its derivatives
+    # but allocates its OUTPUT with numpy, so it cannot take tensors.  Going
+    # through apply_L also means each backend uses its own fast path -- the
+    # fused kernel on cupy, the compiled one on torch.
+    R0r = OP.apply_L(U, D, s['fxg'], s['fyg'], kz, nu, 0.0)
+    R0 = R0r[..., :OP.NROW, :] + 1j*R0r[..., OP.NROW:, :]
+    Lk = -R0[..., 4:7, :]
+    ops = s['ops']
+    fc = ops.zeros_c(tuple(Uc.shape[:-2]) + (OP.NROW, Uc.shape[-1]), Uc)
+    for row, fld in ((4, OP.U_), (5, OP.V_), (6, OP.W_)):
+        i = row - 4
+        fc[..., row, :] = c*(Uc[..., fld, :] + dt*(
+            T.GAMMA[k]*Nk[..., i, :] + T.ZETA[k]*Nprev[..., i, :]
+            + T.ALPHA[k]*Lk[..., i, :]))
+    f = ops.cat([fc.real, fc.imag], -2)
+    wq = s['wqg']
+    fw = ops.cat([rw, rw], 0).reshape((1, 1, 1, f.shape[-2], 1))
+    r = OP.apply_LT(
+        OP.apply_L(U, D, s['fxg'], s['fyg'], kz, nu, c, wq, 0.0, rw)
+        - f*wq[..., None, None]*fw, D, s['fxg'], s['fyg'], kz, nu, c, 0.0)
+    b = -S3.gs(m, r)*mask
+    dU, it, _ = S3.pcg(b, D, s['fxg'], s['fyg'], kz, nu, c, mesh=m, mask=mask,
+                       M_inv=Minv[k], tol=tol, max_iter=max_iter, wq=wq, rw=rw,
+                       check_every=check_every)
+    return U + dU, Nk, it
+
+
+def diagnostics(s, U):
+    xp = s['xp']
+    P = FR.to_physical(OP.to_complex(U), s['nz'])
+    wz = L/s['nz']; wq = s['wqg'][..., None]
+    E = 0.5*wz*sum(float(xp.sum(xp.abs(P[..., f, :])**2*wq))
+                   for f in (OP.U_, OP.V_, OP.W_))
+    Om = 0.5*wz*sum(float(xp.sum(xp.abs(P[..., f, :])**2*wq))
+                    for f in (OP.OX_, OP.OY_, OP.OZ_))
+    mx = float(xp.abs(P[..., :3, :]).max())
+    return E, Om, mx
+
+
+def fingerprint(cfg):
+    return '|'.join(f'{k}={cfg[k]}' for k in sorted(cfg))
+
+
+def save_checkpoint(outdir, U, t, step, dt, cfg, ops):
+    """Atomic, with one generation of history kept."""
+    Uh = ops.to_host(U)
+    tmp = os.path.join(outdir, 'chk_tmp.npz')
+    latest = os.path.join(outdir, 'chk_latest.npz')
+    prev = os.path.join(outdir, 'chk_prev.npz')
+    np.savez(tmp, U=Uh, t=t, step=step, dt=dt, fp=fingerprint(cfg))
+    if os.path.exists(latest):
+        os.replace(latest, prev)
+    os.replace(tmp, latest)          # rename is atomic: never half-written
+
+
+def load_checkpoint(outdir, cfg):
+    for name in ('chk_latest.npz', 'chk_prev.npz'):
+        p = os.path.join(outdir, name)
+        if not os.path.exists(p):
+            continue
+        try:
+            d = np.load(p, allow_pickle=False)
+        except Exception as e:
+            print(f'  {name} unreadable ({e}); trying the previous one')
+            continue
+        if str(d['fp']) != fingerprint(cfg):
+            sys.exit(f'ERROR: {name} was written for a DIFFERENT configuration.\n'
+                     f'  file: {d["fp"]}\n  this: {fingerprint(cfg)}\n'
+                     f'Use a different --outdir rather than mixing runs.')
+        return d['U'], float(d['t']), int(d['step']), float(d['dt'])
+    return None
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('case', choices=sorted(CASES))
+    ap.add_argument('--outdir', required=True)
+    ap.add_argument('--budget', type=float, default=1e9,
+                    help='wall-clock seconds for THIS session; the run '
+                         'checkpoints and exits cleanly before spending it')
+    ap.add_argument('--backend', default='cupy',
+                    choices=('cupy', 'torch', 'numpy'))
+    ap.add_argument('--no-compile', action='store_true',
+                    help='torch backend: skip torch.compile (which is worth '
+                         '1.36x per CG iteration but costs ~20 s up front)')
+    ap.add_argument('--chk-minutes', type=float, default=10.0)
+    ap.add_argument('--check-every', type=int, default=None,
+                    help='CG convergence-test interval; each test costs a '
+                         'host sync, which on a GPU can cost more than the '
+                         'iteration.  Default: 1 on CPU, 10 on GPU.')
+    ap.add_argument('--price', action='store_true',
+                    help='time a few steps, print the projected total, exit')
+    ap.add_argument('--selftest', action='store_true',
+                    help='prove a restart reproduces an uninterrupted run')
+    a = ap.parse_args()
+    cfg = CASES[a.case]
+    os.makedirs(a.outdir, exist_ok=True)
+    lssem3d.set_backend(a.backend)
+    ops = Ops(a.backend)
+    xp = ops.t
+    name = None
+    if a.backend == 'cupy':
+        cp = ops.t
+        d = cp.cuda.runtime.getDeviceProperties(cp.cuda.runtime.getDevice())
+        name = d['name'].decode() if isinstance(d['name'], bytes) else d['name']
+        print(f'GPU    {name}  (cc {d["major"]}.{d["minor"]}, '
+              f'{d["totalGlobalMem"]/2**30:.0f} GiB)')
+    elif a.backend == 'torch':
+        if ops.dev == 'cpu':
+            print('GPU    none -- torch on CPU.  Correct, but slow; for API '
+                  'checks only.')
+        else:
+            name = ops.t.cuda.get_device_name(0)
+            print(f'GPU    {name}  (torch {ops.t.__version__})')
+            if not a.no_compile:
+                # Worth 12.85 -> 9.42 ms per CG iteration, past the
+                # hand-written CuPy path -- see CUPY_BACKEND.md.  Costs ~20 s
+                # of compile once per process, which a chained-session
+                # production run pays once per session.
+                from lssem3d import kernels_torch as KT
+                KT._apply_L = ops.t.compile(KT._apply_L)
+                KT._apply_LT = ops.t.compile(KT._apply_LT)
+                print('       torch.compile enabled (~20 s on first call)')
+        # This code is FP64 and bandwidth-bound, so the card matters enormously
+        # and Colab does not always give you the one you asked for.  A100/H100
+        # run FP64 at 1/2 the FP32 rate; T4, L4 and the consumer parts run it
+        # at 1/32 to 1/64, which alone is a 10-30x difference in step time.
+    if name and not any(q in name for q in ('A100', 'H100', 'H200', 'V100',
+                                            'GB10', 'GH200', 'B200')):
+        print(f'       *** WARNING: {name} has no fast FP64 path. ***\n'
+              f'       Timings here are NOT representative and a production\n'
+              f'       run will take many times longer.  Runtime > Change\n'
+              f'       runtime type, and pick an A100.')
+    s = setup(cfg, xp, ops)
+    chk = a.check_every if a.check_every is not None else (
+        1 if a.backend == 'numpy' else 10)
+
+    U0 = ic_tgv(s)
+    Pph = FR.to_physical(OP.to_complex(U0), s['nz'])
+    dt = float(CV.max_dt_for_cfl(Pph[..., :OP.NVAR, :], s['D'], s['m'].facx,
+                                 s['m'].facy, L, s['nz'], cfg['cfl']))
+    dt = min(dt, 0.02)
+    nstep = int(np.ceil(cfg['tend']/dt))
+    dof = U0.size
+
+    if a.selftest:
+        return selftest(s, cfg, dt, a, chk)
+
+    resumed = load_checkpoint(a.outdir, cfg)
+    if resumed is None:
+        U, t, step = s['g'](U0), 0.0, 0
+        print(f'START  {a.case}: {cfg["ex"]}x{cfg["ey"]} N={cfg["N"]} '
+              f'Nz={cfg["nz"]} ({dof/1e6:.2f} M dof), dt={dt:.5g}, '
+              f'{nstep} steps to t={cfg["tend"]:g}')
+        mode = 'w'
+    else:
+        Uh, t, step, dt_ck = resumed
+        U = s['g'](Uh); dt = dt_ck
+        print(f'RESUME {a.case} at t={t:.4f} (step {step}/{nstep})')
+        mode = 'a'
+    Minv, rws = precond(s, dt)
+    Np_ = s['ops'].zeros_c(tuple(OP.to_complex(U).shape[:-2]) + (3, s['nk']),
+                           OP.to_complex(U))
+
+    dpath = os.path.join(a.outdir, 'diag.csv')
+    if mode == 'w' or not os.path.exists(dpath):
+        with open(dpath, 'w') as fh:
+            fh.write('t,E,Omega,balance,maxu,cg,capped\n')
+
+    if a.price:
+        # A step's cost is (CG iterations) x (cost per matvec).  Report BOTH,
+        # because they have opposite remedies: too many iterations is a
+        # preconditioner problem, a slow matvec is a memory/bandwidth problem.
+        # Extrapolating a step time from a matvec benchmark alone -- without
+        # ever measuring the iteration count -- is how a 46 h estimate turned
+        # into 248 h.
+        sync = s['ops'].sync
+        for k in range(T.NSTAGE):          # warm-up: JIT, pool growth, autotune
+            U, Np_, _ = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'],
+                                  check_every=chk)
+        sync()
+        t0 = time.perf_counter(); its = []
+        for _ in range(2):
+            for k in range(T.NSTAGE):
+                tk = time.perf_counter()
+                U, Np_, it = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'],
+                                   check_every=chk)
+                sync(); its.append((k, it, time.perf_counter()-tk))
+        per = (time.perf_counter()-t0)/2
+        tot_it = sum(i for _, i, _ in its)/2
+        print(f'\nPRICE  (check_every={chk})  {per:.1f} s/step  ->  {nstep*per/3600:.1f} h total '
+              f'({nstep} steps)')
+        print(f'       {tot_it:.0f} CG iterations/step, '
+              f'{1e3*per/max(tot_it, 1):.2f} ms per iteration '
+              f'({dof/1e6:.2f} M dof)')
+        for k, it, el in its[:T.NSTAGE]:
+            print(f'         stage {k}: {it:6d} its  {el:7.2f} s  '
+                  f'{1e3*el/max(it, 1):6.2f} ms/it')
+        mem = s['ops'].mem()
+        if mem is not None:
+            used, reserved, dev_used, dev_tot = mem
+            print(f'       GPU memory: pool {used:.1f} GiB used / '
+                  f'{reserved:.1f} GiB reserved, '
+                  f'device {dev_used:.1f} / {dev_tot:.1f} GiB')
+        if a.budget < 1e8:
+            print(f'       sessions at {a.budget/3600:.1f} h: '
+                  f'{int(np.ceil(nstep*per/a.budget))}')
+        return
+
+    E, Om, mx = diagnostics(s, U)
+    t_start, wall0, last_chk = t, time.perf_counter(), time.perf_counter()
+    next_snap = (int(t/cfg['snap']) + 1)*cfg['snap']
+    nfr = int(round(t/cfg['snap']))
+    prevE, prevOm = E, Om
+    while step < nstep:
+        tot, capped = 0, False
+        for k in range(T.NSTAGE):
+            U, Np_, it = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'],
+                                   check_every=chk)
+            tot += it; capped |= (it >= 60000)
+        step += 1; t += dt
+        E, Om, mx = diagnostics(s, U)
+        bal = (-(E - prevE)/dt)/(2*cfg['nu']*0.5*(Om + prevOm)) if step > 1 else 1.0
+        prevE, prevOm = E, Om
+        with open(dpath, 'a') as fh:
+            fh.write(f'{t:.6f},{E:.10f},{Om:.8f},{bal:.6f},{mx:.6f},'
+                     f'{tot},{int(capped)}\n')
+        if t + 1e-12 >= next_snap:
+            Uc = OP.to_complex(U)
+            arr = Uc if xp is np else xp.asnumpy(Uc)
+            np.savez_compressed(os.path.join(a.outdir, f'frame_{nfr:04d}.npz'),
+                                U=arr.astype(np.complex64), t=t)
+            nfr += 1; next_snap += cfg['snap']
+        now = time.perf_counter()
+        if now - last_chk > a.chk_minutes*60:
+            save_checkpoint(a.outdir, U, t, step, dt, cfg, s['ops'])
+            last_chk = now
+        if step % 10 == 0:
+            rate = (now - wall0)/max(step - int(round(t_start/dt)), 1)
+            print(f't={t:8.4f} E={E:.6f} Om={Om:.4f} bal={bal:.4f} '
+                  f'CG={tot} [{rate:.1f} s/step]', flush=True)
+        # leave room to checkpoint before the session is cut off
+        if now - wall0 > a.budget - 120:
+            save_checkpoint(a.outdir, U, t, step, dt, cfg, s['ops'])
+            left = (nstep - step)*(now - wall0)/max(step - int(round(t_start/dt)), 1)
+            print(f'\nBUDGET REACHED at t={t:.4f} (step {step}/{nstep}). '
+                  f'Checkpoint written.\nRun this cell again to continue; '
+                  f'~{left/3600:.1f} h of compute remain.')
+            return
+    save_checkpoint(a.outdir, U, t, step, dt, cfg, s['ops'])
+    print(f'\nDONE at t={t:.4f} ({step} steps). Checkpoint and {nfr} frames '
+          f'in {a.outdir}')
+
+
+def selftest(s, cfg, dt, a, chk=1):
+    """A restart must reproduce an uninterrupted run -- prove it."""
+    xp = s['xp']
+    Minv, rws = precond(s, dt)
+    U0 = s['g'](ic_tgv(s))
+    Np0 = s['ops'].zeros_c(tuple(OP.to_complex(U0).shape[:-2]) + (3, s['nk']),
+                           OP.to_complex(U0))
+
+    def advance(U, n):
+        Np_ = Np0*0
+        for _ in range(n):
+            for k in range(T.NSTAGE):
+                U, Np_, _ = stage(s, U, Np_, k, dt, Minv, rws[k], cfg['tol'],
+                                  check_every=chk)
+        return U
+    straight = advance(U0, 6)
+    half = advance(U0, 3)
+    save_checkpoint(a.outdir, half, 3*dt, 3, dt, cfg, s['ops'])
+    Uh, t, step, dt2 = load_checkpoint(a.outdir, cfg)
+    restarted = advance(s['g'](Uh), 3)
+    d = float(abs(straight - restarted).max())
+    scale = float(abs(straight).max())
+    print(f'SELFTEST  6 steps straight vs 3+checkpoint+3:')
+    print(f'  max|difference| = {d:.3e}  (relative {d/scale:.3e})')
+    print(f'  {"PASS -- restart is exact" if d == 0.0 else "PASS (within solver tolerance)" if d/scale < 1e-10 else "FAIL"}')
+    print(f'  RKW3 ZETA[0] = {T.ZETA[0]} -- this is WHY no convective history '
+          f'has to be carried across the checkpoint')
+
+
+if __name__ == '__main__':
+    main()
