@@ -91,10 +91,10 @@ def estimate_lambda_max(A, M_inv, shape, npow=20, seed=0):
     lam = 0.0
     for _ in range(npow):
         w = M_inv(A(v)) if callable(M_inv) else M_inv*A(v)
-        nw = float(np.sqrt(np.sum(w*w)))
+        nw = float(DEV.sqrt(DEV.sum_over(w*w, tuple(range(w.ndim)))))
         if nw <= 1e-300:
             return 0.0
-        lam = nw/max(float(np.sqrt(np.sum(v*v))), 1e-300)
+        lam = nw/max(float(DEV.sqrt(DEV.sum_over(v*v, tuple(range(v.ndim))))), 1e-300)
         v = w/nw
     return float(lam)
 
@@ -123,8 +123,8 @@ class Chebyshev4:
     def __call__(self, r):
         if self.rho <= 0.0:
             return self._P(r)
-        z = np.zeros_like(r)
-        d = np.zeros_like(r)
+        z = DEV.zeros_like(r)
+        d = DEV.zeros_like(r)
         rf = DEV.clone(r)
         for k in range(1, self.deg + 1):
             c1 = (2.0*k - 3.0)/(2.0*k + 1.0)
