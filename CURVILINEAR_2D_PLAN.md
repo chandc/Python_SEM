@@ -154,6 +154,44 @@ all four metric terms and every cross term while having an exactly known answer.
 self-consistent but wrong metric, and it separates "curvilinear machinery works"
 from "curvilinear machinery is merely stable".
 
+**PASSED 2026-09-16** (`scratch/curvi_g1.py`, `figs/curvi_g1.png`), and the
+Cartesian regression is untouched: **90/90 existing tests pass**.
+
+Rather than a solve, which would mix the operator with boundary conditions and a
+preconditioner, the gate tests the assembled operator directly in three ways:
+
+| test | what it rules out | result |
+|---|---|---|
+| **T1** affine path vs curvilinear path, same mesh unmoved | the branch having broken the Cartesian code | 6.6e−15 (30 ε) |
+| **T2** rotation covariance of $L$, 0°–90° | a metric that is self-consistent but wrong | ≤ 1.7e−15 (≤ 8 ε) |
+| **T3** adjoint pair $\langle LU,S\rangle=\langle U,L^{\mathsf T}(wq\,S)\rangle$ | a transposed index or dropped weight, which T1 and T2 both survive | ≤ 8.9e−16 (≤ 4 ε) |
+
+Worst 6.6e−15 against a gate of $10^{-12}$.
+
+**T2 is the substance.**  Put a field on the unrotated mesh and its rotated image
+on the rotated mesh; the residual rows must come back as the rotated image of the
+original rows — momentum as a vector, continuity and the vorticity definition as
+scalars.  Flat at a few ε across every angle, including 45° where the cross terms
+are largest.
+
+**One thing the gate caught was the convention, not the code.**  `apply_L`
+multiplies its rows by `wq`, so `apply_LT` expects the weight already inside its
+argument.  Testing $\langle LU,S\rangle=\langle U,L^{\mathsf T}S\rangle$ with an
+unweighted $S$ reads **89**, which looks like a catastrophic adjoint failure and
+is entirely a property of the interface.  With $wq\,S$ it is 1e−16 on every mesh.
+Worth recording because the same trap is waiting in the numba kernels at step 4.
+
+### Step 3 as built
+
+`_apply_L_numpy` and `_apply_LT_numpy` dispatch through one pair of closures
+rather than a branch per call site: on an affine mesh they are the existing calls
+verbatim, so that path stays bit-identical, and on a curvilinear mesh they carry
+the metrics and the second contraction.  20 call sites converted (8 forward
+derivatives, 6 `DxT`, 6 `DyT`) plus the linearisation's own four derivatives in
+`update_linearisation` — those feed the convective Jacobian terms, and an affine
+derivative there on a curvilinear mesh corrupts the operator in a way **no
+forward identity catches**; only T2 would have seen it.
+
 ### G2 — Spectral convergence on a curved mesh
 
 *Known answer: a manufactured solution, and the convergence rate.*

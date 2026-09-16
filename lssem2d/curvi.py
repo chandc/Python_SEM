@@ -109,29 +109,37 @@ def ddy(U, D, mesh, out=None):
     return z
 
 
-def ddxT(V, D, mesh):
-    """Adjoint of `ddx` in the quadrature-weighted inner product.
+def ddxT(S, D, mesh, out=None):
+    """Adjoint of `ddx` in the PLAIN inner product, matching `operators.DxT`.
 
-    Defined by <ddx(u), v>_wq = <u, ddxT(v)> for every u, v, where
-    <a,b>_wq = sum_ij wq_ij a_ij b_ij.  Writing it out,
+    Defined by  sum_ij ddx(u)_ij S_ij = sum_ij u_ij ddxT(S)_ij, so
 
-        sum (wq v r_x) (D u) + sum (wq v s_x) (u D^T)
-      = sum u [ D^T (wq v r_x) ] + sum u [ (wq v s_x) D ]
+        sum (r_x S)(D u) + sum (s_x S)(u D^T)
+      = sum u [ D^T (r_x S) ] + sum u [ (s_x S) D ] .
 
-    so the adjoint carries the weight and the metric, and the two contractions
-    transpose separately.  Gate G0's adjoint test is what catches getting this
-    subtly wrong -- a sign or a transposed index survives the forward tests.
+    UNWEIGHTED ON PURPOSE.  `apply_L` multiplies its rows by `wq` before
+    returning, so the quadrature weight is already inside the `su` that
+    `apply_LT` receives -- exactly as the affine `DxT` assumes.  Pass `wq*v` to
+    test the weighted adjoint.
+
+    A sign or a transposed index here survives every forward test and destroys
+    the least-squares operator, which is built from adjoint pairs; gate G0's
+    adjoint check and gate G1's rotation invariance are what catch it.
     """
-    a = mesh.wq*V*mesh.rx
-    b = mesh.wq*V*mesh.sx
-    return np.matmul(D.T, a) + np.matmul(b, D)
+    z = np.matmul(D.T, mesh.rx*S) + np.matmul(mesh.sx*S, D)
+    if out is not None:
+        out[...] = z
+        return out
+    return z
 
 
-def ddyT(V, D, mesh):
-    """Adjoint of `ddy` in the quadrature-weighted inner product."""
-    a = mesh.wq*V*mesh.ry
-    b = mesh.wq*V*mesh.sy
-    return np.matmul(D.T, a) + np.matmul(b, D)
+def ddyT(S, D, mesh, out=None):
+    """Adjoint of `ddy` in the plain inner product, matching `operators.DyT`."""
+    z = np.matmul(D.T, mesh.ry*S) + np.matmul(mesh.sy*S, D)
+    if out is not None:
+        out[...] = z
+        return out
+    return z
 
 
 # ---------------------------------------------------------------- builders --

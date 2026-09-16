@@ -1,5 +1,6 @@
 import numpy as np
 from .operators import dUdx, dUdy, DxT, DyT
+from . import curvi
 from . import backend
 
 def ls_coeffs(state):
@@ -279,10 +280,20 @@ class SolverState:
 
     def update_linearisation(self, fu, fv):
         """Precompute gradients of linearisation velocities fu, fv."""
-        self.dfu_dx = dUdx(fu, self.D, self.mesh.facx)
-        self.dfu_dy = dUdy(fu, self.D, self.mesh.facy)
-        self.dfv_dx = dUdx(fv, self.D, self.mesh.facx)
-        self.dfv_dy = dUdy(fv, self.D, self.mesh.facy)
+        # The linearisation's own derivatives need the same treatment: these feed
+        # the convective Jacobian terms in apply_L, so an affine derivative here
+        # on a curvilinear mesh would corrupt the operator in a way no forward
+        # identity catches -- only the rotation gate would see it.
+        if self.mesh.curvilinear:
+            self.dfu_dx = curvi.ddx(fu, self.D, self.mesh)
+            self.dfu_dy = curvi.ddy(fu, self.D, self.mesh)
+            self.dfv_dx = curvi.ddx(fv, self.D, self.mesh)
+            self.dfv_dy = curvi.ddy(fv, self.D, self.mesh)
+        else:
+            self.dfu_dx = dUdx(fu, self.D, self.mesh.facx)
+            self.dfu_dy = dUdy(fu, self.D, self.mesh.facy)
+            self.dfv_dx = dUdx(fv, self.D, self.mesh.facx)
+            self.dfv_dy = dUdy(fv, self.D, self.mesh.facy)
         
     def get_global_mask(self, pin_p=False):
         if hasattr(self, '_cached_mask_pin') and self._cached_mask_pin == pin_p:
@@ -335,6 +346,19 @@ def _apply_L_numpy(state, U, fu, fv):
 
     tests/test_backend_parity.py validates the numba kernels against this.
     """
+    # CURVILINEAR DISPATCH.  One pair of closures instead of a branch per call:
+    # on an affine mesh they are the existing calls verbatim, so that path stays
+    # bit-identical; on a curvilinear mesh they carry the metric fields and the
+    # second contraction.  mesh.facx RAISES when curvilinear, so a call site left
+    # unconverted cannot silently take the wrong branch.
+    _m = state.mesh
+    if _m.curvilinear:
+        dx = lambda U_, out=None: curvi.ddx(U_, state.D, _m, out=out)
+        dy = lambda U_, out=None: curvi.ddy(U_, state.D, _m, out=out)
+    else:
+        dx = lambda U_, out=None: dUdx(U_, state.D, _m.facx, out=out)
+        dy = lambda U_, out=None: dUdy(U_, state.D, _m.facy, out=out)
+
     u, v, p, om = state.u_c, state.v_c, state.p_c, state.om_c
     np.copyto(u, U[..., 0])
     np.copyto(v, U[..., 1])
@@ -342,17 +366,17 @@ def _apply_L_numpy(state, U, fu, fv):
     np.copyto(om, U[..., 3])
     
     # Compute spatial derivatives in-place
-    u_x = dUdx(u, state.D, state.mesh.facx, out=state.u_x)
-    u_y = dUdy(u, state.D, state.mesh.facy, out=state.u_y)
+    u_x = dx(u, out=state.u_x)
+    u_y = dy(u, out=state.u_y)
     
-    v_x = dUdx(v, state.D, state.mesh.facx, out=state.v_x)
-    v_y = dUdy(v, state.D, state.mesh.facy, out=state.v_y)
+    v_x = dx(v, out=state.v_x)
+    v_y = dy(v, out=state.v_y)
     
-    p_x = dUdx(p, state.D, state.mesh.facx, out=state.p_x)
-    p_y = dUdy(p, state.D, state.mesh.facy, out=state.p_y)
+    p_x = dx(p, out=state.p_x)
+    p_y = dy(p, out=state.p_y)
     
-    om_x = dUdx(om, state.D, state.mesh.facx, out=state.om_x)
-    om_y = dUdy(om, state.D, state.mesh.facy, out=state.om_y)
+    om_x = dx(om, out=state.om_x)
+    om_y = dy(om, out=state.om_y)
     
     dfu_dx, dfu_dy = state.dfu_dx, state.dfu_dy
     dfv_dx, dfv_dy = state.dfv_dx, state.dfv_dy
@@ -410,6 +434,16 @@ def _apply_LT_numpy(state, su, fu, fv):
     """
     Apply the transpose VVP operator L^T.  NumPy reference implementation.
     """
+    # Same dispatch as apply_L.  These are the PLAIN adjoints: su already
+    # carries wq, which apply_L multiplied in, exactly as the affine DxT assumes.
+    _m = state.mesh
+    if _m.curvilinear:
+        dxT = lambda S_, out=None: curvi.ddxT(S_, state.D, _m, out=out)
+        dyT = lambda S_, out=None: curvi.ddyT(S_, state.D, _m, out=out)
+    else:
+        dxT = lambda S_, out=None: DxT(S_, state.D, _m.facx, out=out)
+        dyT = lambda S_, out=None: DyT(S_, state.D, _m.facy, out=out)
+
     su1, su2, su3, su4 = state.su0_c, state.su1_c, state.su2_c, state.su3_c
     
     su3_scaled = su[..., 2]
@@ -446,29 +480,29 @@ def _apply_LT_numpy(state, su, fu, fv):
     
     # c_1
     c0[...] = inv_dt * su1 + dfu_dx * su1 + dfv_dx * su2
-    DxT(su3_scaled, state.D, state.mesh.facx, out=tmp)
+    dxT(su3_scaled, out=tmp)
     c0[...] += tmp
-    DxT(fu * su1, state.D, state.mesh.facx, out=tmp)
+    dxT(fu * su1, out=tmp)
     c0[...] += tmp
-    DyT(su4, state.D, state.mesh.facy, out=tmp)
+    dyT(su4, out=tmp)
     c0[...] += tmp
-    DyT(fv * su1, state.D, state.mesh.facy, out=tmp)
+    dyT(fv * su1, out=tmp)
     c0[...] += tmp
     
     # c_2
     c1[...] = inv_dt * su2 + dfu_dy * su1 + dfv_dy * su2
-    DxT(su4, state.D, state.mesh.facx, out=tmp)
+    dxT(su4, out=tmp)
     c1[...] -= tmp
-    DxT(fu * su2, state.D, state.mesh.facx, out=tmp)
+    dxT(fu * su2, out=tmp)
     c1[...] += tmp
-    DyT(su3_scaled, state.D, state.mesh.facy, out=tmp)
+    dyT(su3_scaled, out=tmp)
     c1[...] += tmp
-    DyT(fv * su2, state.D, state.mesh.facy, out=tmp)
+    dyT(fv * su2, out=tmp)
     c1[...] += tmp
     
     # c_3
-    DxT(su1, state.D, state.mesh.facx, out=tmp)
-    DyT(su2, state.D, state.mesh.facy, out=tmp2)
+    dxT(su1, out=tmp)
+    dyT(su2, out=tmp2)
     c2[...] = tmp + tmp2
     a_p = ls_pseudo_p(state)
     if a_p != 0.0:
@@ -478,8 +512,8 @@ def _apply_LT_numpy(state, su, fu, fv):
         c2[...] += a_p * su3_scaled
     
     # c_4
-    DyT(su1, state.D, state.mesh.facy, out=tmp)
-    DxT(su2, state.D, state.mesh.facx, out=tmp2)
+    dyT(su1, out=tmp)
+    dxT(su2, out=tmp2)
     c3[...] = su4 + state.nu * tmp - state.nu * tmp2
     
     c = state.c_out

@@ -109,7 +109,7 @@ def gate(mesh, area_exact):
                        ('adjoint y', curvi.ddy, curvi.ddyT)):
         terms = mesh.wq*f(u, D, mesh)*v
         lhs = float(terms.sum())
-        rhs = float((u*fT(v, D, mesh)).sum())
+        rhs = float((u*fT(mesh.wq*v, D, mesh)).sum())   # wq explicit now
         # Normalise by the CONDITION of the summation, sum|t| / |sum t|.  These
         # are dot products of random fields, so the terms cancel heavily and the
         # achievable relative accuracy is eps times that ratio, not eps.  On the
