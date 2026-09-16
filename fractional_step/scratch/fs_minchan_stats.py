@@ -71,6 +71,13 @@ if CONSISTENT:
     s['tol_p'] = float(arg('--tolp', '1e-4'))
     print(f'pressure: E-multigrid deg=6, tol_p={s["tol_p"]:g} '
           f'(setup {time.perf_counter()-t0:.1f}s)', flush=True)
+    # CUDA-graph replay of the V-cycle.  Opt-in: it is 97% of a pressure
+    # iteration and the apply is launch-bound (README_VENDORED.md), but a
+    # capture that goes wrong returns wrong numbers rather than raising, so it
+    # stays off until colab/fs_graph_check.py has passed on the machine in use.
+    if '--graph' in sys.argv:
+        from lssem3d.graph_vcycle import maybe_graph
+        s['Mp'] = maybe_graph(s['Mp'], s['mask_p'], verbose=True)
 else:
     s['Mp'] = hpmg.HelmholtzPMG(m, N, kz**2, 1.0, 1, nk, NZ, wall=False,
                                 pin_kz0=True, deg=6, like=s['mask_p'])

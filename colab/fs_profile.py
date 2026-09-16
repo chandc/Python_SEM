@@ -78,6 +78,9 @@ def main():
     ap.add_argument('--dt', type=float, default=3.5e-4)
     ap.add_argument('--tolp', default='1e-4')
     ap.add_argument('--outdir', default='/tmp/fs_profile')
+    ap.add_argument('--graph', action='store_true',
+                    help='replay the V-cycle from a CUDA graph (check it first '
+                         'with colab/fs_graph_check.py)')
     a = ap.parse_args()
 
     import lssem3d
@@ -124,6 +127,8 @@ def main():
             '--tolp', a.tolp]
     if a.consistent:
         argv.append('--consistent')
+    if a.graph:
+        argv.append('--graph')
     sys.argv = argv
 
     print(f'device: {dev}\npath:   {"E (consistent P_N-P_N)" if a.consistent else "K (weak Laplacian)"}'
