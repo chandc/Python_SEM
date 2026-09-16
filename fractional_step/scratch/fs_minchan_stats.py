@@ -61,7 +61,9 @@ elif backend in ('torch', 'cuda'):
     # captures it happily, which is how the least-squares path in the parent
     # repository reached 8.3 ms per apply from 160.
     import torch as _t
-    xp = np
+    # xp is the array module the driver calls for zeros_like and sqrt; on this
+    # backend the arrays are tensors, so it must be torch, not numpy.
+    xp = _t
     _dev = 'cuda' if _t.cuda.is_available() else 'cpu'
     g = lambda a: _t.as_tensor(np.ascontiguousarray(a), device=_dev)
     print(f'GPU  {_t.cuda.get_device_name(0) if _dev == "cuda" else "cpu"} (torch)',
