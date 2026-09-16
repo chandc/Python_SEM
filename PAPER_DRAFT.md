@@ -1,9 +1,10 @@
 # Time-marching least-squares spectral elements for unsteady incompressible flow: the weighting that makes them accurate and the preconditioner that makes them affordable
 
-*Draft. Sections 2–9 are written from completed work; Section 1, Section 10 and
-Appendix A remain outlined, and Section 10 awaits the long channel run. Plan: `PAPER_PLAN_PRACTICAL.md`. Every
+*Draft, complete: Sections 1–10 and Appendix A are all written from finished
+work, and the reference list is closed. Plan: `PAPER_PLAN_PRACTICAL.md`. Every
 number quoted here is traceable to `ZIGZAG_CURE_RESEARCH.md`,
-`BALANCED_CONDENSED_PLAN.md` or the scripts named in the text.*
+`BALANCED_CONDENSED_PLAN.md`, `DIVERGENCE_CONSEQUENCES.md`,
+`LBB_AND_THE_TWO_DEFICIENCIES.md` or the scripts named in the text.*
 
 ---
 
@@ -1192,18 +1193,119 @@ smallest scales that this discretisation is independently known to produce. We
 report the near-wall quantities as the result and the outer layer as a limitation
 of the domain.
 
-## Appendix A. An energy argument and why it is not enough *(to be written)*
+## Appendix A. An energy argument, and why it is not enough
 
-The three row blocks of the scaled limit give $\omega=\nabla\times\mathbf u$
-exactly; an energy identity closed by a discrete Poincaré inequality and an
-inverse inequality then gives the trivial solution under
-$\mathrm{fac}_1\nu C_P^2C_{\rm inv}^2<2$. Both constants are computable exactly
-for the Gauss–Lobatto space, and doing so shows the condition is satisfied only
-by the coarsest discretisations — violated by three orders elsewhere while the
-operator remains nonsingular — and that its viscosity dependence is backwards:
-the limit degenerates as $\nu\to0$, the regime the condition declares safe. The
-argument is recorded because it is instructive about what a correct proof must
-avoid, not because it establishes the result.
+Section 3 establishes that the balanced weighting is the unique choice for which
+the momentum equation survives the limit $\Delta t\to0$, and Section 4 verifies
+across $h$, $p$, $k$ and $\nu$ that the resulting limit operator is nonsingular.
+It does not *prove* that nonsingularity. This appendix records the proof we
+attempted, the computation that shows it is not sharp, and what a correct
+argument would have to do differently — because the failure is instructive about
+the operator, and because reporting only successful arguments would misrepresent
+what is established.
+
+### A.1 The argument
+
+Write the row-scaled limit operator as $\bar K$ and suppose $\bar KU=0$ with
+$U=(\mathbf u,\omega,p)$. Put
+
+$$q=\nabla p+\nu\nabla\times\omega,\qquad d=\nabla\!\cdot\mathbf u,\qquad
+r=\omega-\nabla\times\mathbf u .$$
+
+The three row blocks of $\bar K$ give, for all admissible variations,
+
+1. **pressure rows:** $\langle q,\nabla\delta p\rangle=0$;
+2. **vorticity rows:** $\langle r,\delta\omega\rangle=0$, hence $r=0$ — that is,
+   $\omega=\nabla\times\mathbf u$ *exactly* in the discrete space, not merely to
+   the accuracy of a residual;
+3. **velocity rows:** $\langle d,\nabla\!\cdot\delta\mathbf u\rangle
+   +\mathrm{fac}_1\langle q,\delta\mathbf u\rangle=0$, the $r$ term having
+   vanished by 2.
+
+Taking $\delta\mathbf u=\mathbf u$ in 3 and integrating by parts, using
+$\mathbf u=0$ on $\partial\Omega$,
+
+$$\lVert d\rVert^2-\mathrm{fac}_1\langle p,d\rangle
++\mathrm{fac}_1\,\nu\lVert\omega\rVert^2=0 ,$$
+
+while $\delta p=p$ in 1 gives $\lVert\nabla p\rVert\le\nu\lVert\nabla\times\omega\rVert$.
+Closing the pressure term with a discrete Poincaré inequality for the pinned
+pressure, $\lVert p\rVert\le C_P\lVert\nabla p\rVert$, and the curl term with an
+inverse inequality $\lVert\nabla\times\omega\rVert\le C_{\rm inv}\lVert\omega\rVert$,
+the two statements combine to force $d=0$ and $\omega=0$ whenever
+
+$$\boxed{\ \mathrm{fac}_1\,\nu\,C_P^2C_{\rm inv}^2<2\ }$$
+
+Then $\nabla\times\mathbf u=\nabla\!\cdot\mathbf u=0$ with zero trace gives
+$\mathbf u=0$ on a simply connected domain, and 1 returns $p=0$. The limit is
+nonsingular.
+
+### A.2 Why it is not enough
+
+Both constants are computable exactly on the Gauss–Lobatto space — they are
+generalised eigenvalue problems on the discrete spaces,
+$C_{\rm inv}^2=k^2+\lambda_{\max}(K,M)$ and $C_P^2=1/(k^2+\lambda_{\min}(K,M))$ —
+and computing them disposes of the argument. At $\nu=1/180$,
+$\mathrm{fac}_1=3/2$, $k=2$:
+
+| elements | $N$ | $C_{\rm inv}$ | $C_P$ | $\mathrm{fac}_1\nu C_P^2C_{\rm inv}^2$ | $<2$? | $\sigma_{\min}(\bar K)$ |
+|---|---|---|---|---|---|---|
+| 2 | 4 | 27.2 | 0.500 | 1.54 | yes | 3.54e−4 |
+| 2 | 8 | 92.9 | 0.500 | 18.0 | no | 6.84e−5 |
+| 4 | 8 | 185.7 | 0.500 | 71.8 | no | 3.24e−5 |
+| 8 | 8 | 371.4 | 0.500 | 287 | no | 1.58e−5 |
+| 8 | 12 | 798.9 | 0.500 | 1330 | no | 7.00e−6 |
+
+**Only the coarsest discretisation satisfies the condition.** Everything else
+violates it by up to three orders of magnitude while $\sigma_{\min}$ stays
+comfortably positive. The culprit is visible in the formula:
+$C_{\rm inv}\sim N^2/h$, so the sufficient condition degrades like $N^4/h^2$ under
+refinement while the operator does not.
+
+**And the viscosity dependence points the wrong way**, which is the more serious
+defect. The condition wants $\nu$ *small*. Sweeping $\nu$ at four elements,
+$N=8$:
+
+| $\nu$ | condition value | $\sigma_{\min}(\bar K)$ |
+|---|---|---|
+| 1e−4 | 1.29 | 7.01e−7 |
+| 1e−3 | 12.9 | 6.21e−6 |
+| 1e−2 | 129 | 5.66e−5 |
+| 1e−1 | 1.29e3 | 2.93e−4 |
+| 1 | 1.29e4 | 1.71e−4 |
+| 10 | 1.29e5 | 1.05e−5 |
+
+$\sigma_{\min}\propto\nu$ for small $\nu$: the limit **degenerates as
+$\nu\to0$** — the regime the condition declares safe — and is healthiest near
+$\nu\approx0.1$, where the condition is violated by three orders. So the estimate
+is not merely loose; it is anti-correlated with the truth over the range that
+matters.
+
+### A.3 What a correct argument must do
+
+The mechanism behind the $\nu$ dependence is visible in the operator and explains
+both failures. Viscosity is what couples $\omega$ into the momentum rows, through
+$\nu\nabla\times\omega$; as $\nu\to0$ that coupling weakens and with it the
+control the momentum rows exert on the vorticity. The energy argument discards
+exactly this structure when it bounds $\lVert\nabla\times\omega\rVert$ by
+$C_{\rm inv}\lVert\omega\rVert$ — an inequality that is sharp only for the
+roughest representable mode and knows nothing about which modes the operator
+actually couples.
+
+A proof that is sharp would have to keep that coupling rather than estimate it
+away. The natural route is a discrete Helmholtz decomposition of $\mathbf u$ into
+solenoidal and gradient parts together with a discrete inf-sup condition for the
+pressure–divergence pairing, which would give the two blocks separate control
+instead of trading them against one another through a single scalar inequality.
+That is a week's work in a direction we did not need to take: Section 4's
+verification across $h$, $p$, $k$ and $\nu$ establishes the well-posedness the
+paper relies on, and Section 3's uniqueness theorem — which *is* proved, and is
+pure algebra — is the load-bearing result.
+
+We report the failed argument because it delineates the claim. The paper asserts
+that the balanced fixed-point problem is well posed with constants independent of
+$\Delta t$, and that assertion rests on measurement, not on the sufficient
+condition above, which the measurement itself refutes.
 
 ## References
 

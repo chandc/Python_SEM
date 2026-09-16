@@ -247,8 +247,8 @@ written; only Appendix A is outlined.
 | 8 The patch preconditioner | written, including the Gartling geometry and the $c$-sweep |
 | 9 Implementation and cost | written, three machines |
 | 10 DNS and the RKW3 exception | **written** — run complete to $t=30$, 24.8-turnover window, closer to the databases than the fractional-step twin on all six quantities |
-| Appendix A Energy argument | outlined |
-| References | 20 entries, complete for §§2–9 |
+| Appendix A Energy argument | **written** — the argument, the computation refuting it, and what a sharp proof would need |
+| References | **33 entries, audited against the body** |
 
 Remaining writing is Section 10's statistics and Appendix A. Everything else on
 the critical path is now a computation, not a drafting task.
