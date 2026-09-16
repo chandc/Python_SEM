@@ -91,6 +91,17 @@ def main():
         import cupy as xp
         sync = xp.cuda.runtime.deviceSynchronize
         dev = xp.cuda.runtime.getDeviceProperties(0)['name'].decode()
+    elif a.backend in ('torch', 'cuda'):
+        # torch queues kernels asynchronously exactly as cupy does, so the phase
+        # timers need its synchronise too -- without it every phase would report
+        # launch time and the work would land on whichever call synchronised next.
+        import torch as _t
+        if _t.cuda.is_available():
+            sync = _t.cuda.synchronize
+            dev = _t.cuda.get_device_name(0) + ' (torch)'
+        else:
+            sync = lambda: None
+            dev = 'cpu (torch)'
     else:
         sync = lambda: None
         dev = 'host (%s)' % a.backend
