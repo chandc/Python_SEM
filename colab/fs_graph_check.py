@@ -72,7 +72,7 @@ def main():
              ('random', torch.randn_like(real_rhs)*mask),
              ('ones', torch.ones_like(real_rhs)*mask)]
 
-    ref = [Mp(r).copy() for _, r in cases]          # uncaptured reference first
+    ref = [DEV.clone(Mp(r)) for _, r in cases]      # uncaptured reference first
 
     Mg = maybe_graph(Mp, real_rhs, enable=True, verbose=True)
     if Mg is Mp:
