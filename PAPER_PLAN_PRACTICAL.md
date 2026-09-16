@@ -262,6 +262,25 @@ levers — the coarse read and the iteration count — with the prize quantified
 (2.1 s → ≈0.3 s in fp64 if both land) and a three-rig measurement order.  Week 1
 of it is existing switches and two-line changes.
 
+## The fractional-step comparison (2026-09-15/16)
+
+Vendored the projection solver (`fractional_step/`), profiled it on the same
+A100, and optimised it until the comparison was fair — because publishing the
+first measurement would have compared attention, not methods.
+
+| | as vendored | after | |
+|---|---|---|---|
+| E path, h per eddy turnover | 15.84 | **0.67** | torch port 1.78×, captured V-cycle 5.9×, Δt 2.3× |
+| against least squares (0.56) | 28× | **1.19×** | |
+
+So **cost does not separate these methods**, and the paper cannot lean on it.
+What remains is the divergence and the vorticity, and
+`DIVERGENCE_CONSEQUENCES.md` records exactly how far that evidence reaches: no
+measurable effect on low-order statistics (measured twice), a real effect on
+vorticity (measured, with a caveat), and a mechanism-level argument for particle
+tracking and scalar transport that we have **not** demonstrated.  It proposes the
+one-day experiment that would.
+
 ## Schedule
 
 | | work | days |
