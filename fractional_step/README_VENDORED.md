@@ -151,6 +151,49 @@ Against the least-squares path's 0.56, the consistent projection could plausibly
 end up **cheaper**.  Publishing the raw column above would report how much
 optimisation each code has had.
 
+### What the optimisation recovered (2026-09-16)
+
+| | s/step | h per eddy turnover |
+|---|---|---|
+| E path, cupy, as vendored | 19.96 | 15.84 |
+| E path, torch | 11.22 | 8.90 |
+| **E path, torch + captured V-cycle** | **1.91** | **1.52** |
+| K path, cupy | 3.21 | 2.55 |
+| least squares, same GPU | 1.62 | 0.56 |
+
+**10.5× on the consistent path**, in two independent pieces.
+
+*The backend port, 1.78×.*  Moving to torch changed nothing about the algorithm
+— 88 pressure iterations per substage and 10 velocity iterations, identical to
+cupy — but cost fell uniformly across three phases doing unrelated work
+(convective 1.81×, helmholtz 1.68×, pressure 1.78×).  A uniform factor across
+unrelated work is per-launch overhead, which is the flatness measurement
+confirmed a second way.
+
+*The captured V-cycle, 5.9× more.*  The apply went 39.6 → 7.97 ms, and the step
+10.87 → 1.91 s.  One V-cycle issues roughly 3,000 kernel launches; replay hands
+the recorded graph to the device as one.  The iteration count is unchanged (88 →
+87) because nothing about the algorithm changed — the same kernels in the same
+order, agreeing with the uncaptured V-cycle to 2–6 × 10⁻¹⁶ relative, which is
+round-off from cuBLAS choosing its algorithm differently under capture.
+
+**Why torch and not cupy:** cupy refuses to record cuBLAS in a stream capture,
+and every derivative here is an einsum, so there is no capturable subset.  That
+is what the port was for.
+
+### What this does to the comparison
+
+Before this work the consistent projection looked 28× more expensive per eddy
+turnover than the least-squares path.  It is now **2.7×**, and the remaining gap
+is one number: 88 pressure iterations against the 20 the K path achieves on its
+own operator.  A V-cycle on $E$ as good as the K path's on $K$ would put the
+consistent projection at ≈0.42 h per turnover — *cheaper* than least squares.
+
+So the honest statement for the paper is that **cost does not separate these
+methods**; what separates them is the pointwise divergence (9.1e−4 against
+1.4e−1 to 2.2e−1) and the vorticity accuracy, at comparable expense once both
+codes have had comparable attention.
+
 ## Why the comparison is worth running
 
 Costs from the E-run's own log (GB10, CuPy, $\Delta t = 3.5\times10^{-4}$):
