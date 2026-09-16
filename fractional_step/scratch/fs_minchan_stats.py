@@ -52,6 +52,20 @@ if backend == 'cupy':
     g = lambda a: xp.asarray(np.ascontiguousarray(a))
     print(f'GPU  {xp.cuda.runtime.getDeviceProperties(0)["name"].decode()}',
           flush=True)
+elif backend in ('torch', 'cuda'):
+    # TORCH PATH, added 2026-09-15 to make CUDA-graph capture possible at all.
+    # CuPy cannot capture this code: every derivative is an einsum, CuPy routes
+    # einsum through cuBLAS, and it refuses to record cuBLAS calls in a stream
+    # capture ("calling cuBLAS API during stream capture is currently
+    # unsupported").  PyTorch manages the cuBLAS handle and workspace itself and
+    # captures it happily, which is how the least-squares path in the parent
+    # repository reached 8.3 ms per apply from 160.
+    import torch as _t
+    xp = np
+    _dev = 'cuda' if _t.cuda.is_available() else 'cpu'
+    g = lambda a: _t.as_tensor(np.ascontiguousarray(a), device=_dev)
+    print(f'GPU  {_t.cuda.get_device_name(0) if _dev == "cuda" else "cpu"} (torch)',
+          flush=True)
 else:
     xp = np; g = lambda a: a
 v = np.ones(mask_p[..., 0:1, 0:1].shape)*mask_p[..., 0:1, 0:1]
@@ -150,7 +164,13 @@ def step():
 
 os.makedirs(outdir, exist_ok=True)
 log = open(f'{outdir}/stats_run.log', 'a')
-cvt = (lambda a: a) if backend == 'numpy' else xp.asnumpy
+if backend in ('torch', 'cuda'):
+    import torch as _t
+    cvt = lambda a: a.detach().cpu().numpy() if hasattr(a, 'detach') else a
+elif backend == 'numpy':
+    cvt = lambda a: a
+else:
+    cvt = xp.asnumpy
 nstep = int(round((TEND - t)/DT))
 w0 = last = time.perf_counter()
 for i in range(nstep):
