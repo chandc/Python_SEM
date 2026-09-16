@@ -1080,7 +1080,7 @@ on $6\times18$ spectral elements at $N=8$ with 32 Fourier modes in the spanwise
 direction — 1,549,823 free unknowns across the seven fields and seventeen
 retained modes. The flow is driven at constant pressure gradient with
 $f_x=u_\tau^2/\delta=1$, so $u_\tau=1$ is prescribed rather than fitted and any
-deviation is an error bar on the whole computation. Convection is explicit RKW3
+deviation is an error bar on the whole computation. Convection is explicit RKW3 [Spalart, Moser & Rogers 1991]
 at $\Delta t=8\times10^{-4}$, and each of the three implicit stages is solved to
 $10^{-6}$ by conjugate gradients with the condensed vertex-patch preconditioner
 of Sections 8 and 9 — 84 iterations per stage against Jacobi's 4,699.
@@ -1205,57 +1205,82 @@ the limit degenerates as $\nu\to0$, the regime the condition declares safe. The
 argument is recorded because it is instructive about what a correct proof must
 avoid, not because it establishes the result.
 
-## References *(partial)*
+## References
 
-- S. Agmon, A. Douglis and L. Nirenberg, *Estimates near the boundary for
-  solutions of elliptic partial differential equations satisfying general
-  boundary conditions*, CPAM **12** (1959) 623-727; **17** (1964) 35-92.
-- K.-A. Mardal and R. Winther, *Preconditioning discretizations of systems of
-  partial differential equations*, Numer. Linear Algebra Appl. **18** (2011) 1-40.
-- J. J. Heys, T. A. Manteuffel, S. F. McCormick and L. N. Olson, *Algebraic
-  multigrid for higher-order finite elements*, JCP **204** (2005) 520–532.
-- Z. Cai, T. A. Manteuffel and S. F. McCormick, *First-order system least squares
-  for the Stokes equations, with application to linear elasticity*, SINUM **34**
-  (1997) 1727-1741.
-- R. Hiptmair, *Multigrid method for H(div) in three dimensions*, ETNA **6**
-  (1997) 133-152.
-- R. Hiptmair and J. Xu, *Nodal auxiliary space preconditioning in H(curl) and
-  H(div) spaces*, SINUM **45** (2007) 2483-2509.
-- P. E. Farrell, M. G. Knepley, L. Mitchell and F. Wechsung, *PCPATCH: software
-  for the topological construction of multigrid relaxation methods*, ACM TOMS
-  **47** (2021) 25.
-- W. Couzy and M. O. Deville, *A fast Schur complement method for the spectral
-  element discretization of the incompressible Navier-Stokes equations*, JCP
-  **116** (1995) 135-142.
-- P. D. Brubeck and P. E. Farrell, *A scalable and robust vertex-star relaxation
-  for high-order FEM*, SISC **44** (2022) A2991-A3017.
-- W. Pazner, T. Kolev and C. R. Dohrmann, *Low-order preconditioning for the
-  high-order finite element de Rham complex*, SISC **45** (2023) A675-A702.
-- Y. Maday and A. T. Patera, *Spectral element methods for the incompressible
-  Navier–Stokes equations*, in State-of-the-Art Surveys on Computational
-  Mechanics, ASME (1989) 71–143.
-- L. Li, *A split-step finite-element method for incompressible Navier–Stokes
-  equations with high-order accuracy up to the boundary*, JCP **408** (2020)
-  109269; arXiv:1902.06773.
-- J.-L. Guermond and J. Shen, *A new class of truly consistent splitting schemes
-  for incompressible flows*, JCP **192** (2003) 262–276.
-- D. K. Gartling, *A test problem for outflow boundary conditions - flow over a
-  backward-facing step*, Int. J. Numer. Methods Fluids **11** (1990) 953-967.
-- [BG98] P. B. Bochev and M. D. Gunzburger, *Finite element methods of
-  least-squares type*, SIAM Review **40**(4) (1998) 789–837.
-- P. B. Bochev and M. D. Gunzburger, *Least-Squares Finite Element Methods*,
-  Applied Mathematical Sciences 166, Springer (2009).
+- H. Abe, H. Kawamura and Y. Matsuo, *Direct numerical simulation of a fully
+  developed turbulent channel flow with respect to the Reynolds number
+  dependence*, J. Fluids Eng. **123** (2001) 382–393.
 - J. H. Adler, I. Lashuk, S. P. MacLachlan and L. T. Zikatanov, *Discrete energy
   laws for the first-order system least-squares finite-element approach*, LNCS
   10665 (2018).
 - J. H. Adler, S. P. MacLachlan and N. Madden, *First-order system least squares
   finite-elements for singularly perturbed reaction-diffusion equations*,
   arXiv:1909.08598.
-- T. Führer and M. Karkulik, *New a priori analysis of first-order system
-  least-squares finite element methods for parabolic problems*, arXiv:1805.04147.
+- S. Agmon, A. Douglis and L. Nirenberg, *Estimates near the boundary for
+  solutions of elliptic partial differential equations satisfying general
+  boundary conditions*, CPAM **12** (1959) 623-727; **17** (1964) 35-92.
 - D. N. Arnold, R. S. Falk and R. Winther, *Multigrid in H(div) and H(curl)*,
   Numer. Math. **85** (2000).
-- L. F. Pavarino, *Additive Schwarz methods for the p-version finite element
-  method*, Numer. Math. **66** (1994).
+- [BG98] P. B. Bochev and M. D. Gunzburger, *Finite element methods of
+  least-squares type*, SIAM Review **40**(4) (1998) 789–837.
+- P. B. Bochev and M. D. Gunzburger, *Least-Squares Finite Element Methods*,
+  Applied Mathematical Sciences 166, Springer (2009).
+- P. D. Brubeck and P. E. Farrell, *A scalable and robust vertex-star relaxation
+  for high-order FEM*, SISC **44** (2022) A2991-A3017.
+- Z. Cai, T. A. Manteuffel and S. F. McCormick, *First-order system least squares
+  for the Stokes equations, with application to linear elasticity*, SINUM **34**
+  (1997) 1727-1741.
+- W. Couzy and M. O. Deville, *A fast Schur complement method for the spectral
+  element discretization of the incompressible Navier-Stokes equations*, JCP
+  **116** (1995) 135-142.
+- P. E. Farrell, M. G. Knepley, L. Mitchell and F. Wechsung, *PCPATCH: software
+  for the topological construction of multigrid relaxation methods*, ACM TOMS
+  **47** (2021) 25.
+- P. F. Fischer, *An overlapping Schwarz method for spectral element solution of
+  the incompressible Navier–Stokes equations*, JCP **133** (1997) 84–101.
+- T. Führer and M. Karkulik, *New a priori analysis of first-order system
+  least-squares finite element methods for parabolic problems*, arXiv:1805.04147.
+- D. K. Gartling, *A test problem for outflow boundary conditions - flow over a
+  backward-facing step*, Int. J. Numer. Methods Fluids **11** (1990) 953-967.
 - U. Ghia, K. N. Ghia and C. T. Shin, *High-Re solutions for incompressible flow
   using the Navier–Stokes equations and a multigrid method*, JCP **48** (1982).
+- J. J. Heys, T. A. Manteuffel, S. F. McCormick and L. N. Olson, *Algebraic
+  multigrid for higher-order finite elements*, JCP **204** (2005) 520–532.
+- R. Hiptmair, *Multigrid method for H(div) in three dimensions*, ETNA **6**
+  (1997) 133-152.
+- R. Hiptmair and J. Xu, *Nodal auxiliary space preconditioning in H(curl) and
+  H(div) spaces*, SINUM **45** (2007) 2483-2509.
+- J. C. del Álamo and J. Jiménez, *Spectra of the very large anisotropic scales in
+  turbulent channels*, Phys. Fluids **15** (2003) L41–L44.
+- J.-L. Guermond and J. Shen, *A new class of truly consistent splitting schemes
+  for incompressible flows*, JCP **192** (2003) 262–276.
+- J. Jiménez and P. Moin, *The minimal flow unit in near-wall turbulence*,
+  JFM **225** (1991) 213–240.
+- K.-A. Mardal and R. Winther, *Preconditioning discretizations of systems of
+  partial differential equations*, Numer. Linear Algebra Appl. **18** (2011) 1-40.
+- J. Kim, P. Moin and R. Moser, *Turbulence statistics in fully developed channel
+  flow at low Reynolds number*, JFM **177** (1987) 133–166.
+- M. Lee and R. D. Moser, *Direct numerical simulation of turbulent channel flow
+  up to $Re_\tau\approx5200$*, JFM **774** (2015) 395–415.
+- L. Li, *A split-step finite-element method for incompressible Navier–Stokes
+  equations with high-order accuracy up to the boundary*, JCP **408** (2020)
+  109269; arXiv:1902.06773.
+- J. W. Lottes and P. F. Fischer, *Hybrid multigrid/Schwarz algorithms for the
+  spectral element method*, J. Sci. Comput. **24** (2005) 45–78.
+- Y. Maday and A. T. Patera, *Spectral element methods for the incompressible
+  Navier–Stokes equations*, in State-of-the-Art Surveys on Computational
+  Mechanics, ASME (1989) 71–143.
+- R. D. Moser, J. Kim and N. N. Mansour, *Direct numerical simulation of turbulent
+  channel flow up to $Re_\tau=590$*, Phys. Fluids **11** (1999) 943–945.
+- L. F. Pavarino, *Additive Schwarz methods for the p-version finite element
+  method*, Numer. Math. **66** (1994).
+- W. Pazner, T. Kolev and C. R. Dohrmann, *Low-order preconditioning for the
+  high-order finite element de Rham complex*, SISC **45** (2023) A675-A702.
+- P. R. Spalart, R. D. Moser and M. M. Rogers, *Spectral methods for the
+  Navier–Stokes equations with one infinite and two periodic directions*, JCP
+  **96** (1991) 297–324.  (The RKW3 scheme used here.)
+- J. Stiller, *Nonuniformly weighted Schwarz smoothers for spectral element
+  multigrid*, J. Sci. Comput. (2016); arXiv:1512.02390.
+- A. W. Vreman and J. G. M. Kuerten, *Comparison of direct numerical simulation
+  databases of turbulent channel flow at $Re_\tau=180$*, Phys. Fluids **26**
+  (2014) 015102.
