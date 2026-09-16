@@ -103,6 +103,43 @@ than the usual telling suggests:
 > the velocity, which is precisely why they survive — and it is not the reason
 > for the pointwise divergence difference.
 
+## 5b. Has equal order been demonstrated successful? — the literature, searched 2026-09-16
+
+The answer splits cleanly on *how the pressure is computed*, and the split is the
+whole defence.
+
+**In a coupled Galerkin setting: no.**  Equal order is inf-sup unstable and admits
+spurious pressure modes.  Maday & Patera's $P_N$–$P_{N-2}$ pairing exists for that
+reason, and production practice follows it: Nek5000's documentation states that
+"to avoid spurious pressure modes, spatial discretisation is based on the
+$P_N$–$P_{N-2}$ SEM", and its equal-order branch carries an explicit
+Fischer–Mullen filter "to suppress the spurious modes of pressure and momentum at
+the end of each time step".
+
+**In a splitting / consistent pressure-Poisson setting: yes, and the literature
+frames it as the point.**  Li (JCP 2020) builds a split-step finite-element
+method that "completely separates the pressure updates from the solution of
+velocity variables" and states that "when the pressure equation is formed
+explicitly, the algorithm avoids solving a saddle-point problem; therefore, our
+algorithm has more flexibility in choosing finite-element spaces" — and uses
+"Lagrange finite elements of equal order for both velocity and pressure".  The
+consistent-splitting SAV literature makes the same claim, circumventing the
+inf-sup condition to use equal-order pairs, and a 2022 *Computational Mechanics*
+paper on consistent pressure-Poisson splitting is titled, in part, "eliminating
+numerical boundary layers **and inf-sup compatibility restrictions**".
+
+**Which one is our comparison code?**  The second.  Its $E = G^{\mathsf T}M^{-1}G$
+is a consistent pressure-Poisson operator formed explicitly, and the scheme
+descends from Guermond–Shen consistent splitting by its own documentation.  So
+the equal-order choice is established practice for what it is, not a lapse — and
+the reviewer objection "you should have used $P_N$–$P_{N-2}$" answers itself:
+that pairing is the remedy for a saddle point this code never forms.
+
+**What survives of the objection**, and should be conceded in the paper: the
+pressure is still determined only up to the admitted modes, so no pressure claim
+can be made; and a mixed pairing would have slightly fewer pressure unknowns and
+so a slightly cheaper solve.
+
 ## 6. What would test it
 
 Two experiments, neither yet done:

@@ -1147,6 +1147,39 @@ turnovers against our 24.8, so part of its larger deviation may be sampling; and
 it ran at $\Delta t=3.5\times10^{-4}$ rather than $8\times10^{-4}$. Neither
 difference plausibly accounts for a 6.7 % bias in $u'$, but they should be stated.
 
+### 10.4 A note on the pressure spaces
+
+The two codes make different velocity–pressure choices, and a reader expecting
+the classical spectral-element pairing should know why this one was used.
+
+The projection code is **equal order**, $P_N$–$P_N$. For a *coupled* Stokes
+problem that pairing is inf-sup unstable and admits spurious pressure modes,
+which is exactly why the mixed $P_N$–$P_{N-2}$ discretisation of Maday and Patera
+exists and why production spectral-element codes adopt it for the coupled solve.
+That objection does not apply here. The consistent projection forms the pressure
+equation explicitly as $E=G^{\mathsf T}M^{-1}G$ and never assembles the saddle
+point, and for split-step formulations of this kind equal-order spaces are
+established practice precisely because the inf-sup restriction departs with the
+saddle point [Li 2020; Guermond & Shen].
+
+We chose the equal-order comparison deliberately rather than inheriting it. The
+least-squares formulation is equal order by construction — the absence of an
+inf-sup condition is one of the properties claimed for it in Section 1 — so
+holding the spaces fixed varies only the formulation. Comparing against
+$P_N$–$P_{N-2}$ would change the pressure space and the formulation at the same
+time, which is the less controlled experiment.
+
+Three consequences we state rather than leave to inference. **We make no pressure
+comparison**: the projection pressure is a splitting pseudo-pressure determined
+only up to the modes an equal-order space admits, and the archived field is 2.5
+to 3 times the physical pressure with its peak in the wrong place. **The
+divergence result is not an inf-sup effect**: the consistent path drives the
+*weak* divergence to machine precision, $G^{\mathsf T}\mathbf u=0$, and its
+pointwise divergence is large regardless; a $P_N$–$P_{N-2}$ pairing tests the
+divergence against a *smaller* space and would therefore not reduce it. And **a
+stable pairing would be slightly cheaper**, having fewer pressure unknowns, so
+the cost comparison of §10.3 is marginally generous to the least-squares side.
+
 ### 10.4 What does not agree
 
 The spanwise fluctuation peak is 3.5 % below the databases, outside their 1.0 %
@@ -1198,6 +1231,14 @@ avoid, not because it establishes the result.
   for high-order FEM*, SISC **44** (2022) A2991-A3017.
 - W. Pazner, T. Kolev and C. R. Dohrmann, *Low-order preconditioning for the
   high-order finite element de Rham complex*, SISC **45** (2023) A675-A702.
+- Y. Maday and A. T. Patera, *Spectral element methods for the incompressible
+  Navier–Stokes equations*, in State-of-the-Art Surveys on Computational
+  Mechanics, ASME (1989) 71–143.
+- L. Li, *A split-step finite-element method for incompressible Navier–Stokes
+  equations with high-order accuracy up to the boundary*, JCP **408** (2020)
+  109269; arXiv:1902.06773.
+- J.-L. Guermond and J. Shen, *A new class of truly consistent splitting schemes
+  for incompressible flows*, JCP **192** (2003) 262–276.
 - D. K. Gartling, *A test problem for outflow boundary conditions - flow over a
   backward-facing step*, Int. J. Numer. Methods Fluids **11** (1990) 953-967.
 - [BG98] P. B. Bochev and M. D. Gunzburger, *Finite element methods of
