@@ -216,14 +216,14 @@ def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
             return (ones @ (a*c*mw).reshape(M_, nk_)).reshape(-1)
     else:
         def dot(a, c):
-            return xp.sum(a*c*mw, axis=(0, 1, 2, 3))
+            return DEV.sum_over(a*c*mw, (0, 1, 2, 3))
     x = DEV.zeros_like(b)
     r = b - A(x)
     z = M(r)
     p = DEV.clone(z)
     rz = dot(r, z)
     bn = xp.sqrt(dot(b, b))
-    target = xp.maximum(tol*bn, 1e-300)
+    target = DEV.maximum(tol*bn, 1e-300)
     one = xp.ones_like(rz)
     it = 0
     for it in range(1, max_iter + 1):
@@ -238,7 +238,7 @@ def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
         # dominate the iteration itself.  Testing every K costs at most K-1
         # extra iterations out of hundreds, and skips K-1 reductions too.
         if it % check_every == 0 or it == max_iter:
-            if bool(xp.all(xp.sqrt(dot(r, r)) < target)):
+            if (DEV.all_(xp.sqrt(dot(r, r)) < target)):
                 break
         z = M(r)
         rzn = dot(r, z)
@@ -249,7 +249,7 @@ def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
     # recursion drifts from b - A x, and CG then declares victory on a number
     # that no longer describes the iterate.
     rt = xp.sqrt(dot(b - A(x), b - A(x)))
-    rel = float(xp.max(rt/xp.maximum(bn, 1e-300)))
+    rel = float(xp.max(rt/DEV.maximum(bn, 1e-300)))
     return x, it, rel
 
 

@@ -82,14 +82,14 @@ def _solve_dg(b, D, fx, fy, wq, kz, mesh, mask, M, tol, check_every):
         ones = S3._ones_row(M_, b)
         dot = lambda a, c: (ones @ (a*c*mw).reshape(M_, nk_)).reshape(-1)
     else:
-        dot = lambda a, c: xp.sum(a*c*mw, axis=(0, 1, 2, 3))
+        dot = lambda a, c: DEV.sum_over(a*c*mw, (0, 1, 2, 3))
     x = DEV.zeros_like(b)
     r = b - A(x)
     z = M(r)
     p = DEV.clone(z)
     rz = dot(r, z)
     bn = xp.sqrt(dot(b, b))
-    target = xp.maximum(tol*bn, 1e-300)
+    target = DEV.maximum(tol*bn, 1e-300)
     one = xp.ones_like(rz)
     it = 0
     for it in range(1, 4001):
@@ -100,7 +100,7 @@ def _solve_dg(b, D, fx, fy, wq, kz, mesh, mask, M, tol, check_every):
         x = x + al*p
         r = r - al*Ap
         if it % check_every == 0 or it == 4000:
-            if bool(xp.all(xp.sqrt(dot(r, r)) < target)):
+            if (DEV.all_(xp.sqrt(dot(r, r)) < target)):
                 break
         z = M(r)
         rzn = dot(r, z)
@@ -108,7 +108,7 @@ def _solve_dg(b, D, fx, fy, wq, kz, mesh, mask, M, tol, check_every):
         p = z + be*p
         rz = rzn
     rt = xp.sqrt(dot(b - A(x), b - A(x)))
-    return x, it, float(xp.max(rt/xp.maximum(bn, 1e-300)))
+    return x, it, float(xp.max(rt/DEV.maximum(bn, 1e-300)))
 
 
 def substage(s, Uc, pc, Nk, Nprev, k, dt):
@@ -303,7 +303,7 @@ def _pcg(A, b, M, mesh, tol, check_every, purge=None):
         ones = S3._ones_row(M_, b)
         dot = lambda a, c: (ones @ (a*c*mw).reshape(M_, nk_)).reshape(-1)
     else:
-        dot = lambda a, c: xp.sum(a*c*mw, axis=(0, 1, 2, 3))
+        dot = lambda a, c: DEV.sum_over(a*c*mw, (0, 1, 2, 3))
     x = DEV.zeros_like(b)
     r = b - A(x)
     z = M(r)
@@ -312,7 +312,7 @@ def _pcg(A, b, M, mesh, tol, check_every, purge=None):
     p = DEV.clone(z)
     rz = dot(r, z)
     bn = xp.sqrt(dot(b, b))
-    target = xp.maximum(tol*bn, 1e-300)
+    target = DEV.maximum(tol*bn, 1e-300)
     one = xp.ones_like(rz)
     it = 0
     for it in range(1, 4001):
@@ -323,7 +323,7 @@ def _pcg(A, b, M, mesh, tol, check_every, purge=None):
         x = x + al*p
         r = r - al*Ap
         if it % check_every == 0 or it == 4000:
-            if bool(xp.all(xp.sqrt(dot(r, r)) < target)):
+            if (DEV.all_(xp.sqrt(dot(r, r)) < target)):
                 break
         z = M(r)
         if purge is not None:
@@ -334,7 +334,7 @@ def _pcg(A, b, M, mesh, tol, check_every, purge=None):
         p = z + be*p
         rz = rzn
     rt = xp.sqrt(dot(b - A(x), b - A(x)))
-    return x, it, float(xp.max(rt/xp.maximum(bn, 1e-300)))
+    return x, it, float(xp.max(rt/DEV.maximum(bn, 1e-300)))
 
 
 def build_masks(mesh, nk, nz, nfield_c, wall=False):
