@@ -83,7 +83,12 @@ def _solve_dg(b, D, fx, fy, wq, kz, mesh, mask, M, tol, check_every):
         dot = lambda a, c: (ones @ (a*c*mw).reshape(M_, nk_)).reshape(-1)
     else:
         dot = lambda a, c: DEV.sum_over(a*c*mw, (0, 1, 2, 3))
-    x = DEV.zeros_like(b)
+    # WARM START.  Starting from zero discards a good guess: the projection is
+    # solved three times per step with a right-hand side that changes only as
+    # fast as the flow, so the previous substage's phi is close.  CG's stopping
+    # test is ||r|| < tol*||b|| regardless of where it starts, so the converged
+    # answer is as accurate either way -- only the iteration count changes.
+    x = DEV.zeros_like(b) if x0 is None else DEV.clone(x0)
     r = b - A(x)
     z = M(r)
     p = DEV.clone(z)
@@ -183,7 +188,7 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
     if s.get('consistent_p'):
         # P_N-P_N consistent projection: E = G^T M^{-1} G, weak divergence
         # zeroed identically.  bp/null handling happens inside.
-        Uc, phi, it_p, res_p = project_consistent(s, uhat, dt*T.BETA[k])
+        Uc, phi, it_p, res_p = project_consistent(s, uhat, dt*T.BETA[k], warm_key=k)
     elif s.get('dg_pressure'):
         phi, it_p, res_p = _solve_dg(bp, D, fx, fy, wq, kz, m, s['mask_p'],
                                      s['Mp'], s['tol'],
@@ -239,7 +244,7 @@ def apply_E(ph, D, fx, fy, wq3, kz, mesh, mask_p, mask_u, Mginv):
     return S3.gs(mesh, _split(z))*mask_p
 
 
-def project_consistent(s, uhat_c, dtc):
+def project_consistent(s, uhat_c, dtc, warm_key=None):
     """Consistent projection: solve E phi = (1/dtc) G^T uhat, correct uhat.
 
     Returns (u_corrected_complex, phi_complex, iters, res).  The pressure
@@ -280,15 +285,25 @@ def project_consistent(s, uhat_c, dtc):
         z = DEV.clone(z)
         z[..., 0:1, 0:1] -= (num/s['null_norm'])*v
         return z
+    # One stored phi PER SUBSTAGE: the three carry different 1/dtc scalings
+    # (1/beta = 4.32, 4.80, 6.00), so mixing them would hand CG a guess that is
+    # wrong by up to 1.4x in magnitude.  Keyed by substage, each is a good guess
+    # for its own successor one step later.
+    prev = s.setdefault('_phi_prev', {})
+    x0 = prev.get(warm_key) if s.get('warm_start', True) else None
+    if x0 is not None and x0.shape != b.shape:
+        x0 = None
     ph, it, res = _pcg(A, b, s['Mp'], m, s.get('tol_p', s['tol']),
-                       s.get('check_every'), purge=purge)
+                       s.get('check_every'), purge=purge, x0=x0)
+    if s.get('warm_start', True):
+        prev[warm_key] = DEV.clone(ph)
     phc = _join(ph)
     corr = _join(S3.gs(m, _split(wq3*gradient(phc, D, fx, fy, kz)))
                  * mask_u * Mginv)
     return uhat_c - dtc*corr, phc, it, res
 
 
-def _pcg(A, b, M, mesh, tol, check_every, purge=None):
+def _pcg(A, b, M, mesh, tol, check_every, purge=None, x0=None):
     """PCG in the multiplicity-weighted inner product; operator passed in.
 
     `purge`, when given, removes known null-space components from each
