@@ -270,6 +270,21 @@ def _index_cupy(mesh):
     return hit
 
 
+def to_host(a):
+    """Device array -> numpy, whatever the backend.
+
+    The E-multigrid's coarse setup reached for cupy's `.get()` directly, which
+    made the whole projection path cupy-only for no reason: the same code runs
+    on torch once the transfer is backend-agnostic, and torch is the backend
+    whose CUDA graphs can capture cuBLAS.
+    """
+    if is_tensor(a):
+        return a.detach().cpu().numpy()
+    if is_cupy(a):
+        return a.get()
+    return np.asarray(a)
+
+
 def to_device(a, like):
     """Move `a` to the device/dtype of `like`, leaving NumPy alone if `like` is."""
     if is_cupy(like):

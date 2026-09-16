@@ -69,12 +69,9 @@ class _EDirect:
         wq3 = m.wq[..., None, None]
         mask_u = PJ.build_masks(m, nk, int(2*(nk - 1)), 3, wall=True)
         # nz only enters build_masks via real_mode_columns; reuse level's mask
-        mask_u = DEV.to_host(lvl.mask_u) if hasattr(DEV, 'to_host') else (
-            lvl.mask_u if isinstance(lvl.mask_u, np.ndarray) else
-            np.asarray(lvl.mask_u.get()))
+        mask_u = DEV.to_host(lvl.mask_u)
         Mginv = 1.0/S3.gs(m, wq3 + np.zeros_like(wq3))
-        kzh = (np.asarray(lvl.kz.get()) if not isinstance(lvl.kz, np.ndarray)
-               else lvl.kz)
+        kzh = DEV.to_host(lvl.kz)
         Ah = lambda v: PJ.apply_E(v, Dh, m.facx, m.facy, wq3, kzh, m,
                                   mask, mask_u, Mginv)
         mwh = np.asarray(S3.multiplicity_weight(m, shape))
