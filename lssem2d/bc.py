@@ -1,5 +1,31 @@
 import numpy as np
 
+
+# Physical coordinates of the four element edges: W=0, E=1, S=2, N=3.
+#
+# ON AN AFFINE MESH the nodes are a tensor product, so a west edge has ONE x and
+# a whole row of y, and the callbacks below are handed (scalar, vector) and
+# broadcast.  ON A CURVILINEAR MESH that is simply false -- a curved edge varies
+# in both coordinates -- so the true nodal fields `mesh.X`, `mesh.Y` are used
+# instead and the callback receives (vector, vector).  Every callback in the
+# repo is numpy-vectorised, so the shape change is transparent to it.
+#
+# The affine branch is kept rather than routed through X/Y so that existing
+# validations stay bit-identical: X/Y would give the same numbers, but not the
+# same floating-point operations.
+_EDGE = {0: (np.s_[0, :], 0), 1: (np.s_[-1, :], -1), 2: (np.s_[:, 0], 0), 3: (np.s_[:, -1], -1)}
+
+
+def edge_xy(mesh, e, side):
+    if getattr(mesh, 'curvilinear', False):
+        sl = _EDGE[side][0]
+        return mesh.X[e][sl], mesh.Y[e][sl]
+    k = _EDGE[side][1]
+    if side in (0, 1):
+        return mesh.xnod[e, k], mesh.ynod[e, :]
+    return mesh.xnod[e, :], mesh.ynod[e, k]
+
+
 def apply_mask(mesh, U, pin_p=False):
     """
     Apply Dirichlet boundary condition mask to the state U.
@@ -69,7 +95,7 @@ def apply_bc(mesh, U, time=0.0, custom_inlet=None, custom_lid=None, exact_soluti
         # W
         bc = mesh.bc[e, 0]
         if bc in (1, 2, 3, 4, 5) and exact_solution:
-            u_ex, v_ex, p_ex, om_ex = exact_solution(mesh.xnod[e, 0], mesh.ynod[e, :], time)
+            u_ex, v_ex, p_ex, om_ex = exact_solution(*edge_xy(mesh, e, 0), time)
             if bc in (1, 2, 3):
                 U[e, 0, :, 0] = u_ex; U[e, 0, :, 1] = v_ex
             elif bc == 5:
@@ -79,11 +105,11 @@ def apply_bc(mesh, U, time=0.0, custom_inlet=None, custom_lid=None, exact_soluti
                 U[e, 0, :, 0:2] = 0.0
             elif bc == 2:
                 U[e, 0, :, 1] = 0.0
-                U[e, 0, :, 0] = custom_lid(mesh.xnod[e, 0], mesh.ynod[e, :], time) if custom_lid else 1.0
+                U[e, 0, :, 0] = custom_lid(*edge_xy(mesh, e, 0), time) if custom_lid else 1.0
             elif bc == 3:
                 U[e, 0, :, 1] = 0.0
                 if custom_inlet:
-                    U[e, 0, :, 0] = custom_inlet(mesh.xnod[e, 0], mesh.ynod[e, :], time)
+                    U[e, 0, :, 0] = custom_inlet(*edge_xy(mesh, e, 0), time)
             elif bc == 4:
                 U[e, 0, :, 2] = 0.0
             elif bc == 5:
@@ -92,7 +118,7 @@ def apply_bc(mesh, U, time=0.0, custom_inlet=None, custom_lid=None, exact_soluti
         # E
         bc = mesh.bc[e, 1]
         if bc in (1, 2, 3, 4, 5) and exact_solution:
-            u_ex, v_ex, p_ex, om_ex = exact_solution(mesh.xnod[e, -1], mesh.ynod[e, :], time)
+            u_ex, v_ex, p_ex, om_ex = exact_solution(*edge_xy(mesh, e, 1), time)
             if bc in (1, 2, 3):
                 U[e, -1, :, 0] = u_ex; U[e, -1, :, 1] = v_ex
             elif bc == 4:
@@ -104,11 +130,11 @@ def apply_bc(mesh, U, time=0.0, custom_inlet=None, custom_lid=None, exact_soluti
                 U[e, -1, :, 0:2] = 0.0
             elif bc == 2:
                 U[e, -1, :, 1] = 0.0
-                U[e, -1, :, 0] = custom_lid(mesh.xnod[e, -1], mesh.ynod[e, :], time) if custom_lid else 1.0
+                U[e, -1, :, 0] = custom_lid(*edge_xy(mesh, e, 1), time) if custom_lid else 1.0
             elif bc == 3:
                 U[e, -1, :, 1] = 0.0
                 if custom_inlet:
-                    U[e, -1, :, 0] = custom_inlet(mesh.xnod[e, -1], mesh.ynod[e, :], time)
+                    U[e, -1, :, 0] = custom_inlet(*edge_xy(mesh, e, 1), time)
             elif bc == 4:
                 U[e, -1, :, 2] = 0.0
             elif bc == 5:
@@ -117,7 +143,7 @@ def apply_bc(mesh, U, time=0.0, custom_inlet=None, custom_lid=None, exact_soluti
         # S
         bc = mesh.bc[e, 2]
         if bc in (1, 2, 3, 4, 5) and exact_solution:
-            u_ex, v_ex, p_ex, om_ex = exact_solution(mesh.xnod[e, :], mesh.ynod[e, 0], time)
+            u_ex, v_ex, p_ex, om_ex = exact_solution(*edge_xy(mesh, e, 2), time)
             if bc in (1, 2, 3):
                 U[e, :, 0, 0] = u_ex; U[e, :, 0, 1] = v_ex
             elif bc == 4:
@@ -129,11 +155,11 @@ def apply_bc(mesh, U, time=0.0, custom_inlet=None, custom_lid=None, exact_soluti
                 U[e, :, 0, 0:2] = 0.0
             elif bc == 2:
                 U[e, :, 0, 1] = 0.0
-                U[e, :, 0, 0] = custom_lid(mesh.xnod[e, :], mesh.ynod[e, 0], time) if custom_lid else 1.0
+                U[e, :, 0, 0] = custom_lid(*edge_xy(mesh, e, 2), time) if custom_lid else 1.0
             elif bc == 3:
                 U[e, :, 0, 1] = 0.0
                 if custom_inlet:
-                    U[e, :, 0, 0] = custom_inlet(mesh.xnod[e, :], mesh.ynod[e, 0], time)
+                    U[e, :, 0, 0] = custom_inlet(*edge_xy(mesh, e, 2), time)
             elif bc == 4:
                 U[e, :, 0, 2] = 0.0
             elif bc == 5:
@@ -142,7 +168,7 @@ def apply_bc(mesh, U, time=0.0, custom_inlet=None, custom_lid=None, exact_soluti
         # N
         bc = mesh.bc[e, 3]
         if bc in (1, 2, 3, 4, 5) and exact_solution:
-            u_ex, v_ex, p_ex, om_ex = exact_solution(mesh.xnod[e, :], mesh.ynod[e, -1], time)
+            u_ex, v_ex, p_ex, om_ex = exact_solution(*edge_xy(mesh, e, 3), time)
             if bc in (1, 2, 3):
                 U[e, :, -1, 0] = u_ex; U[e, :, -1, 1] = v_ex
             elif bc == 4:
@@ -154,11 +180,11 @@ def apply_bc(mesh, U, time=0.0, custom_inlet=None, custom_lid=None, exact_soluti
                 U[e, :, -1, 0:2] = 0.0
             elif bc == 2:
                 U[e, :, -1, 1] = 0.0
-                U[e, :, -1, 0] = custom_lid(mesh.xnod[e, :], mesh.ynod[e, -1], time) if custom_lid else 1.0
+                U[e, :, -1, 0] = custom_lid(*edge_xy(mesh, e, 3), time) if custom_lid else 1.0
             elif bc == 3:
                 U[e, :, -1, 1] = 0.0
                 if custom_inlet:
-                    U[e, :, -1, 0] = custom_inlet(mesh.xnod[e, :], mesh.ynod[e, -1], time)
+                    U[e, :, -1, 0] = custom_inlet(*edge_xy(mesh, e, 3), time)
             elif bc == 4:
                 U[e, :, -1, 2] = 0.0
             elif bc == 5:

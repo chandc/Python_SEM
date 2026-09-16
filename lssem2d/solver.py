@@ -74,11 +74,22 @@ def compute_jacobi(state, fu, fv, pin_p=False):
     phix = np.einsum('ki,jl->ijkl', D, I)
     phiy = np.einsum('ik,lj->ijkl', I, D)
 
-    fx = m.facx[:, None, None, None, None]
-    fy = m.facy[:, None, None, None, None]
     P  = phi[None]
-    Px = phix[None] * fx
-    Py = phiy[None] * fy
+    # The basis derivatives are the only geometry in this routine.  On an affine
+    # element dr/dx is the constant facx, so d(phi)/dx is one reference
+    # derivative times one scalar.  On a curvilinear element the chain rule
+    # brings in the second reference derivative and all four metric fields, each
+    # varying over the element -- so the scaling moves inside the [k1,k2]
+    # quadrature axes.  This must track lssem.apply_L exactly (curvi.ddx/ddy
+    # there) or the preconditioner stops being the diagonal of the operator
+    # being solved, which degrades silently into extra iterations.
+    if m.curvilinear:
+        q = lambda a: a[:, None, None, :, :]
+        Px = q(m.rx)*phix[None] + q(m.sx)*phiy[None]
+        Py = q(m.ry)*phix[None] + q(m.sy)*phiy[None]
+    else:
+        Px = phix[None] * m.facx[:, None, None, None, None]
+        Py = phiy[None] * m.facy[:, None, None, None, None]
     
     # linearisation quantities at the quadrature point (k1,k2) -> axes (e,1,1,k1,k2)
     e_ = lambda a: a[:, None, None, :, :]

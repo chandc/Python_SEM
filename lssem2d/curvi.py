@@ -213,6 +213,15 @@ def build_annulus(r_in, r_out, E_r, E_th, N, theta0=0.0, theta1=2*np.pi,
             mesh.bc[e, 1] = bcs[1] if i == E_r - 1 else 0    # outer radius
             mesh.bc[e, 2] = bcs[2] if j == 0 else 0
             mesh.bc[e, 3] = bcs[3] if j == E_th - 1 else 0
+            # Face-neighbour table, in the same W/E/S/N order as the bc codes:
+            # the reference r direction is the FIRST node index, so W/E are the
+            # radial faces and S/N the azimuthal ones.  `compute_global_indices`
+            # uses this to verify that every shared edge actually merged; left
+            # at -1 the check passes vacuously and a disconnected mesh is silent.
+            mesh.neighbour[e, 0] = e - E_th if i > 0 else -1
+            mesh.neighbour[e, 1] = e + E_th if i < E_r - 1 else -1
+            mesh.neighbour[e, 2] = e - 1 if j > 0 else -1
+            mesh.neighbour[e, 3] = e + 1 if j < E_th - 1 else -1
     mesh.xnod = X[:, :, 0].copy()          # r-direction trace, for hashing
     mesh.ynod = Y[:, 0, :].copy()
     attach(mesh, X, Y)

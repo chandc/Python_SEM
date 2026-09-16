@@ -134,11 +134,24 @@ class Mesh:
         px = getattr(self, 'periodic_x', None)
         py = getattr(self, 'periodic_y', None)
 
+        # CURVILINEAR MESHES HASH ON THE TRUE NODAL COORDINATES.  The affine
+        # form below reads a tensor product, xnod[e,i] x ynod[e,j], which on a
+        # curved element is not where the node is -- an annulus would hash its
+        # shared theta-edges to different cells and the guard below would fire.
+        # A mesh deformed from an affine one may be indexed either before or
+        # after `curvi.attach`: the deformation moves shared nodes together, so
+        # both orders give the same connectivity.
+        _curv = getattr(self, 'curvilinear', False)
+
         for e in range(self.nelem):
             for i in range(self.nterm):
                 for j in range(self.nterm):
-                    x = self.xnod[e, i]
-                    y = self.ynod[e, j]
+                    if _curv:
+                        x = self.X[e, i, j]
+                        y = self.Y[e, i, j]
+                    else:
+                        x = self.xnod[e, i]
+                        y = self.ynod[e, j]
                     if px:
                         # tolerance-aware wrap: a node sitting a hair below Lx
                         # must land on 0, not on Lx - 1e-12
