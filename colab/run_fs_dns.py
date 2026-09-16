@@ -52,7 +52,7 @@ def put(src, dst):
     return True
 
 
-def sync(out, drive):
+def sync(out, drive, archive=2.0):
     """Never let a Drive fault end the run (see run_channel_dns.safe_sync)."""
     if not drive:
         return
@@ -66,6 +66,21 @@ def sync(out, drive):
             with np.load(st, allow_pickle=True) as z:
                 t = float(z['t'])
             put(st, os.path.join(drive, f'stats_t{t:07.3f}.npz'))
+        # ARCHIVE VELOCITY FIELDS, not only the accumulators.  The statistics
+        # files carry U, uu, vv, ww, uv and nothing else, so vorticity rms,
+        # pointwise divergence and the modal spectrum -- the quantities where
+        # the two formulations are expected to differ most -- cannot be computed
+        # from them at all.  Those need the field.  One snapshot per `archive`
+        # turnovers, ~10 MB each, keeps that comparison possible; the
+        # least-squares run kept its checkpoints on the same reasoning.
+        ck = os.path.join(out, 'chk_latest.npz')
+        if os.path.exists(ck):
+            with np.load(ck) as z:
+                tc = float(z['t'])
+            slot = int(tc/archive)*archive
+            dst = os.path.join(drive, f'field_t{slot:05.1f}.npz')
+            if not os.path.exists(dst):
+                put(ck, dst)
         return n
     except Exception as e:
         print(f'  [!] sync to Drive FAILED: {type(e).__name__}: {e}; '
