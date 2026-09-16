@@ -83,11 +83,14 @@ def _solve_dg(b, D, fx, fy, wq, kz, mesh, mask, M, tol, check_every):
         dot = lambda a, c: (ones @ (a*c*mw).reshape(M_, nk_)).reshape(-1)
     else:
         dot = lambda a, c: DEV.sum_over(a*c*mw, (0, 1, 2, 3))
-    # WARM START.  Starting from zero discards a good guess: the projection is
-    # solved three times per step with a right-hand side that changes only as
-    # fast as the flow, so the previous substage's phi is close.  CG's stopping
-    # test is ||r|| < tol*||b|| regardless of where it starts, so the converged
-    # answer is as accurate either way -- only the iteration count changes.
+    # WARM START, measured and DEFAULTED OFF.  Reusing the previous substage's
+    # phi changed nothing: 87 iterations either way on the production channel.
+    # The reason is the preconditioner, not the guess.  At a convergence factor
+    # of 0.926 per iteration, reaching tol = 1e-4 costs log(1e-4/r0)/log(0.926)
+    # iterations, so a guess must be an ORDER of magnitude better than zero to
+    # save even 25% -- 120 iterations from r0 = ||b||, 111 from half of it, 90
+    # from a tenth.  A weak V-cycle blunts any warm start.  Kept behind
+    # s['warm_start'] because it would pay against a stronger preconditioner.
     x = DEV.zeros_like(b) if x0 is None else DEV.clone(x0)
     r = b - A(x)
     z = M(r)
@@ -290,12 +293,12 @@ def project_consistent(s, uhat_c, dtc, warm_key=None):
     # wrong by up to 1.4x in magnitude.  Keyed by substage, each is a good guess
     # for its own successor one step later.
     prev = s.setdefault('_phi_prev', {})
-    x0 = prev.get(warm_key) if s.get('warm_start', True) else None
+    x0 = prev.get(warm_key) if s.get('warm_start', False) else None
     if x0 is not None and x0.shape != b.shape:
         x0 = None
     ph, it, res = _pcg(A, b, s['Mp'], m, s.get('tol_p', s['tol']),
                        s.get('check_every'), purge=purge, x0=x0)
-    if s.get('warm_start', True):
+    if s.get('warm_start', False):
         prev[warm_key] = DEV.clone(ph)
     phc = _join(ph)
     corr = _join(S3.gs(m, _split(wq3*gradient(phc, D, fx, fy, kz)))

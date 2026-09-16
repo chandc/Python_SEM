@@ -181,6 +181,32 @@ round-off from cuBLAS choosing its algorithm differently under capture.
 and every derivative here is an einsum, so there is no capturable subset.  That
 is what the port was for.
 
+### The last two levers, measured (2026-09-16)
+
+**The time step holds at 8e−4** — the least-squares value, 2.3× fewer steps.
+Marched to the same physical time from the same restart: $u_\tau$ 1.01301 against
+1.01307 (0.01 %), relative pointwise divergence 2.27e−1 both, max|u| 629.76
+against 629.74.  Same physics at 50 steps instead of 114.  Both schemes are RKW3
+with the same $\sqrt3$ CFL limit, so the smaller step appears to have been
+convention rather than necessity.
+
+**The warm start bought nothing** — 87 iterations either way.  The reason is
+worth recording because it applies to any weakly preconditioned solve: at a
+convergence factor of 0.926 per iteration, reaching a relative $10^{-4}$ costs
+$\log(10^{-4}/r_0)/\log(0.926)$ iterations, so a starting residual of half
+$\lVert b\rVert$ saves 9 iterations of 120 and a tenth saves 30.  A guess must be
+an order of magnitude better than zero to be worth noticing.  The lever is the
+preconditioner, not the initial guess; the code is kept behind
+`s['warm_start']`, defaulted off.
+
+| | s/step | h per eddy turnover | campaign (25 turnovers) |
+|---|---|---|---|
+| E path as vendored (cupy, 3.5e−4) | 19.96 | 15.84 | 397 h |
+| **E path, torch + graph, 8e−4** | **1.92** | **0.67** | **16.7 h** |
+| least squares | 1.62 | 0.56 | 14.1 h |
+
+**1.19×.**  From 28× when this started.
+
 ### What this does to the comparison
 
 Before this work the consistent projection looked 28× more expensive per eddy
