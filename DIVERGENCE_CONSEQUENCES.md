@@ -40,6 +40,17 @@ sits within 1.2 % of the mean of five reference databases and the fractional-ste
 twin within 2.9 %, on the same box and mesh — a gap that tracks the averaging
 window and the minimal box, not a factor of 3,000 in pointwise divergence.
 
+## 2b. What it is NOT: an inf-sup effect
+
+The projection code is equal-order $P_N$–$P_N$ and therefore does violate the
+LBB condition, so it is tempting to file the divergence result under that
+heading.  It does not belong there.  The consistent path zeroes the **weak**
+divergence identically — $G^{\mathsf T}\mathbf u = 0$ to machine precision — and
+its pointwise divergence is large anyway.  LBB governs whether the *pressure* is
+determined; the weak-versus-strong distinction governs whether the *divergence*
+is small pointwise.  Two deficiencies, two consequences, and conflating them
+would be checkable and wrong.  See `LBB_AND_THE_TWO_DEFICIENCIES.md`.
+
 ## 3. Why that is not a paradox
 
 In a $C^0$ spectral element method the **weak** divergence is what enters the

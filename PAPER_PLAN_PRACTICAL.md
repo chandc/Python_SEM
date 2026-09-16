@@ -281,6 +281,18 @@ vorticity (measured, with a caveat), and a mechanism-level argument for particle
 tracking and scalar transport that we have **not** demonstrated.  It proposes the
 one-day experiment that would.
 
+## Two notes for Section 10, recorded but not yet integrated
+
+* `DIVERGENCE_CONSEQUENCES.md` — what the pointwise-divergence disparity does
+  (vorticity) and does not (low-order statistics) buy, with the narrow claim the
+  evidence supports and the one-day experiment that would widen it.
+* `LBB_AND_THE_TWO_DEFICIENCIES.md` — the projection code is equal-order
+  $P_N$–$P_N$ and violates the inf-sup condition; this costs it a determinate
+  pressure and nothing else, and is a *different* deficiency from the divergence
+  one.  It is also the paper's one genuinely structural advantage for least
+  squares — a theorem, not a measurement — and the note fixes its scope so
+  Section 1's claim is not overstated.
+
 ## Schedule
 
 | | work | days |
