@@ -39,6 +39,8 @@ from copy import copy
 
 import numpy as np
 
+from . import device as DEV
+
 from lssem2d.lgl import lgl_nodes, diff_matrix
 from . import operator as OP
 from . import bc as BC
@@ -123,7 +125,7 @@ class Chebyshev4:
             return self._P(r)
         z = np.zeros_like(r)
         d = np.zeros_like(r)
-        rf = r.copy()
+        rf = DEV.clone(r)
         for k in range(1, self.deg + 1):
             c1 = (2.0*k - 3.0)/(2.0*k + 1.0)
             c2 = self.beta[k-1]*(8.0*k - 4.0)/((2.0*k + 1.0)*self.rho)

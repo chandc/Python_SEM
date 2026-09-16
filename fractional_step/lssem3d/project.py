@@ -176,7 +176,7 @@ def substage(s, Uc, pc, Nk, Nprev, k, dt):
     v = s['null_kz0']
     if v is not None:
         num = float((bp[..., 0:1, 0:1]*v*s['mw1']).sum())
-        bp = bp.copy()
+        bp = DEV.clone(bp)
         bp[..., 0:1, 0:1] -= (num/s['null_norm'])*v
     # CONSISTENT PROJECTION when asked for: invert D.G, the same operators the
     # update uses, so the divergence cancels exactly rather than only weakly.
@@ -266,7 +266,7 @@ def project_consistent(s, uhat_c, dtc):
     v = s.get('null_kz0')
     if v is not None:
         num = float((b[..., 0:1, 0:1]*v*s['mw1']).sum())
-        b = b.copy()
+        b = DEV.clone(b)
         b[..., 0:1, 0:1] -= (num/s['null_norm'])*v
     A = lambda p: apply_E(p, D, fx, fy, wq3, kz, m, mask_p, mask_u, Mginv)
     # E's null vector is the PURE CONSTANT at kz=0 -- valid only on an
@@ -277,7 +277,7 @@ def project_consistent(s, uhat_c, dtc):
         if v is None:
             return z
         num = (z[..., 0:1, 0:1]*v*s['mw1']).sum()
-        z = z.copy()
+        z = DEV.clone(z)
         z[..., 0:1, 0:1] -= (num/s['null_norm'])*v
         return z
     ph, it, res = _pcg(A, b, s['Mp'], m, s.get('tol_p', s['tol']),
@@ -449,7 +449,7 @@ def step_kim_moin(s, Uc, phi_prev, dt, pc=None, skew=True):
         v = s.get('null_kz0')
         if v is not None:
             num = float((bfp[..., 0:1, 0:1]*v*s['mw1']).sum())
-            bfp = bfp.copy()
+            bfp = DEV.clone(bfp)
             bfp[..., 0:1, 0:1] -= (num/s['null_norm'])*v
         pn, it_fp, _ = HH.solve(bfp, D, fx, fy, wq, kz**2, 1.0, m,
                                 s['mask_p'], s['Mp'], tol=s['tol'],
@@ -506,7 +506,7 @@ def step_kim_moin(s, Uc, phi_prev, dt, pc=None, skew=True):
     v = s.get('null_kz0')
     if v is not None:
         num = float((bp[..., 0:1, 0:1]*v*s['mw1']).sum())
-        bp = bp.copy()
+        bp = DEV.clone(bp)
         bp[..., 0:1, 0:1] -= (num/s['null_norm'])*v
     # CONSISTENT PROJECTION when asked for: invert D.G, the same operators the
     # update uses, so the divergence cancels exactly rather than only weakly.
