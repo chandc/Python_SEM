@@ -109,6 +109,38 @@ On a deliberately distorted mesh (sinusoidal perturbation of interior nodes):
 *Why first:* every later error is uninterpretable if the metrics are wrong, and
 these four catch nearly every implementation mistake in the mapping.
 
+**PASSED 2026-09-16** (`scratch/curvi_g0.py`, `figs/curvi_g0.png`).  All values
+are **multiples of the round-off floor**, not absolute errors — see below:
+
+| identity | affine | rotated 30° | deformed 10 % | annulus |
+|---|---|---|---|---|
+| grad(1) = 0 | 4.2 | 6.5 | 4.0 | 4.8 |
+| grad(x) = (1,0) | 0.5 | 1.0 | 1.5 | 1.0 |
+| grad(y) = (0,1) | 0.5 | 1.0 | 1.5 | 1.0 |
+| div(const) = 0 | 5.3 | 5.9 | 4.2 | 4.8 |
+| area | 11.0 | 11.0 | — | 11.9 |
+| adjoint x | 0.0 | 0.1 | 0.0 | 0.0 |
+| adjoint y | 0.1 | 0.0 | 0.0 | 0.0 |
+
+Worst 11.9 against a gate of 50.  Quarter-annulus area 0.589048622548 against an
+exact $\pi(1-0.25)/4 = 0.589048622548$.
+
+**The gate had to be rewritten before it meant anything, twice, and both fixes
+were to the test rather than the code.**  An absolute threshold of $10^{-13}$
+failed the annulus at $5\times10^{-13}$ — but differentiating a constant cannot
+beat round-off *amplified by the operator*, $\epsilon\lVert D\rVert\lVert
+\text{metric}\rVert$, since $D$ has entries of order $N^2$ and the metric of
+order $1/h$.  Measuring that ratio across meshes settled it: 4–7 everywhere,
+**unchanged when the annulus is refined twofold** (which doubles both the metric
+and the error) and when $N$ is raised. That is round-off, and an absolute gate
+would have failed every fine mesh for no reason.  Separately the adjoint test
+read 61 units on the affine mesh, which is the *cancellation* in a dot product
+of random fields — normalising by the summation condition
+$\sum|t|/|\sum t|$ puts it at 0.1.
+
+A real metric bug lands at $10^6$ units or more, so the rescaled gate is in no
+danger of passing one; the first version was simply measuring the wrong thing.
+
 ### G1 — Affine rotation invariance
 
 *Known answer: the existing Cartesian results, to round-off.*

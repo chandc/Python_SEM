@@ -28,9 +28,19 @@ class Mesh:
         
         # Derived
         self.jac = np.zeros(nelem)
-        self.facx = np.zeros(nelem)
-        self.facy = np.zeros(nelem)
+        self._facx = np.zeros(nelem)
+        self._facy = np.zeros(nelem)
         self.wq = np.zeros((nelem, self.nterm, self.nterm))
+
+        # CURVILINEAR SUPPORT (lssem2d/curvi.py, CURVILINEAR_2D_PLAN.md).
+        # False keeps every affine path bit-identical; curvi.attach() flips it
+        # and fills the metric fields below, after which facx/facy RAISE rather
+        # than hand back a constant that is no longer the whole story.  Failing
+        # loudly at an unconverted call site is the point: there are 57 of them.
+        self.curvilinear = False
+        self.X = self.Y = None                  # (nelem, n, n) node coordinates
+        self.rx = self.ry = self.sx = self.sy = None
+        self.jacq = None                        # (nelem, n, n) Jacobian
         
         self.gidx = -np.ones((nelem, self.nterm, self.nterm), dtype=int)
         
@@ -38,6 +48,32 @@ class Mesh:
         self.Q = None
         self.QT = None
         
+    @property
+    def facx(self):
+        if self.curvilinear:
+            raise AttributeError(
+                'facx is not defined on a curvilinear mesh: dr/dx varies over '
+                'the element and has a cross term.  Use lssem2d.curvi.ddx(U, D, '
+                'mesh), which carries rx and sx.')
+        return self._facx
+
+    @facx.setter
+    def facx(self, v):
+        self._facx = v
+
+    @property
+    def facy(self):
+        if self.curvilinear:
+            raise AttributeError(
+                'facy is not defined on a curvilinear mesh: ds/dy varies over '
+                'the element and has a cross term.  Use lssem2d.curvi.ddy(U, D, '
+                'mesh), which carries ry and sy.')
+        return self._facy
+
+    @facy.setter
+    def facy(self, v):
+        self._facy = v
+
     def setup_derived(self):
         """Compute Jacobians, mapping factors, physical nodes, and quadrature weights."""
         xi = lgl_nodes(self.N)
