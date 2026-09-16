@@ -23,7 +23,11 @@ outdir = arg('--outdir', 'scratch/_minchan_stat')
 TEND = float(arg('--tend', 28.0))
 DT = float(arg('--dt', 3.5e-4))
 CONSISTENT = '--consistent' in sys.argv
-ACC_EVERY, LOG_EVERY, CHK_MIN = 5, 100, 20.0
+ACC_EVERY, LOG_EVERY = 5, 100
+# minutes between checkpoints.  A session killed at its wall-clock budget
+# loses everything since the last one, so a multi-session campaign wants
+# this smaller than the 20 minutes that suited a single long run.
+CHK_MIN = float(arg('--chkmin', '20.0'))
 
 import lssem3d; lssem3d.set_backend(backend)
 from lssem2d.mesh import build_channel
@@ -126,6 +130,25 @@ NY = len(groups)
 sums = np.zeros((5, NY))          # U, uu, vv, ww, uv (plane means)
 nsamp = 0
 utau_series = []
+# RESUME THE ACCUMULATORS.  These are running SUMS, so a campaign split across
+# sessions can either carry them forward or add the segments afterwards.  The
+# least-squares driver carries them with the checkpoint; doing the same here
+# keeps the two comparable and removes a merge step that is easy to forget.
+# Sums are additive, so resuming is exactly equivalent to summing segments.
+_st = arg('--resume-stats', '')
+if _st == 'auto':
+    _st = os.path.join(os.path.dirname(restart) or '.', 'stats_latest.npz')
+if _st and os.path.exists(_st):
+    _z = np.load(_st, allow_pickle=True)
+    if _z['sums'].shape == sums.shape:
+        sums = np.asarray(_z['sums'], dtype=float).copy()
+        nsamp = int(_z['nsamp'])
+        utau_series = [tuple(r) for r in np.asarray(_z['utau_series'], dtype=float)]
+        print(f'resumed statistics from {_st}: {nsamp} samples, '
+              f'{len(utau_series)} u_tau points', flush=True)
+    else:
+        print(f'IGNORED {_st}: y-grid mismatch '
+              f'{_z["sums"].shape} vs {sums.shape}', flush=True)
 
 def accumulate(Uc_host):
     global nsamp
