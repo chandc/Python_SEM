@@ -33,20 +33,31 @@ def main():
     ap.add_argument('--restart', default=os.path.join(
         _R, 'results/minchan_re180_E/state_t15.95.npz'))
     ap.add_argument('--repeat', type=int, default=20)
+    ap.add_argument('--backend', default='torch',
+                    help='torch: the only backend whose graphs capture cuBLAS')
     ap.add_argument('--steps', type=int, default=0,
                     help='also time this many full steps with and without the graph')
     a = ap.parse_args()
 
     t0 = float(np.load(a.restart)['t'])
-    sys.argv = ['fs_minchan_stats.py', '--restart', a.restart, '--backend', 'cupy',
+    sys.argv = ['fs_minchan_stats.py', '--restart', a.restart, '--backend', a.backend,
                 '--tend', repr(t0), '--outdir', '/tmp/fs_graphcheck', '--consistent']
     print('building the production setup (zero steps)...', flush=True)
     G = runpy.run_path(os.path.join('scratch', 'fs_minchan_stats.py'),
                        run_name='__main__')
 
-    import cupy as cp
-    from cupyx.profiler import benchmark
+    import torch
     from lssem3d.graph_vcycle import maybe_graph
+    from lssem3d import device as DEV
+
+    def bench(fn, n=a.repeat):
+        import time
+        fn(); torch.cuda.synchronize()
+        t0_ = time.perf_counter()
+        for _ in range(n):
+            fn()
+        torch.cuda.synchronize()
+        return (time.perf_counter() - t0_)/n
 
     s, Uc, PJ = G['s'], G['Uc'], G['PJ']
     Mp = s['Mp']
@@ -54,13 +65,12 @@ def main():
 
     # the right-hand side the solver actually presents, plus two synthetic ones
     div = PJ.divergence(Uc, s['Dg'], s['fxg'], s['fyg'], s['kzg'])
-    real_rhs = (cp.concatenate([div.real, div.imag], axis=3)
-                if div.dtype.kind == 'c' else div)
-    real_rhs = cp.ascontiguousarray(real_rhs*mask).astype(cp.float64)
-    rng = cp.random.default_rng(0)
+    real_rhs = DEV.cat([div.real, div.imag], 3) if div.is_complex() else div
+    real_rhs = (real_rhs*mask).contiguous().double()
+    torch.manual_seed(0)
     cases = [('solver right-hand side', real_rhs),
-             ('random', (rng.standard_normal(real_rhs.shape)*mask).astype(cp.float64)),
-             ('ones', (cp.ones_like(real_rhs)*mask))]
+             ('random', torch.randn_like(real_rhs)*mask),
+             ('ones', torch.ones_like(real_rhs)*mask)]
 
     ref = [Mp(r).copy() for _, r in cases]          # uncaptured reference first
 
@@ -73,8 +83,8 @@ def main():
     for (name, r), z0 in zip(cases, ref):
         for rep in range(2):                        # twice: catch buffer reuse bugs
             z = Mg(r)
-            d = float(cp.abs(z - z0).max())
-            rel = d/max(float(cp.abs(z0).max()), 1e-300)
+            d = float((z - z0).abs().max())
+            rel = d/max(float(z0.abs().max()), 1e-300)
             worst = max(worst, rel)
             if rep:
                 tag = 'BIT-EXACT' if d == 0.0 else ('round-off' if rel < 1e-13
@@ -85,18 +95,19 @@ def main():
                          'reference.  Do not use it.')
 
     print('\ncorrectness passed; timing the apply')
+    base = None
     for lab, fn in (('uncaptured', lambda: Mp(real_rhs)),
-                    ('graph      ', lambda: Mg(real_rhs))):
-        fn()
-        b = benchmark(fn, n_repeat=a.repeat, n_warmup=3)
-        print(f'  {lab}  {b.cpu_times.mean()*1e3:8.3f} ms')
+                    ('graph     ', lambda: Mg(real_rhs))):
+        ms = bench(fn)*1e3
+        base = base or ms
+        print(f'  {lab}  {ms:8.3f} ms   {base/ms:5.2f}x')
 
     if a.steps:
         print(f'\nend-to-end: {a.steps} steps with and without the graph')
         import subprocess
         for flag in ('', '--graph'):
             cmd = [sys.executable, os.path.join(_R, 'colab', 'fs_profile.py'),
-                   '--steps', str(a.steps), '--backend', 'cupy', '--consistent']
+                   '--steps', str(a.steps), '--backend', a.backend, '--consistent']
             if flag:
                 cmd.append(flag)
             out = subprocess.run(cmd, capture_output=True, text=True,
