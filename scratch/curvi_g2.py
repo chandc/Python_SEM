@@ -157,7 +157,7 @@ def exact_factory(state, pin_p=True):
     rather than on the discretisation.  Instead the RECTANGULAR least-squares
     operator is assembled,
 
-        Lh = sqrt(wq) * L_plain * mask * expand ,     A = Lh^T Lh  exactly,
+        Lh = sqrt(wq) * L_plain * expand ,        A = Lh^T Lh  exactly,
 
     and `A g = b` is solved through the triangular factor of its QR: R^T y = b,
     R g = y.  R carries the condition number of L, not of A, so the formation
@@ -166,11 +166,23 @@ def exact_factory(state, pin_p=True):
     `apply_L` returns rows already multiplied by wq, so the square root is
     recovered by dividing by sqrt(wq) -- this is the same operator the iterative
     path applies, assembled, not a second derivation of it.
+
+    ASSEMBLED PER LOCAL NODE, NOT PER GLOBAL ONE.  `apply_L` is element-local:
+    nothing couples elements until `gather_scatter`, which happens outside it in
+    `apply_A`.  So putting a 1 at local index (i, j, f) in EVERY element at once
+    and calling `apply_L` once returns that column for every element
+    simultaneously, and the number of operator applications drops from
+    4*n_global to 4*(N+1)^2 -- independent of the element count.  The global
+    columns are then sums of local ones, which is just the expansion operator
+    written out.  On gate G3 at N = 9 this is the difference between 450 s and
+    one that finishes; G4 and G6 are not reachable without it.
     """
     m = state.mesh
     gidx = m.gidx
     ng = int(gidx.max()) + 1
     nf = 4
+    nl = m.nterm
+    nblk = nl*nl*nf
     rep = np.zeros((ng, 3), int)
     for e in range(m.nelem):
         for i in range(m.nterm):
@@ -178,25 +190,35 @@ def exact_factory(state, pin_p=True):
                 rep[gidx[e, i, j]] = (e, i, j)
     re_, ri, rj = rep[:, 0], rep[:, 1], rep[:, 2]
     sw = np.sqrt(m.wq)[..., None]
+    gflat = (gidx[..., None]*nf + np.arange(nf)).reshape(m.nelem, nblk)
     diag = {}
 
     def factory(st, fu, fv, M_inv, pp):
         from lssem2d.lssem import apply_L
         mask = st.get_global_mask(pin_p=pp)
         free = mask[re_, ri, rj, :].ravel() > 0.5
-        nfree = int(free.sum())
-        cols = np.zeros((m.nelem*m.nterm*m.nterm*nf, nfree))
-        dU = np.zeros((m.nelem, m.nterm, m.nterm, nf))
+        colof = np.full(ng*nf, -1)
+        colof[free] = np.arange(int(free.sum()))
+
+        # one apply_L per LOCAL degree of freedom, giving that column in every
+        # element at once
+        Lloc = np.empty((m.nelem, nblk, nblk))
+        dU = np.zeros((m.nelem, nl, nl, nf))
         c = 0
-        for g in range(ng):
-            sel = gidx == g
-            for f in range(nf):
-                if not free[g*nf + f]:
-                    continue
-                dU[...] = 0.0
-                dU[..., f][sel] = 1.0
-                cols[:, c] = (apply_L(st, dU*mask, fu, fv)/sw).ravel()
-                c += 1
+        for i in range(nl):
+            for j in range(nl):
+                for f in range(nf):
+                    dU[...] = 0.0
+                    dU[:, i, j, f] = 1.0
+                    Lloc[:, :, c] = (apply_L(st, dU, fu, fv)/sw).reshape(m.nelem, nblk)
+                    c += 1
+
+        cols = np.zeros((m.nelem*nblk, int(free.sum())))
+        for e in range(m.nelem):
+            tgt = colof[gflat[e]]
+            keep = tgt >= 0
+            cols[e*nblk:(e+1)*nblk] += _scatter(Lloc[e][:, keep], tgt[keep],
+                                                cols.shape[1])
         Q, R = np.linalg.qr(cols)
         diag['cond'] = float(np.linalg.cond(R))
 
@@ -210,6 +232,18 @@ def exact_factory(state, pin_p=True):
         return solve
     factory.diag = diag
     return factory
+
+
+def _scatter(block, tgt, ncol):
+    """Sum `block`'s columns into an (nblk, ncol) array at column indices `tgt`.
+
+    Several local nodes of one element never share a global index, but nodes of
+    DIFFERENT elements do, which is what makes this an accumulation rather than
+    a placement -- and it is the whole content of the expansion operator.
+    """
+    out = np.zeros((block.shape[0], ncol))
+    np.add.at(out.T, tgt, block.T)
+    return out
 
 
 # ------------------------------------------------------------------------ run --

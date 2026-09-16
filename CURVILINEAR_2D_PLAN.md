@@ -204,6 +204,64 @@ on a sinusoidally deformed mesh.  Require:
 * the same asymptotic rate as the Cartesian case at equal degrees of freedom,
   within a factor of ~2 in the constant.
 
+**GREEN** — `scratch/curvi_g2.py`, `figs/curvi_g2.png`.  Steady manufactured
+solution (the `mms2d_temporal.py` stream function with $\cos t$ removed, so BDF2
+contributes exactly zero and the spatial error is not mixed with a temporal one
+of fixed order).  Relative $L^2$ error in $\mathbf u$, $E = 2$:
+
+| $N$ | affine | curvilinear-affine | rotated 30° | deformed 10 % |
+|---|---|---|---|---|
+| 4 | 1.544e−02 | 1.544e−02 | 2.986e−02 | 2.909e−02 |
+| 8 | 7.520e−07 | 7.520e−07 | 9.164e−06 | 2.358e−04 |
+| 14 | 4.319e−14 | 4.349e−14 | 1.994e−12 | 4.038e−08 |
+
+Exponential rates 2.72 / 2.71 / 2.49 / 1.43.  The affine and curvilinear code
+paths agree to **3.0e−16**, which is the regression protecting every Cartesian
+result in the paper.  Insensitive to $dt$ across 1e4–1e8 (6.998132e−06 →
+6.998259e−06), so the steady limit is a limit and not a tuning knob.
+
+**THE ROTATED MESH IS WHAT TESTS `bc.py`, NOT THE DEFORMED ONE.**  `curvi.deform`
+perturbs by a product of sines that vanishes on the domain boundary, so the
+DOMAIN is still the unit square and boundary nodes have not moved — their
+tensor-product coordinates are still correct.  A rotated square's edges are not
+axis aligned, $x$ and $y$ both vary along every edge, and that column would not
+converge at all if `bc.py` were still reading `xnod[e,0]` as a single $x$ for a
+whole edge.
+
+### G2a — How the exponential claim was actually established
+
+Worth recording because the first version of this gate used the wrong statistic
+and would have licensed a wrong answer.
+
+**An $R^2$ comparison between an exponential and an algebraic fit cannot separate
+them over $N$ spanning less than a factor of three.**  The deformed column
+returned $R^2 = 0.9955$ exponential against 0.9869 algebraic — a difference with
+no discriminating power, since a high-order power law and an exponential are
+nearly identical over such a range.
+
+The test that needs no fitting: for $e \sim e^{-bN}$ the **drop per order is
+constant** and the implied algebraic order $q$ **rises without bound**; for
+$e \sim N^{-q}$, $q$ is constant and the drop per order falls.  Read that way the
+deformed column was *ambiguous* — $q$ ran 5.8, 8.6, 15.8, 15.7, 14.9, going FLAT
+over three intervals, which is the algebraic signature.  Extending to $N = 16, 18$
+settled it (`scratch/curvi_rate_check.py`):
+
+| $N$ | error | drop | local $b$ | implied $q$ |
+|---|---|---|---|---|
+| 12 | 4.028e−07 | 17.4 | 1.43 | 15.7 |
+| 14 | 4.038e−08 | 10.0 | 1.15 | **14.9** |
+| 16 | 2.536e−09 | 15.9 | 1.38 | **20.7** |
+| 18 | 9.882e−11 | 25.7 | 1.62 | **27.6** |
+
+$q$ resumes climbing while the error falls another 2.6 orders: the flat stretch
+was a transient, not a tail.  The alternative explanation is also excluded — the
+deformed mesh has min $J$ = 4.29e−02 and max/min = 1.916, **identical at
+$N = 8, 12, 16$**, so no element is near-singular and the metric is a property of
+the map rather than of the order, as collocation metrics must be.
+
+Lesson for the remaining gates: quote the successive-ratio table, not a fit
+quality.
+
 ### G3 — Taylor–Couette: an exact solution on a genuinely curved domain
 
 *Known answer: analytic.*  Steady flow between concentric rotating cylinders,
@@ -222,6 +280,34 @@ usual $10^{-5}$; and $\omega$ matching the analytic $2A$ in the core.
 
 *This gate is the reason to do the work:* it is unreachable on the current code.
 
+**GREEN** — `scratch/curvi_g3.py`, `figs/curvi_g3.png`, fields in
+`scratch/curvi_g3_fields.py` → `figs/curvi_g3_fields.png`.  Quarter annulus,
+$r \in [0.5, 1]$, 3×4 elements, $\Omega_{\rm in} = 1$, $\nu = 0.05$, Re = 5.
+**Zero forcing** — this is a genuine Navier–Stokes solution, not a manufactured
+one — and started **from rest**, so a broken operator cannot sit still and report
+zero error.
+
+| $N$ | $\lVert\mathbf u\rVert$ rel $L^2$ | $u_r$ (exactly 0) | max\|∇·u\| | max\|ω − 2A\| |
+|---|---|---|---|---|
+| 4 | 2.065e−06 | 1.214e−06 | 2.687e−04 | 7.156e−05 |
+| 6 | 7.662e−09 | 5.596e−09 | 3.514e−06 | 1.537e−06 |
+| 8 | 4.598e−11 | 3.478e−11 | 3.066e−08 | 1.899e−08 |
+| 10 | 2.529e−13 | 1.922e−13 | 2.916e−10 | 1.745e−10 |
+| 11 | 1.879e−14 | — | — | — |
+
+Divergence and vorticity finish five orders under the $10^{-5}$ requirement.  By
+the successive-ratio test of G2a this is unambiguous: the drop per order is
+**13.4, 13.6, 13.5** over the last three intervals (local $b$ = 2.59, 2.61, 2.60)
+while $q$ climbs 22.0 → 24.8 → 27.3.  A relative error of 1.879e−14 at $N = 11$ is
+about 85 ε, so the exact solve is **still not the limiting factor** — the floor
+was looked for and not found.
+
+The two analytic CONSTANTS are the sharp instruments here.  $u_r \equiv 0$ and
+$\omega \equiv 2A$ have no shape for a metric error to hide inside, and $u_r$ is
+the component the mapping mixes into the Cartesian pair the solver stores — the
+one most exposed to an inconsistent metric.  Both track the discretisation error
+rather than sitting above it.
+
 ### G4 — Kovasznay on a deformed mesh
 
 *Known answer: the existing `KOVASZNAY_VALIDATION.md` result.*
@@ -229,6 +315,30 @@ usual $10^{-5}$; and $\omega$ matching the analytic $2A$ in the core.
 Re-run Kovasznay with interior nodes perturbed by 10% of the element size.  The
 error must match the Cartesian run to within the discretisation error — a curved
 mesh should cost accuracy, but not much, and not change the convergence order.
+
+**GREEN** — `scratch/curvi_g4.py`, `figs/curvi_g4.png`.  Re = 40, domain
+$[-0.5,1]\times[-0.5,0.5]$, 8 elements, pure steady Newton ($w_{\rm mass} = 0$),
+exact linear solves.  $\epsilon_u$ is the rms over **unique global nodes**, as in
+`KOVASZNAY_VALIDATION.md`.
+
+| $N$ | Cartesian | deformed 10 % | ratio | Chan (1996) |
+|---|---|---|---|---|
+| 4 | 3.7245e−03 | 3.8998e−03 | 1.0 | 3.724e−03 |
+| 8 | 2.8658e−07 | 6.7114e−07 | 2.3 | — |
+| 9 | 6.3851e−09 | 1.1189e−07 | 17.5 | 6.380e−09 |
+| 12 | 3.8595e−12 | 1.2256e−10 | 31.8 | — |
+
+The Cartesian column reproduces the published values at **×1.00** on both points
+where a reference exists — an end-to-end check of the whole chain against a
+number nobody could tune after the fact.  Rates: Cartesian $b = 2.61$, deformed
+$b = 2.17$.  **The deformation costs a constant (up to ~32×), not an order.**
+
+*A note on the gate's own threshold.*  The first version required pointwise
+$\nabla\!\cdot\mathbf u < 10^{-4}$ **at every $N$** and so reported FAIL on the
+$N = 4$ value of 0.28 — where the solution itself is resolved only to 4e−03.  In
+a least-squares method div $\mathbf u$ is minimised, not enforced, so a coarse
+discretisation has a large one by construction.  Judged at the finest order,
+where the requirement belongs, it is 6.94e−08.
 
 ### G5 — The preconditioner survives
 

@@ -154,6 +154,17 @@ def apply_L(state, U, fu, fv):
     from .lssem import ls_coeffs, ls_pseudo
     _bufs(state)
     m = state.mesh
+    if m.curvilinear:
+        # CURVILINEAR: delegate to the NumPy reference (CURVILINEAR_2D_PLAN step
+        # 4a).  The fused kernel exploits facx being a per-element CONSTANT, so
+        # it scales after the k-contraction; with a metric that varies inside the
+        # element every term needs the metric applied BEFORE summing, and the
+        # transpose kernel's twelve accumulators become twenty-four.  That is
+        # optimisation, and it is deliberately deferred until the physics gates
+        # (G2-G4) are green on the reference path -- writing it now would risk
+        # tuning code that has not yet been shown to solve anything correctly.
+        from .lssem import _apply_L_numpy
+        return _apply_L_numpy(state, U, fu, fv)
     a_mass, a_flux, _ = ls_coeffs(state)
     a_mass += ls_pseudo(state)          # pseudo-time folds into the mass coefficient
     _kernel_L(_C(U), state._nb_D, m.facx, m.facy, m.wq, _C(fu), _C(fv),
@@ -167,6 +178,9 @@ def apply_LT(state, su, fu, fv):
     from .lssem import ls_coeffs, ls_pseudo
     _bufs(state)
     m = state.mesh
+    if m.curvilinear:                   # see apply_L above
+        from .lssem import _apply_LT_numpy
+        return _apply_LT_numpy(state, su, fu, fv)
     a_mass, a_flux, _ = ls_coeffs(state)
     a_mass += ls_pseudo(state)
     idt = a_mass / a_flux if a_flux != 0.0 else 0.0
