@@ -118,7 +118,9 @@ class _EDirect:
 
     def __call__(self, r):
         x = (r*self.lvl.mw).reshape(self.nsp, self.nk).T[:, :, None]
-        y = self.Bb @ (self.Ab @ (self.Bb.transpose(0, 2, 1) @ x))
+        # swapaxes, not transpose(0,2,1): numpy's transpose permutes all axes,
+        # torch's takes exactly two.  swapaxes has the same meaning on both.
+        y = self.Bb @ (self.Ab @ (self.Bb.swapaxes(-2, -1) @ x))
         return y[:, :, 0].T.reshape(self.shape)*self.lvl.mask
 
 
