@@ -77,7 +77,7 @@ def _solve_dg(b, D, fx, fy, wq, kz, mesh, mask, M, tol, check_every):
     if check_every is None:
         check_every = 1 if xp is np else 10
     nk_ = b.shape[-1]
-    M_ = b.size//nk_
+    M_ = DEV.numel(b)//nk_
     if DEV.is_cupy(b):
         ones = S3._ones_row(M_, b)
         dot = lambda a, c: (ones @ (a*c*mw).reshape(M_, nk_)).reshape(-1)
@@ -298,7 +298,7 @@ def _pcg(A, b, M, mesh, tol, check_every, purge=None):
     mw = DEV.to_device(S3.multiplicity_weight(mesh, tuple(b.shape)), b)
     if check_every is None:
         check_every = 1 if xp is np else 10
-    nk_ = b.shape[-1]; M_ = b.size//nk_
+    nk_ = b.shape[-1]; M_ = DEV.numel(b)//nk_
     if DEV.is_cupy(b):
         ones = S3._ones_row(M_, b)
         dot = lambda a, c: (ones @ (a*c*mw).reshape(M_, nk_)).reshape(-1)

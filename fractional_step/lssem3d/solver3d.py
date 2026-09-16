@@ -48,7 +48,7 @@ def _dot(a, b, w=None):
         # temporaries, as the cost.  Agreement with the old path is 3.9e-15
         # relative, i.e. a different summation order at float64 rounding.
         nk = ab.shape[-1]
-        M = ab.size//nk
+        M = DEV.numel(ab)//nk
         return (_ones_row(M, ab) @ ab.reshape(M, nk)).reshape(1, 1, 1, 1, nk)
     # DEV.sum_over, not np.sum: on the GPU path `ab` is a torch tensor and this
     # runs inside the CG loop, where a single host round trip costs 21.9x the

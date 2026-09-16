@@ -270,6 +270,18 @@ def _index_cupy(mesh):
     return hit
 
 
+def numel(a):
+    """Number of elements, for numpy/cupy arrays and torch tensors alike.
+
+    `.size` is an ATTRIBUTE on numpy and cupy and a METHOD on torch, so
+    `a.size//n` silently means different things and raises on torch.  Every use
+    in the solver wanted the element count, so this is it, spelled once.
+    """
+    if is_tensor(a):
+        return a.numel()
+    return int(a.size)
+
+
 def to_host(a):
     """Device array -> numpy, whatever the backend.
 

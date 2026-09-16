@@ -109,7 +109,7 @@ def jacobi_diagonal_analytic(mesh, N, wq, lam, mu, nfield, nk, mask=None):
     fx = np.asarray(mesh.facx, dtype=float)
     fy = np.asarray(mesh.facy, dtype=float)
     lam = np.asarray(lam, dtype=float).reshape(-1)
-    if lam.size == 1:
+    if DEV.numel(lam) == 1:
         lam = np.repeat(lam, nk)
     n1 = N + 1
     d = np.empty((mesh.nelem, n1, n1, nfield, nk))
@@ -154,7 +154,7 @@ def fdm_preconditioner(mesh, N, lam, mu, mask, nfield, nk, like=None,
     fx = np.asarray(mesh.facx, dtype=float)
     fy = np.asarray(mesh.facy, dtype=float)
     lam = np.asarray(lam, dtype=float).reshape(-1)
-    if lam.size == 1:
+    if DEV.numel(lam) == 1:
         lam = np.repeat(lam, nk)
     li, lj = ev[:, None], ev[None, :]
     d = np.empty((mesh.nelem, n1, n1, nfield, nk))
@@ -208,7 +208,7 @@ def solve(b, D, facx, facy, wq, lam, mu, mesh, mask, M, tol=1e-10,
     # (1 x M) @ (M x nk) cuBLAS fills the card instead of leaving most of it
     # idle.  Kept on the reduction path for numpy, where it is not a problem.
     nk_ = b.shape[-1]
-    M_ = b.size//nk_ if hasattr(b, 'size') else int(np.prod(b.shape[:-1]))
+    M_ = DEV.numel(b)//nk_
     if DEV.is_cupy(b):
         ones = S3._ones_row(M_, b)
 
