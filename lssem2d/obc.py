@@ -89,8 +89,44 @@ def setup_obc(state):
     state._obc_elems = elems
     if elems:
         w = lgl_weights(m.N)
-        # surface (edge) quadrature weight ws_j = (hy/2)*w_j, per element
-        state._obc_ws = np.array([0.5 * m.hy[e] * w for e in elems])
+        if getattr(m, 'curvilinear', False):
+            # CURVILINEAR EDGE GEOMETRY.  Three things change and all three are
+            # needed even when the outflow edge itself is straight:
+            #
+            #   d/dx along the edge is rx*u_r + sx*u_s, not facx*u_r.  sx is NOT
+            #     zero on a straight vertical edge unless the whole element is a
+            #     rectangle -- it is -y_r/J, and y_r points INTO the domain.
+            #   rx varies along the edge instead of being one constant.
+            #   the surface weight is the true arc length |d(x,y)/ds| * w_j,
+            #     not (hy/2)*w_j, which is a bounding box and not an edge.
+            #
+            # The NORMAL is still assumed to be +x and is checked below.  A
+            # genuinely curved outflow needs the true normal in the Dong rows
+            # themselves, which is plan step 8; this covers every outflow whose
+            # edge is axis aligned, which is what the O-ring-in-a-box topology
+            # was chosen to give.
+            D = state.D
+            xs = np.matmul(m.X, D.T)
+            ys = np.matmul(m.Y, D.T)
+            state._obc_rx = np.array([m.rx[e, -1, :] for e in elems])
+            state._obc_sx = np.array([m.sx[e, -1, :] for e in elems])
+            state._obc_ws = np.array([np.hypot(xs[e, -1, :], ys[e, -1, :])*w
+                                      for e in elems])
+            for idx, e in enumerate(elems):
+                nx, ny = m.rx[e, -1, :], m.ry[e, -1, :]
+                tilt = np.abs(ny)/np.maximum(np.hypot(nx, ny), 1e-300)
+                if tilt.max() > 1e-8 or np.any(nx <= 0):
+                    raise NotImplementedError(
+                        f'Dong OBC on element {e}: the outflow edge normal is '
+                        f'not +x (max |n_y| = {tilt.max():.3e}).  The rows here '
+                        f'are written for n = (1, 0); a curved outflow needs '
+                        f'true boundary normals -- CURVILINEAR_2D_PLAN.md '
+                        f'step 8.')
+        else:
+            # surface (edge) quadrature weight ws_j = (hy/2)*w_j, per element
+            state._obc_ws = np.array([0.5 * m.hy[e] * w for e in elems])
+            state._obc_rx = np.array([m.facx[e]*np.ones(m.N + 1) for e in elems])
+            state._obc_sx = None          # identically zero: skip the term
     return elems
 
 
@@ -114,10 +150,14 @@ def apply_B(state, U):
     a_obc, _, _, _ = _params(state)
     cb = _cb(state)
     rb = np.empty((len(elems), m.N + 1, 2))
+    sxa = state._obc_sx
     for idx, e in enumerate(elems):
-        fx = m.facx[e]
-        u_x = fx * (D[-1, :] @ U[e, :, :, 0])      # du/dx along the edge
-        v_x = fx * (D[-1, :] @ U[e, :, :, 1])
+        rx = state._obc_rx[idx]
+        u_x = rx * (D[-1, :] @ U[e, :, :, 0])      # du/dx along the edge
+        v_x = rx * (D[-1, :] @ U[e, :, :, 1])
+        if sxa is not None:                        # curvilinear cross term
+            u_x = u_x + sxa[idx] * (U[e, -1, :, 0] @ D.T)
+            v_x = v_x + sxa[idx] * (U[e, -1, :, 1] @ D.T)
         ws = state._obc_ws[idx]
         rb[idx, :, 0] = ws * a_obc * (cb * U[e, -1, :, 0] - U[e, -1, :, 2] + nu * u_x)
         rb[idx, :, 1] = ws * a_obc * (cb * U[e, -1, :, 1] + nu * v_x)
@@ -137,13 +177,17 @@ def apply_BT(state, rb, c):
     m, D, nu = state.mesh, state.D, state.nu
     a_obc, _, _, _ = _params(state)
     cb = _cb(state)
+    sxa = state._obc_sx
     for idx, e in enumerate(elems):
-        fx = m.facx[e]
+        gx = state._obc_rx[idx]
         rx = rb[idx, :, 0]
         ry = rb[idx, :, 1]
         # nu * d/dx adjoint: scatter along i with the D row of the edge
-        c[e, :, :, 0] += (a_obc * nu * fx) * np.outer(D[-1, :], rx)
-        c[e, :, :, 1] += (a_obc * nu * fx) * np.outer(D[-1, :], ry)
+        c[e, :, :, 0] += (a_obc * nu) * np.outer(D[-1, :], gx * rx)
+        c[e, :, :, 1] += (a_obc * nu) * np.outer(D[-1, :], gx * ry)
+        if sxa is not None:                # adjoint of the tangential term
+            c[e, -1, :, 0] += (a_obc * nu) * ((sxa[idx] * rx) @ D)
+            c[e, -1, :, 1] += (a_obc * nu) * ((sxa[idx] * ry) @ D)
         if cb != 0.0:
             c[e, -1, :, 0] += (a_obc * cb) * rx
             c[e, -1, :, 1] += (a_obc * cb) * ry
@@ -244,12 +288,29 @@ def jacobi_add(state, diag_A):
     m, D, nu = state.mesh, state.D, state.nu
     a_obc, _, _, _ = _params(state)
     cb = _cb(state)
+    sxa = state._obc_sx
+    n = m.N + 1
     for idx, e in enumerate(elems):
-        fx = m.facx[e]
-        row = nu * fx * D[-1, :].copy()
-        row[-1] += cb
+        gx = state._obc_rx[idx]
         ws = state._obc_ws[idx]
-        contrib = (a_obc * row[:, None])**2 * ws[None, :]
+        # d(R_r)/d(u_ij) = nu*gx[r]*D[N,i]*delta_rj            (normal part)
+        #                + [i == N]*( c_b*delta_rj + nu*sx[r]*D[r,j] )
+        # and the diagonal of A at (i, j) is sum_r (dR_r/du_ij)^2 * ws_r.
+        #
+        # For i < N only r = j contributes.  AT i = N THE TANGENTIAL TERM COUPLES
+        # EVERY EDGE NODE TO EVERY OTHER, so rows r != j contribute there too --
+        # omitting them left this 5e-05 wrong on a deformed mesh while staying
+        # exact on an affine one, where sx == 0 kills the whole term.
+        contrib = (a_obc * nu * np.outer(D[-1, :], gx))**2 * ws[None, :]
+        dN = nu * gx * D[-1, -1] + cb
+        extra = 0.0
+        if sxa is not None:
+            T = nu * sxa[idx][:, None] * D          # T[r, j] = nu*sx[r]*D[r,j]
+            dN = dN + np.diag(T)
+            off = (a_obc * T)**2 * ws[:, None]
+            off[np.arange(n), np.arange(n)] = 0.0   # r = j already in dN
+            extra = off.sum(axis=0)
+        contrib[-1, :] = (a_obc * dN)**2 * ws + extra
         diag_A[e, :, :, 0] += contrib
         diag_A[e, :, :, 1] += contrib
         diag_A[e, -1, :, 2] += a_obc**2 * ws

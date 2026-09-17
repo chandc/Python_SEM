@@ -335,7 +335,7 @@ def _square_at(theta, a):
 def build_cylinder_box(r_cyl=0.5, a=1.5, Lu=10.0, Ld=25.0, H=10.0,
                        E_r=4, E_s=4, nx_up=4, nx_dn=8, ny_side=4, N=8,
                        stretch=1.6, ratio_out=1.45,
-                       bcs=(1, 3, 4, 5)):
+                       bcs=(1, 3, 6, 5)):
     """O-ring on the body inside a RECTANGULAR box: curved where it must be,
     axis-aligned where the boundary conditions live.
 
@@ -346,10 +346,14 @@ def build_cylinder_box(r_cyl=0.5, a=1.5, Lu=10.0, Ld=25.0, H=10.0,
     and everything beyond it is rectangular blocks.  So every boundary carrying a
     condition is axis aligned, and the existing codes apply unchanged:
 
-        cylinder surface  bc 1  no-slip     -- curved, but u = v = 0 needs no normal
-        inlet   x = -Lu   bc 3  free stream -- flat
-        outlet  x = +Ld   bc 4  p = 0       -- flat
-        top/bottom y = +-H bc 5 symmetry    -- flat
+        cylinder surface  bc 1  no-slip      -- curved, u = v = 0 needs no normal
+        inlet   x = -Lu   bc 3  free stream  -- flat
+        outlet  x = +Ld   bc 6  Dong OBC     -- flat, so n = (1, 0) exactly
+        top/bottom y = +-H bc 5 symmetry     -- flat, v = 0 and omega = 0
+
+    The outlet being FLAT is what makes the Dong condition usable here at all:
+    `obc.py` writes its rows for n = (1, 0) and checks that assumption, so a
+    curved outflow arc would be refused (plan step 8).
 
     That removes step 8 from the critical path for G6 entirely.
 
