@@ -301,7 +301,27 @@ class PMG2:
         mc.xnod = np.zeros((m.nelem, mc.nterm))
         mc.ynod = np.zeros((m.nelem, mc.nterm))
         mc.wq = np.zeros((m.nelem, mc.nterm, mc.nterm))
-        mc.setup_derived()
+        if getattr(m, 'curvilinear', False):
+            # THE COARSE LEVEL NEEDS ITS OWN METRICS.  `copy` is shallow, so
+            # without this mc keeps the FINE-order X/Y/rx/ry/sx/sy while mc.N has
+            # dropped to pc -- shapes that no longer match the fields the coarse
+            # operator applies to.  `setup_derived` cannot help: it computes the
+            # affine facx/facy, which do not exist here.
+            #
+            # The coarse geometry is the fine geometry INTERPOLATED to the coarse
+            # nodes, not a re-evaluation of the original mapping.  That keeps the
+            # two levels describing the same domain to the accuracy each can
+            # represent, which is what makes the coarse correction a correction
+            # to the fine operator rather than to a slightly different problem.
+            from . import curvi
+            R = _p_interp(self.pf, self.pc)           # (nt_c, nt_f), fine -> coarse
+            Xc = np.einsum('ai,eij,bj->eab', R, m.X, R)
+            Yc = np.einsum('ai,eij,bj->eab', R, m.Y, R)
+            mc.xnod = np.ascontiguousarray(Xc[:, :, 0])
+            mc.ynod = np.ascontiguousarray(Yc[:, 0, :])
+            curvi.attach(mc, Xc, Yc)                  # metrics, wq = J*w*w
+        else:
+            mc.setup_derived()
         mc.compute_global_indices()
         self.mc = mc
         # The coarse operator MUST carry the same least-squares weighting as the

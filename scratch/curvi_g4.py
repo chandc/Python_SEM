@@ -232,11 +232,30 @@ def figure(Ns, car, def_, ba, bd):
     ax[1].set_title('G4: the curvature costs a constant, not an order', fontsize=10)
     ax[1].legend(fontsize=8); ax[1].grid(alpha=0.3, which='both')
 
-    ax[2].semilogy(Ns, [r['u']/a['u'] for a, r in zip(car, def_)], 'o-', color='C0')
+    # EVEN AND ODD N ARE NOT ON THE SAME CURVE, and plotting them as one makes
+    # this panel look erratic when it is not.  Kovasznay's cross-stream
+    # dependence is cos(2 pi y) over TWO elements spanning y in [-0.5, 0.5], so
+    # each element covers exactly half a period and the function is symmetric
+    # about its element centre.  Even- and odd-degree spaces resolve that
+    # symmetry differently: the Cartesian mesh has symmetric elements and
+    # exploits it, the deformed mesh does not, so at N = 9 the DENOMINATOR is
+    # anomalously small and the ratio spikes to 17.5.  The Cartesian drops read
+    # 164x, 45x, 5.2x, 320x with N = 9 in, and 79x, 164x, 232x, 320x without it.
+    # N = 9 is in the sweep only because it is a published reference point.
+    rat = [r['u']/a['u'] for a, r in zip(car, def_)]
+    ev = [i for i, N in enumerate(Ns) if N % 2 == 0]
+    od = [i for i, N in enumerate(Ns) if N % 2]
+    ax[2].semilogy([Ns[i] for i in ev], [rat[i] for i in ev], 'o-', color='C0',
+                   label='even $N$ (the trend)')
+    if od:
+        ax[2].semilogy([Ns[i] for i in od], [rat[i] for i in od], 'x', ms=10,
+                       mew=2, color='C3', ls='none',
+                       label='odd $N$ — parity, see text')
     ax[2].set_xlabel('polynomial order $N$')
     ax[2].set_ylabel('deformed / Cartesian error')
     ax[2].axhline(1.0, color='C7', ls=':', lw=1)
     ax[2].set_title('the price of bending the elements', fontsize=10)
+    ax[2].legend(fontsize=8, loc='upper left')
     ax[2].grid(alpha=0.3, which='both')
 
     fig.suptitle('Gate G4 — Kovasznay at Re = 40, interior nodes perturbed 10 %, '

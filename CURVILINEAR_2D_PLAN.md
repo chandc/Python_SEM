@@ -353,6 +353,59 @@ capturing the local operator and the cause must be found before merging.
 Also check that element-interior condensation still pays: the Schur complements
 are unchanged in structure, only their entries differ.
 
+**GREEN** — `scratch/curvi_g5.py`, `figs/curvi_g5.png`.  Ghia cavity Re = 1000,
+4×4 elements, condensed vertex patch + $p = 2$ coarse, CG tol 1e−10, the
+preconditioner rebuilt every Newton step.  Mean CG iterations per solve:
+
+| $N$ | ndof | affine | curvilinear-affine | deformed 10 % | annulus |
+|---|---|---|---|---|---|
+| 5 | 1 764 | 31.7 | 31.7 | 32.0 | 26.5 |
+| 8 | 4 356 | 32.0 | 32.0 | 32.3 | 28.2 |
+| 12 | 9 604 | 32.8 | 32.8 | 33.0 | 29.8 |
+
+Growth over $N = 5 \dots 12$: 1.04× affine, 1.03× deformed, 1.13× annulus —
+**flat**.  Worst deformed/affine ratio **1.01** against the plan's 1.5 allowance,
+so the curvature is essentially free.  Affine and curvilinear-affine agree to
+**0.0 iterations**, exactly.  (The annulus is a different problem — Taylor–Couette
+at Re = 5 — so only its flatness is meaningful, not its ratio to the cavity; it is
+there because it has no affine counterpart, which is the point of the gate.)
+
+`element_blocks` needed no change: it probes `apply_L`/`apply_LT` with local unit
+vectors and so inherited the curvilinear operator for free.  The COARSE level did
+not — `PMG2` builds it with a shallow `copy` of the mesh and then lowers $N$,
+leaving the fine-order metric fields attached to a coarse-order state.  The coarse
+geometry is now the fine geometry *interpolated to the coarse nodes*, so both
+levels describe the same domain to the accuracy each can represent.
+
+### G5a — A case that must NOT be run, and was
+
+The first version of this gate included a **rotated cavity** and reported 44 → 48
+iterations against the affine 32.  That reads as a 1.5× curvature penalty and is
+nothing of the kind.
+
+Boundary code 2 prescribes the **Cartesian** pair $(u,v) = (\text{lid}, 0)$.
+Rotate the mesh 30° and the lid rotates with it, but the prescribed velocity does
+not: $(1,0)$ against an outward normal $(-\sin 30°, \cos 30°)$ has a **normal
+component of $-0.5$**.  Every other wall is no-slip, so the net flux through the
+boundary is $-0.5$ and the incompressibility constraint cannot be satisfied
+anywhere in the domain.
+
+A least-squares method does not diverge on an inconsistent constraint — it
+minimises a residual it can never zero — so the run **completes and returns an
+iteration count that looks like a measurement**.  That is the trap: the failure
+mode of this formulation is a plausible number, not a crash.
+
+Rotation covariance is already established exactly, at 1e−15, by G1's T2, which
+tests the operator and therefore needs no boundary conditions at all.  Nothing is
+lost by dropping the case, and the annulus replaces it with a curved domain whose
+data is consistent.
+
+*Consequence for `bc.py`:* codes 2 and 3 cannot express a velocity that is not
+axis-aligned.  Not needed for any gate here (every curved case uses code 1 with
+`exact_solution`, which prescribes both components), but it is the reason step 8
+must give `obc.py` true boundary normals before any outflow problem on a curved
+mesh, and a vector-valued lid/inlet would need the same treatment.
+
 ### G6 — A case that needs the geometry
 
 *Known answer: published data.*  Flow over a circular cylinder at $Re = 40$
