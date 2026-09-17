@@ -59,13 +59,25 @@ def sync(out, drive, archive=2.0):
     try:
         os.makedirs(drive, exist_ok=True)
         n = 0
-        for f in ('chk_latest.npz', 'stats_latest.npz', 'stats_run.log'):
+        # final_state.npz / stats_final.npz ARE IN THIS LIST DELIBERATELY.  They
+        # are written by the solver only when the target t is reached, i.e. on
+        # the LAST session of the campaign -- and until 2026-09-16 they were not
+        # synced, so the one run that actually finished would have left its final
+        # field and its final accumulators on the VM to be destroyed with it.
+        # The periodic chk_latest is up to --chkmin behind the end, so this is
+        # not a duplicate of it: it is the only copy of the run's own endpoint.
+        for f in ('chk_latest.npz', 'stats_latest.npz', 'stats_run.log',
+                  'final_state.npz', 'stats_final.npz'):
             n += put(os.path.join(out, f), os.path.join(drive, f))
-        st = os.path.join(out, 'stats_latest.npz')
-        if os.path.exists(st):
-            with np.load(st, allow_pickle=True) as z:
-                t = float(z['t'])
-            put(st, os.path.join(drive, f'stats_t{t:07.3f}.npz'))
+        # Numbered snapshots, which is what section10.py's window globs for.
+        # stats_final must appear among them or the window's upper end stops
+        # short of the target by up to one checkpoint interval.
+        for base in ('stats_latest.npz', 'stats_final.npz'):
+            st = os.path.join(out, base)
+            if os.path.exists(st):
+                with np.load(st, allow_pickle=True) as z:
+                    t = float(z['t'])
+                put(st, os.path.join(drive, f'stats_t{t:07.3f}.npz'))
         # ARCHIVE VELOCITY FIELDS, not only the accumulators.  The statistics
         # files carry U, uu, vv, ww, uv and nothing else, so vorticity rms,
         # pointwise divergence and the modal spectrum -- the quantities where
@@ -73,8 +85,10 @@ def sync(out, drive, archive=2.0):
         # from them at all.  Those need the field.  One snapshot per `archive`
         # turnovers, ~10 MB each, keeps that comparison possible; the
         # least-squares run kept its checkpoints on the same reasoning.
-        ck = os.path.join(out, 'chk_latest.npz')
-        if os.path.exists(ck):
+        for base in ('chk_latest.npz', 'final_state.npz'):
+            ck = os.path.join(out, base)
+            if not os.path.exists(ck):
+                continue
             with np.load(ck) as z:
                 tc = float(z['t'])
             slot = int(tc/archive)*archive
