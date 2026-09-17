@@ -64,6 +64,19 @@ ap.add_argument('--cgsfac', type=float, default=1e-6)
 ap.add_argument('--hours', type=float, default=24.0)
 ap.add_argument('--refresh', type=int, default=40)
 ap.add_argument('--out', default=os.path.join(_R, 'scratch', '_cyl_re100'))
+ap.add_argument('--restart-from', default='',
+                help='seed from another run\'s field (for a dt sweep)')
+# ARTIFICIAL COMPRESSIBILITY, the documented remedy for refining dt.  The
+# continuity row carries weight 1 while momentum carries a_mass = w_mass*fac1/dt,
+# so halving dt drives momentum up against a constraint that never moves.
+# GARTLING_VALIDATION.md sec 6 measured the consequence over 34 runs with no
+# crossover: a_mass <= 6.05 bounded, a_mass >= 12.1 divergent.  This cylinder at
+# dt = 0.2 and 0.1 has a_mass = 3.35 and 4.74 and ran; at dt = 0.05 it is 6.71
+# and it diverged at t = 157 -- with |u|max still 1.322 while C_L reached -3.47,
+# i.e. the pressure went first, exactly as an under-weighted pressure block does.
+# dtau_p = 1/a_mass makes the two rows scale together at every dt.
+ap.add_argument('--ac', action='store_true',
+                help='artificial compressibility, dtau_p = 1/a_mass')
 A = ap.parse_args()
 
 
@@ -105,6 +118,25 @@ def main():
     n = m.nterm
     w = np.sqrt(A.dt)
     st = SolverState(m, D, nu=nu, dt=A.dt, fac1=1.0, w_mom=w, w_mass=w)
+    if A.ac:
+        # AC's reference is the previous SUB-ITERATE, not the previous time
+        # level, and solver._drop_pseudo removes kappa_p*p from the residual, so
+        # at sub-iteration convergence the term vanishes identically and time
+        # accuracy is preserved.  That REQUIRES the sub-iterations to converge --
+        # with max_newton = 1 there is nothing to converge and it degenerates
+        # into the physical-time compressible form.
+        from lssem2d.lssem import ls_coeffs
+        # fac1 MUST be the value step_bdf will install, not the one SolverState
+        # was built with.  step_bdf sets fac1 = 1.5 for BDF2 (1.0 for BDF1) at
+        # the top of every step, so reading it beforehand gives a_mass too small
+        # by exactly that factor -- 4.47 instead of 6.71 here, a plausible number
+        # computed at the wrong moment.
+        st.fac1 = 1.5
+        a_mass, a_flux, _ = ls_coeffs(st)
+        st.dtau_p = 1.0/a_mass
+        print(f'artificial compressibility ON: a_mass = {a_mass:.4f}, '
+              f'a_flux = {a_flux:.4f}, dtau_p = 1/a_mass = {st.dtau_p:.4f}',
+              flush=True)
     wn = wall_nodes(m, D)
     ndof = (int(m.gidx.max()) + 1)*4
 
@@ -122,7 +154,26 @@ def main():
     st.precond_factory = factory
 
     ck = os.path.join(A.out, 'chk_latest.npz')
-    if os.path.exists(ck):
+    if A.restart_from and not os.path.exists(ck):
+        # SEED FROM A SATURATED STATE.  A dt sweep does not need to re-grow the
+        # instability from a seed -- 50 time units of exponential growth that
+        # says nothing about dt.  Restarting on the limit cycle costs a couple of
+        # periods of re-settling instead.
+        #
+        # BOTH BDF LEVELS ARE SET EQUAL, deliberately.  The stored history is
+        # spaced at the OLD dt, and step_bdf assumes a uniform step; feeding it a
+        # mismatched level makes the first step wrong in a way that is silent.
+        # Equal levels are a first-order start whose transient the limit cycle
+        # absorbs within a period, and the analysis discards that anyway.
+        z = np.load(A.restart_from, allow_pickle=True)
+        U = z['U0'].copy()
+        h = [U, U.copy()]
+        t = float(z['t'])
+        hist = []                      # force history starts fresh at the new dt
+        print(f'seeded from {A.restart_from} at t = {t:.3f}; '
+              f'BDF history reset (dt changed), force history cleared',
+              flush=True)
+    elif os.path.exists(ck):
         z = np.load(ck)
         h = [z['U0'].copy(), z['U1'].copy()]
         t = float(z['t'])
@@ -145,7 +196,7 @@ def main():
     t0 = _time.perf_counter()
     nstep = int(round((A.tend - t)/A.dt))
     for i in range(nstep):
-        S.step_bdf(st, h, time=t + A.dt, max_newton=2, newton_tol=1e-11,
+        S.step_bdf(st, h, time=t + A.dt, max_newton=(3 if A.ac else 2), newton_tol=1e-11,
                    newton_factor=0.0, custom_inlet=inlet, pin_p=False,
                    cgsfac=A.cgsfac, cg_tol=1e-12, cg_max_iter=4000,
                    line_search=False)
