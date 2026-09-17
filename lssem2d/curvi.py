@@ -297,3 +297,160 @@ def build_cylinder(r_cyl=0.5, r_far=25.0, E_r=8, E_th=24, N=8,
     mesh.E_r, mesh.E_th = E_r, E_th
     mesh.r_cyl, mesh.r_far, mesh.redges = r_cyl, r_far, redges
     return mesh
+
+
+def _geom_edges(a0, a1, n, ratio=1.0):
+    """n+1 edges from a0 to a1 with geometric growth `ratio` per element."""
+    if abs(ratio - 1.0) < 1e-12:
+        return np.linspace(a0, a1, n + 1)
+    w = ratio**np.arange(n)
+    c = np.concatenate(([0.0], np.cumsum(w)))
+    return a0 + (a1 - a0)*c/c[-1]
+
+
+def _rect_block(xe, ye, N):
+    """Elements of a rectangular block from edge arrays.  Returns X, Y, and the
+    (nx, ny) shape so the caller can locate boundary elements."""
+    xi = lgl_nodes(N)
+    nx, ny = len(xe) - 1, len(ye) - 1
+    n = N + 1
+    X = np.zeros((nx*ny, n, n))
+    Y = np.zeros((nx*ny, n, n))
+    for i in range(nx):
+        for j in range(ny):
+            e = i*ny + j
+            x = xe[i] + (xe[i+1] - xe[i])*(xi + 1)/2
+            y = ye[j] + (ye[j+1] - ye[j])*(xi + 1)/2
+            X[e], Y[e] = np.meshgrid(x, y, indexing='ij')
+    return X, Y, (nx, ny)
+
+
+def _square_at(theta, a):
+    """Where the ray at angle `theta` meets the square of half-side `a`."""
+    c, s = np.cos(theta), np.sin(theta)
+    k = a/np.maximum(np.abs(c), np.abs(s))
+    return k*c, k*s
+
+
+def build_cylinder_box(r_cyl=0.5, a=1.5, Lu=10.0, Ld=25.0, H=10.0,
+                       E_r=4, E_s=4, nx_up=4, nx_dn=8, ny_side=4, N=8,
+                       stretch=1.6, ratio_out=1.45,
+                       bcs=(1, 3, 4, 5)):
+    """O-ring on the body inside a RECTANGULAR box: curved where it must be,
+    axis-aligned where the boundary conditions live.
+
+    THE POINT OF THIS TOPOLOGY.  A pure O-grid (`build_cylinder`) puts the far
+    field on a circle, and a circular outflow needs the boundary NORMAL -- which
+    `obc.py` does not yet carry on a curved mesh (plan step 8).  Here the body
+    keeps its curved, body-fitted ring, but the ring's outer edge is a SQUARE,
+    and everything beyond it is rectangular blocks.  So every boundary carrying a
+    condition is axis aligned, and the existing codes apply unchanged:
+
+        cylinder surface  bc 1  no-slip     -- curved, but u = v = 0 needs no normal
+        inlet   x = -Lu   bc 3  free stream -- flat
+        outlet  x = +Ld   bc 4  p = 0       -- flat
+        top/bottom y = +-H bc 5 symmetry    -- flat
+
+    That removes step 8 from the critical path for G6 entirely.
+
+    THE TOPOLOGY IS NOT A SINGLE i-j GRID, and does not need to be.  Nine blocks
+    tile the box; the centre one is the O-ring rather than a rectangle, and the
+    O-ring's own indexing (radial x azimuthal) has nothing to do with its
+    neighbours' (x x y).  `compute_global_indices` hashes PHYSICAL COORDINATES,
+    so any conforming collection of elements merges correctly whatever order the
+    elements are stored in and whatever each block's internal indexing means.
+    Conformity is the only requirement, and it is met by construction: the
+    O-ring's outer nodes ARE the square-side nodes the surrounding blocks use.
+
+    Azimuthal spacing is uniform in theta, so the body is resolved evenly; the
+    square's sides inherit the non-uniform division where the rays land, and the
+    middle blocks use that same division on their shared edges.
+    """
+    from .mesh import Mesh
+    xi = lgl_nodes(N)
+    n = N + 1
+    nth = 4*E_s
+
+    # ---- the O-ring: uniform theta on the body, rays out to the square ----
+    th_e = np.linspace(0.0, 2*np.pi, nth + 1)
+    t_e = np.linspace(0.0, 1.0, E_r + 1)
+    Xo = np.zeros((E_r*nth, n, n))
+    Yo = np.zeros((E_r*nth, n, n))
+    for i in range(E_r):
+        for j in range(nth):
+            e = i*nth + j
+            t = t_e[i] + (t_e[i+1] - t_e[i])*(xi + 1)/2
+            u = t**stretch                                   # packs to the wall
+            th = th_e[j] + (th_e[j+1] - th_e[j])*(xi + 1)/2
+            U, T = np.meshgrid(u, th, indexing='ij')
+            xin, yin = r_cyl*np.cos(T), r_cyl*np.sin(T)
+            # THE OUTER EDGE IS A STRAIGHT SEGMENT, LINEARLY PARAMETERISED, and
+            # getting this wrong is how the first version of this mesh came out
+            # SLIT.  Evaluating _square_at at the GLL angles puts the ring's
+            # outer nodes at uniform theta; the abutting rectangular block puts
+            # its nodes at uniform x along the same edge.  The element CORNERS
+            # coincide either way, so the picture is perfect and the area is
+            # exact to 1e-15 -- and 224 interior-edge nodes fail to merge, giving
+            # a mesh that is hydrodynamically a slit.  Interpolating between the
+            # segment endpoints instead matches the block's parameterisation
+            # exactly.  Square corners fall on element boundaries by
+            # construction (4*E_s elements, corners every E_s), so each outer
+            # edge lies on a single side.
+            p0 = np.array(_square_at(th_e[j], a))
+            p1 = np.array(_square_at(th_e[j+1], a))
+            lam = ((xi + 1)/2)[None, :]
+            xout = p0[0] + (p1[0] - p0[0])*lam
+            yout = p0[1] + (p1[1] - p0[1])*lam
+            Xo[e] = (1 - U)*xin + U*xout
+            Yo[e] = (1 - U)*yin + U*yout
+
+    # ---- the square's side divisions, where the rays land ----
+    side = np.array([_square_at(t, a)[0] for t in th_e[:E_s+1]])   # top side, x
+    xs_mid = np.sort(np.concatenate([side, -side[:-1]]))
+    xs_mid = np.unique(np.round(xs_mid, 12))
+    ys_mid = xs_mid.copy()                                  # symmetric by design
+
+    xs_up = _geom_edges(-Lu, -a, nx_up, 1.0/ratio_out)
+    xs_dn = _geom_edges(a, Ld, nx_dn, ratio_out)
+    ys_lo = _geom_edges(-H, -a, ny_side, 1.0/ratio_out)
+    ys_hi = _geom_edges(a, H, ny_side, ratio_out)
+
+    blocks = []
+    for xe in (xs_up, xs_mid, xs_dn):
+        for ye in (ys_lo, ys_mid, ys_hi):
+            if xe is xs_mid and ye is ys_mid:
+                continue                                     # the O-ring's hole
+            blocks.append(_rect_block(xe, ye, N))
+
+    X = np.concatenate([Xo] + [b[0] for b in blocks], axis=0)
+    Y = np.concatenate([Yo] + [b[1] for b in blocks], axis=0)
+    nelem = X.shape[0]
+
+    mesh = Mesh(nelem, N)
+    mesh.x0 = X.min(axis=(1, 2))
+    mesh.y0 = Y.min(axis=(1, 2))
+    mesh.hx = X.max(axis=(1, 2)) - mesh.x0
+    mesh.hy = Y.max(axis=(1, 2)) - mesh.y0
+    mesh.xnod = X[:, :, 0].copy()
+    mesh.ynod = Y[:, 0, :].copy()
+    attach(mesh, X, Y)
+
+    # ---- boundary codes from geometry, not from block bookkeeping ----
+    # An edge gets a code when EVERY node on it sits on that boundary.  Reading
+    # it off the coordinates rather than off block indices is what keeps this
+    # honest when the topology stops being a single grid.
+    tol = 1e-9
+    tests = ((lambda x, y: np.abs(np.hypot(x, y) - r_cyl) < 1e-8, bcs[0]),
+             (lambda x, y: np.abs(x + Lu) < tol, bcs[1]),
+             (lambda x, y: np.abs(x - Ld) < tol, bcs[2]),
+             (lambda x, y: np.abs(np.abs(y) - H) < tol, bcs[3]))
+    edges = ((np.s_[0, :], 0), (np.s_[-1, :], 1), (np.s_[:, 0], 2), (np.s_[:, -1], 3))
+    for e in range(nelem):
+        for sl, d in edges:
+            ex, ey = X[e][sl], Y[e][sl]
+            for fn, code in tests:
+                if np.all(fn(ex, ey)):
+                    mesh.bc[e, d] = code
+                    break
+    mesh.r_cyl, mesh.a_sq, mesh.box = r_cyl, a, (-Lu, Ld, -H, H)
+    return mesh
