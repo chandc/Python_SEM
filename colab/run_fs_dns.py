@@ -108,8 +108,21 @@ def resolve(out, drive, seed):
             if where == 'Drive':
                 os.makedirs(out, exist_ok=True)
                 put(cand, os.path.join(out, 'chk_latest.npz'))
-                put(os.path.join(drive, 'stats_latest.npz'),
-                    os.path.join(out, 'stats_latest.npz'))
+                # THE ACCUMULATORS MUST COME DOWN WITH THE CHECKPOINT, and until
+                # 2026-09-17 a missing stats file made put() return False in
+                # silence.  The run then restarted its statistics from zero and
+                # said nothing: the first sign was nsamp reading 620 instead of
+                # 4560 several hours later, and the numbered snapshots on Drive
+                # were no longer one cumulative series, which is what
+                # stats_window.py differences.  Fail loudly instead.
+                _src = os.path.join(drive, 'stats_latest.npz')
+                if not put(_src, os.path.join(out, 'stats_latest.npz')):
+                    print(f'  [!] NO ACCUMULATORS at {_src}.  The run will '
+                          f'restart its statistics from zero at this t, so the '
+                          f'numbered snapshots will NOT be one cumulative '
+                          f'series -- the earlier segment must be added back '
+                          f'by hand (sums are additive).  Look for '
+                          f'stats_t*.npz on Drive.', flush=True)
                 cand = os.path.join(out, 'chk_latest.npz')
             with np.load(cand) as z:
                 t = float(z['t'])

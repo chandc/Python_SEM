@@ -138,6 +138,13 @@ utau_series = []
 _st = arg('--resume-stats', '')
 if _st == 'auto':
     _st = os.path.join(os.path.dirname(restart) or '.', 'stats_latest.npz')
+if _st and not os.path.exists(_st):
+    # Say so.  A silent skip here restarts the running sums at zero, which is
+    # indistinguishable from a fresh campaign until the sample count is read
+    # hours later.
+    print(f'NO STATS TO RESUME at {_st}: accumulators start from zero at '
+          f't = {t:.4f}.  Any earlier segment must be added back separately.',
+          flush=True)
 if _st and os.path.exists(_st):
     _z = np.load(_st, allow_pickle=True)
     if _z['sums'].shape == sums.shape:
