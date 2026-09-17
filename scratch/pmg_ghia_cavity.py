@@ -135,6 +135,14 @@ def snapshot(st, fu, fv):
                      w_mass=getattr(st, 'w_mass', None),
                      dtau=getattr(st, 'dtau', None),
                      w_con=getattr(st, 'w_con', None))
+    # dtau_p TOO.  apply_L carries the artificial-compressibility term on the
+    # continuity row (lssem.ls_pseudo_p), so a snapshot that drops it builds the
+    # preconditioner for a DIFFERENT operator than the one CG iterates on.  The
+    # symptom is not a wrong answer but a stall: 4000 iterations at a relative
+    # residual of 1e-3, which reads as a hard problem rather than as a
+    # mismatched preconditioner.  Every caller that does not set dtau_p is
+    # unaffected -- getattr returns None and nothing changes.
+    s2.dtau_p = getattr(st, 'dtau_p', None)
     s2.update_linearisation(np.ascontiguousarray(fu), np.ascontiguousarray(fv))
     return s2
 

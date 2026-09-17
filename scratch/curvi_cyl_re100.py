@@ -76,7 +76,10 @@ ap.add_argument('--restart-from', default='',
 # i.e. the pressure went first, exactly as an under-weighted pressure block does.
 # dtau_p = 1/a_mass makes the two rows scale together at every dt.
 ap.add_argument('--ac', action='store_true',
-                help='artificial compressibility, dtau_p = 1/a_mass')
+                help='artificial compressibility at the measured rule '
+                     'kappa_p = a_mass/2')
+ap.add_argument('--kfrac', type=float, default=0.5,
+                help='kappa_p as a fraction of a_mass (0.5 is the rule)')
 A = ap.parse_args()
 
 
@@ -133,10 +136,17 @@ def main():
         # computed at the wrong moment.
         st.fac1 = 1.5
         a_mass, a_flux, _ = ls_coeffs(st)
-        st.dtau_p = 1.0/a_mass
+        # kappa_p = a_mass/2 IS THE MEASURED RULE, and it is a WINDOW, not a
+        # floor.  ARTIFICIAL_COMPRESSIBILITY.md sec 4: at a_mass = 60, kappa_p =
+        # 30 survived while 15 was too little and 45 and 60 both DIVERGED.  The
+        # ls_pseudo_p docstring's 1/a_mass (= kappa_p = a_mass) is the
+        # CONDITIONING optimum from the cavity study; stability and conditioning
+        # want different values and stability wins.
+        kappa_p = A.kfrac*a_mass
+        st.dtau_p = 1.0/kappa_p
         print(f'artificial compressibility ON: a_mass = {a_mass:.4f}, '
-              f'a_flux = {a_flux:.4f}, dtau_p = 1/a_mass = {st.dtau_p:.4f}',
-              flush=True)
+              f'a_flux = {a_flux:.4f}, kappa_p = {A.kfrac:g}*a_mass = '
+              f'{kappa_p:.4f}, dtau_p = {st.dtau_p:.4f}', flush=True)
     wn = wall_nodes(m, D)
     ndof = (int(m.gidx.max()) + 1)*4
 

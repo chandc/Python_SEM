@@ -332,11 +332,21 @@ class PMG2:
         # w_mass = w_mom = 1 at dt = 0.1 that is a factor of 10 on BOTH
         # coefficients, and CG needed ~2000 iterations per solve instead of tens.
         # dtau matters for the same reason: it sits on the momentum diagonal.
+        # AND dtau_p, for the same reason again: artificial compressibility puts
+        # kappa_p on the CONTINUITY row's pressure entry (lssem.ls_pseudo_p), the
+        # a33 block that does not otherwise exist.  A coarse level without it
+        # corrects a different operator than the fine level solves, and the
+        # symptom is not a wrong answer but a V-cycle that stops working: the
+        # cylinder at dt = 0.05 ran 2h47m at 100 % CPU without completing 100
+        # steps, against 22 s/step with AC off.  This is the third place the same
+        # omission has appeared (see also pmg_ghia_cavity.snapshot).
         self.sc = SolverState(mc, diff_matrix(self.pc), state.nu, state.dt,
                               state.fac1,
                               w_mom=getattr(state, 'w_mom', None),
                               w_mass=getattr(state, 'w_mass', None),
                               dtau=getattr(state, 'dtau', None))
+        # dtau_p is an ATTRIBUTE, not a constructor argument, so it is set here.
+        self.sc.dtau_p = getattr(state, 'dtau_p', None)
 
         # --- Dong OBC parameters MUST be carried down too -----------------
         # obc_active() is decided by the MESH (bc == 6 edges), which copy(m)
