@@ -227,3 +227,73 @@ def build_annulus(r_in, r_out, E_r, E_th, N, theta0=0.0, theta1=2*np.pi,
     attach(mesh, X, Y)
     mesh.E_r, mesh.E_th = E_r, E_th
     return mesh
+
+
+def build_cylinder(r_cyl=0.5, r_far=25.0, E_r=8, E_th=24, N=8,
+                   bcs=(1, 3), stretch=1.0):
+    """O-grid around a circular cylinder: the mesh gate G6 needs.
+
+    A single topological annulus from the cylinder surface out to a circular
+    far field.  Every element is curved, every element edge on the body is an
+    arc, and the body is resolved by the geometry rather than approximated by
+    steps -- which is the whole reason the curvilinear port exists.
+
+    GEOMETRIC RADIAL SPACING, r_{i+1}/r_i constant, is the default and is not an
+    arbitrary choice.  The azimuthal size of an element grows like r, so radial
+    thickness proportional to r keeps the ASPECT RATIO constant through the whole
+    mesh -- one number instead of a near-wall value and a far-field value that
+    differ by the domain ratio.  `stretch` biases it further toward the wall:
+    the radial coordinate is (r/r_cyl)^stretch in the exponent, so stretch > 1
+    packs elements into the boundary layer at the cost of aspect ratio.
+
+    THE THETA SEAM CLOSES ITSELF.  theta = 0 and theta = 2 pi produce IDENTICAL
+    physical coordinates, and `compute_global_indices` hashes physical
+    coordinates on a curvilinear mesh, so the two sides of the seam merge with no
+    periodic-wrap machinery at all.  The neighbour table below wraps to match, so
+    the disconnection guard still checks it.
+
+    bcs = (body, far field).  The far field is one boundary here: at the steady
+    Re = 40 the wake is ~2.2 diameters long, so a circular outer boundary at
+    r_far = 25 D sees essentially free stream all the way round.  An unsteady
+    case needs an outflow condition on the downstream arc instead, which is
+    `obc.py`'s business and needs true boundary normals (plan step 8).
+    """
+    from .mesh import Mesh
+    xi = lgl_nodes(N)
+    nelem = E_r*E_th
+    mesh = Mesh(nelem, N)
+    n = N + 1
+    X = np.zeros((nelem, n, n))
+    Y = np.zeros((nelem, n, n))
+
+    # radial element edges: geometric, optionally biased toward the wall
+    u = np.linspace(0.0, 1.0, E_r + 1)**stretch
+    redges = r_cyl*(r_far/r_cyl)**u
+    tedges = np.linspace(0.0, 2*np.pi, E_th + 1)
+
+    for i in range(E_r):
+        for j in range(E_th):
+            e = i*E_th + j
+            # geometric within the element too, so the spacing law is smooth
+            # across element boundaries rather than piecewise linear
+            r = redges[i]*(redges[i+1]/redges[i])**((xi + 1)/2)
+            th = tedges[j] + (tedges[j+1] - tedges[j])*(xi + 1)/2
+            R, T = np.meshgrid(r, th, indexing='ij')
+            X[e], Y[e] = R*np.cos(T), R*np.sin(T)
+            mesh.x0[e], mesh.y0[e] = X[e].min(), Y[e].min()
+            mesh.hx[e] = redges[i+1] - redges[i]
+            mesh.hy[e] = (tedges[j+1] - tedges[j])*0.5*(redges[i] + redges[i+1])
+            mesh.bc[e, 0] = bcs[0] if i == 0 else 0           # cylinder surface
+            mesh.bc[e, 1] = bcs[1] if i == E_r - 1 else 0     # far field
+            mesh.bc[e, 2] = 0                                 # theta: periodic
+            mesh.bc[e, 3] = 0
+            mesh.neighbour[e, 0] = e - E_th if i > 0 else -1
+            mesh.neighbour[e, 1] = e + E_th if i < E_r - 1 else -1
+            mesh.neighbour[e, 2] = i*E_th + (j - 1) % E_th    # wraps
+            mesh.neighbour[e, 3] = i*E_th + (j + 1) % E_th
+    mesh.xnod = X[:, :, 0].copy()
+    mesh.ynod = Y[:, 0, :].copy()
+    attach(mesh, X, Y)
+    mesh.E_r, mesh.E_th = E_r, E_th
+    mesh.r_cyl, mesh.r_far, mesh.redges = r_cyl, r_far, redges
+    return mesh
