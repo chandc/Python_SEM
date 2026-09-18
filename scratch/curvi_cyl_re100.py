@@ -80,6 +80,7 @@ ap.add_argument('--ac', action='store_true',
                      'kappa_p = a_mass/2')
 ap.add_argument('--kfrac', type=float, default=0.5,
                 help='kappa_p as a fraction of a_mass (0.5 is the rule)')
+ap.add_argument('--N', type=int, default=8, help='polynomial order')
 A = ap.parse_args()
 
 
@@ -115,7 +116,7 @@ def main():
     lssem2d.set_backend('numpy')
     os.makedirs(A.out, exist_ok=True)
     nu = 1.0/A.re
-    m = curvi.build_cylinder_box()
+    m = curvi.build_cylinder_box(N=A.N)
     m.compute_global_indices()
     D = diff_matrix(m.N)
     n = m.nterm
@@ -177,6 +178,19 @@ def main():
         # absorbs within a period, and the analysis discards that anyway.
         z = np.load(A.restart_from, allow_pickle=True)
         U = z['U0'].copy()
+        if U.shape[1] != m.nterm:
+            # P-INTERPOLATE THE SEED.  The mesh geometry is identical, only the
+            # order differs, so the transfer is the 1D Lagrange interpolation
+            # between the two GLL node sets applied on each tensor axis --
+            # exactly precond._p_interp.  Re-growing the wake from rest at every
+            # N instead would cost 50+ time units per run and say nothing about
+            # resolution.
+            from lssem2d.precond import _p_interp
+            Np = U.shape[1] - 1
+            T = _p_interp(Np, m.N)                     # (nterm_new, nterm_old)
+            U = np.einsum('ai,eijf,bj->eabf', T, U, T)
+            print(f'p-interpolated the seed from N = {Np} to N = {m.N}',
+                  flush=True)
         h = [U, U.copy()]
         t = float(z['t'])
         hist = []                      # force history starts fresh at the new dt

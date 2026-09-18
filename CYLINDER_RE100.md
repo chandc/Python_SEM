@@ -230,3 +230,77 @@ Two clean designs exist and they answer different questions:
   study in `SILENT_FAILURES.md` §3 and `scratch/curvi_error_source.py`); they
   show no visible scar in the vorticity field, which is reassuring but not
   quantitative
+
+## Blockage: the literature sample and the correction (2026-09-17)
+
+An earlier note in this file retracted the blockage explanation for our high St on the
+strength of Behr, Hastreiter, Mittal & Tezduyar (1995), who state that "lateral
+boundaries should be removed from the cylinder by at least a distance of eight cylinder
+diameters, i.e. that at least H > 16 is required".  Our box is H = 20, so we pass that
+test.  **That retraction was wrong.**  Behr's criterion is the loosest in the
+literature, and a wider sample contradicts it:
+
+| source | domain requirement at Re = 100 |
+|---|---|
+| Behr et al. (1995)              | H > 16 |
+| Posdziech & Grundmann (2007)    | Xu > 20; forces "strongly dependent" on domain size, St less so |
+| Shi et al. (2004)               | polar domain D = 300 used |
+| Kumar & Mittal (2006)           | blockage negligible **only for H > 100** (with Xu = Xd = 50) |
+| Qu et al. (2013)                | H = 120 adequate; H = 60 costs 0.8 % in St, 1.2 % in C_D |
+
+Ours is H = 20, Xu = 10, Xd = 25 -- a factor 3 below the smallest domain any of these
+studies tested, and Xu half of Posdziech & Grundmann's recommended minimum.  Xu is the
+one parameter our dt and N sweeps never varied.
+
+### Quantitative test
+
+Qu, Norberg, Davidson, Peng & Wang, *J. Fluids Struct.* 39 (2013) 347-370, ran a
+domain sweep at fixed resolution (386 circumferential cells, dt = 0.02), cases D1-D4:
+
+| H | D/H | C_D | St | C_L' (rms) |
+|---|---|---|---|---|
+| 200 | 0.00500 | 1.310 | 0.1647 | 0.2151 |
+| 120 | 0.00833 | 1.315 | 0.1650 | 0.2163 |
+| 100 | 0.01000 | 1.317 | 0.1652 | 0.2169 |
+|  60 | 0.01667 | 1.326 | 0.1660 | 0.2191 |
+
+All three quantities are linear in the blockage ratio D/H with R^2 >= 0.996.
+Extrapolating that fit to our blockage ratio D/H = 0.05:
+
+| quantity | slope d/d(D/H) | intercept (D/H -> 0) | predicted at H = 20 | ours | difference |
+|---|---|---|---|---|---|
+| St   | 0.1131 | 0.1641 | 0.1697 | 0.1698 | **+0.03 %** |
+| C_D  | 1.3615 | 1.3034 | 1.3715 | 1.3823 | +0.79 % |
+| C_L' | 0.3415 | 0.2134 | 0.2305 | 0.2389 | +3.62 % |
+
+Our St = 0.1698 is what a blockage-free St of 0.164 becomes in a box of our width.
+Caveat: this is a 3x extrapolation beyond Qu's smallest tested domain, and blockage
+corrections are not guaranteed linear that far out.  The agreement in St to 0.03 % is
+better than the data deserve; C_D at 0.8 % and C_L' at 3.6 % are the honest measure.
+
+### Reference values at large domain
+
+Qu et al. Table 1, all at comparable (large) domains:
+
+| study | method | C_D | St | C_L' |
+|---|---|---|---|---|
+| Park et al. (1998)            | FV, C-grid       | 1.33  | 0.165  | 0.235 |
+| Kravchenko & Moin (1998)      | zonal B-spline   | 1.32  | 0.164  | 0.222 |
+| Shi et al. (2004)             | FV               | 1.318 | 0.1640 | -- |
+| Mittal (2005)                 | FE               | 1.322 | 0.1644 | 0.226 |
+| Stalberg et al. (2006)        | high-order FD    | 1.32  | 0.166  | 0.233 |
+| Posdziech & Grundmann (2007)  | spectral element | 1.325 | 0.1644 | 0.228 |
+| Li et al. (2009)              | lattice-Boltzmann| 1.336 | 0.164  | -- |
+| Qu et al. (2013)              | FV               | 1.319 | 0.1648 | 0.225 |
+
+Consensus: St = 0.1645 +/- 0.0008, C_D = 1.323 +/- 0.007.  Qu's blockage-free
+intercepts (St 0.1641, C_D 1.3034) sit at the bottom of that band, which is expected
+since most of these studies still carry some blockage.
+
+### Consequence for the paper
+
+The cylinder case should be reported as validating against the *blockage-corrected*
+target, not the raw literature number, or the box should be widened.  Widening is the
+cleaner fix: H = 60 (Xu = 30) would put us inside the range every study above accepts
+and reduce the blockage shift to ~0.8 % in St.  This is a domain change, not a solver
+change -- the dt and N convergence already established carries over.
