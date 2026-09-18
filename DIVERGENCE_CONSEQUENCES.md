@@ -116,16 +116,81 @@ A cheaper partial version: recompute the fractional-step vorticity rms over a
 window of snapshots rather than one, which removes the caveat in §4 and costs an
 hour.
 
+## 6a. MEASURED, 2026-09-17: the term incompressibility should kill
+
+*This converts the central argument from a mechanism into a number, by a
+different route than §6 proposed — the vorticity equation rather than a passive
+scalar, and it needed no new solver work because both archives store fields.*
+
+The vorticity equation is
+
+$$\frac{D\boldsymbol\omega}{Dt} \;=\; \underbrace{\boldsymbol\omega\cdot\nabla\mathbf u}_{\text{stretching — the cascade}} \;-\; \underbrace{\boldsymbol\omega\,(\nabla\!\cdot\mathbf u)}_{\textbf{identically zero if incompressible}} \;+\; \nu\nabla^2\boldsymbol\omega$$
+
+The second term does not exist in incompressible flow. Whatever a scheme leaves
+in $\nabla\!\cdot\mathbf u$ appears there **multiplied by the vorticity**, so the
+error is largest exactly where the vorticity is — in the near-wall vortices that
+sustain the turbulence. And vortex stretching *is* the cascade mechanism, so a
+spurious fraction of it is a dynamical statement, not a diagnostic one.
+
+Measured on five archived snapshots of each run (`scratch/divergence_consequence.py`,
+`figs/divergence_consequence.png`):
+
+| | rms $\nabla\!\cdot\mathbf u$ | relative to $\lVert\nabla\mathbf u\rVert$ | **spurious $\omega(\nabla\!\cdot\mathbf u)$ as % of $\omega\cdot\nabla\mathbf u$** |
+|---|---|---|---|
+| FOSLS | 3.43e−03 ± 4.1e−04 | 1.10e−05 | **0.006 % ± 0.001 %** |
+| fractional step | 6.69e+00 ± 8.8e−01 | 2.23e−02 | **12.46 % ± 1.63 %** |
+| ratio | 1949× | 2024× | **2079×** |
+
+The fractional-step value is stable at 9.8–14.4 % across five independent
+instants, so it is not a sampling artefact. The separation holds at **every
+height**, and the fraction *rises* toward the centreline (≈5 % near the wall to
+≈40 % at $y^+>100$) because the true stretching weakens there faster than the
+divergence error does.
+
+### Two measures that do NOT discriminate, and why quoting them would mislead
+
+* **The integrated energy leak** $-\tfrac12\int|\mathbf u|^2(\nabla\!\cdot\mathbf u)\,dV$
+  comes out *comparable for both*. $\nabla\!\cdot\mathbf u$ is largely uncorrelated
+  with $|\mathbf u|^2$, so the volume integral cancels. A referee shown this number
+  would conclude the divergence does not matter. Only **local** measures survive.
+* **Mass flux through constant-$x$ planes** is conserved to **3e−4 %** by both.
+  The projection drives the *weak* divergence $G^{\mathsf T}\mathbf u=0$ to machine
+  precision, so every integrated conservation statement is excellent. The failure
+  is purely pointwise — which is precisely the distinction §2b draws.
+
+### A null result worth keeping
+
+FOSLS's stored $\omega$ differs from $\nabla\times\mathbf u$ of its own velocity by
+**1.9e−06** relative. The vorticity-definition row is *minimised*, not enforced —
+exactly like continuity — yet it comes out satisfied six digits tighter than the
+divergence. So the structures FOSLS shows in the core are not a least-squares
+artefact, which was the main way this comparison could have flattered it.
+
+### What still is not measured
+
+The passive-scalar experiment of §6 remains the cleanest demonstration for a
+reader who does not think in vorticity, and is still a day's work. This section
+does not replace it; it removes the need for it to carry the argument alone.
+
 ## 7. What to claim in the paper
 
 > At equal cost, the least-squares formulation delivers a velocity field whose
 > pointwise divergence is three orders of magnitude smaller.  This does not
-> change the low-order statistics — we measure no significant difference in the
-> mean profile or the Reynolds stresses, consistent with the weak divergence
-> being what the momentum equation sees — but it is inherited directly by every
-> quantity computed from derivatives of the velocity field, for which we show the
-> vorticity statistics.
+> change the low-order statistics — on matched 24.8-turnover windows the two
+> agree to ~2 % on every mean and Reynolds-stress quantity, consistent with the
+> weak divergence being what the momentum equation sees, and both codes conserve
+> mass through constant-$x$ planes to 3e−4 %.  What it does change is the
+> **vorticity dynamics**: the term $\boldsymbol\omega(\nabla\!\cdot\mathbf u)$,
+> which incompressibility removes exactly, reaches **12.5 % ± 1.6 % of the true
+> vortex stretching** in the projection field against **0.006 % ± 0.001 %** in
+> the least-squares field — a factor of 2000, stable over five independent
+> snapshots and present at every height.
 
-Narrow, supported, and it does not invite the obvious objection.  The broader
-claims about particle tracking and scalar transport should be offered as
-*expected consequences* with the mechanism stated, or backed by §6 first.
+Narrow, supported, and it does not invite the obvious objection.  It is also now
+a *measurement* rather than a mechanism, which §6 was written to achieve.
+
+**Do not quote the integrated energy leak or any global conservation statement
+as evidence** — both are insensitive by construction (§6a), and offering one
+would hand a referee the counter-argument.  The broader claims about particle
+tracking and scalar transport remain *expected consequences* with the mechanism
+stated, or need §6 first.
