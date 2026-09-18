@@ -308,6 +308,45 @@ def _geom_edges(a0, a1, n, ratio=1.0):
     return a0 + (a1 - a0)*c/c[-1]
 
 
+
+def nested_lateral_edges(H_new, n_extra, a=1.5, H=10.0, ny_side=4, ratio_out=1.45):
+    """Lateral edges for a WIDER box that keeps the narrow box's divisions.
+
+    Returns the `ny_side` edges of the reference box unchanged, with `n_extra`
+    further elements appended geometrically out to `H_new`.  Feed the result to
+    `build_cylinder_box(ys_side=...)`.  Because the reference edges survive
+    untouched, every node with |y| <= H is common to both meshes, so a
+    domain-size comparison changes the domain and nothing else -- and a solution
+    on the narrow mesh transfers to the wide one by direct copy on the shared
+    nodes, with free stream in the new strips.
+    """
+    base = _geom_edges(a, H, ny_side, ratio_out)
+    if H_new <= H:
+        raise ValueError(f'H_new = {H_new} must exceed the reference H = {H}')
+    if n_extra < 1:
+        raise ValueError('n_extra must be at least 1')
+    return np.concatenate([base, _geom_edges(H, H_new, n_extra, ratio_out)[1:]])
+
+
+def nested_upstream_edges(Lu_new, n_extra, a=1.5, Lu=10.0, nx_up=4,
+                          ratio_out=1.45):
+    """Upstream edges for a LONGER inlet run that keeps the reference divisions.
+
+    Returns the reference box's `nx_up` edges unchanged with `n_extra` elements
+    prepended out to -`Lu_new`.  Feed the result to
+    `build_cylinder_box(xs_upstream=...)`.  The streamwise counterpart of
+    `nested_lateral_edges`, and for the same reason: every node of the reference
+    mesh survives, so moving the inlet changes the inlet and nothing else, and a
+    solution transfers by direct copy with free stream in the new blocks.
+    """
+    base = _geom_edges(-Lu, -a, nx_up, 1.0/ratio_out)
+    if Lu_new <= Lu:
+        raise ValueError(f'Lu_new = {Lu_new} must exceed the reference Lu = {Lu}')
+    if n_extra < 1:
+        raise ValueError('n_extra must be at least 1')
+    return np.concatenate([_geom_edges(-Lu_new, -Lu, n_extra, 1.0/ratio_out)[:-1],
+                           base])
+
 def _rect_block(xe, ye, N):
     """Elements of a rectangular block from edge arrays.  Returns X, Y, and the
     (nx, ny) shape so the caller can locate boundary elements."""
@@ -335,7 +374,7 @@ def _square_at(theta, a):
 def build_cylinder_box(r_cyl=0.5, a=1.5, Lu=10.0, Ld=25.0, H=10.0,
                        E_r=4, E_s=4, nx_up=4, nx_dn=8, ny_side=4, N=8,
                        stretch=1.6, ratio_out=1.45,
-                       bcs=(1, 3, 6, 5)):
+                       bcs=(1, 3, 6, 5), ys_side=None, xs_upstream=None):
     """O-ring on the body inside a RECTANGULAR box: curved where it must be,
     axis-aligned where the boundary conditions live.
 
@@ -414,10 +453,49 @@ def build_cylinder_box(r_cyl=0.5, a=1.5, Lu=10.0, Ld=25.0, H=10.0,
     xs_mid = np.unique(np.round(xs_mid, 12))
     ys_mid = xs_mid.copy()                                  # symmetric by design
 
-    xs_up = _geom_edges(-Lu, -a, nx_up, 1.0/ratio_out)
+    # UPSTREAM EDGES.  Same argument as `ys_side` below: raising Lu and nx_up
+    # together rescales every division between -Lu and -a, so the wide mesh
+    # would not contain the narrow one and an Xu study would confound the
+    # upstream extent with the upstream resolution.  `nested_upstream_edges`
+    # keeps the reference divisions and prepends new elements outside them.
+    if xs_upstream is None:
+        xs_up = _geom_edges(-Lu, -a, nx_up, 1.0/ratio_out)
+    else:
+        xs_up = np.asarray(xs_upstream, dtype=float)
+        if xs_up.ndim != 1 or xs_up.size < 2:
+            raise ValueError('xs_upstream must be a 1-D array of at least 2 edges')
+        if abs(xs_up[-1] + a) > 1e-12:
+            raise ValueError(f'xs_upstream must end at -a = {-a}, got {xs_up[-1]}')
+        if np.any(np.diff(xs_up) <= 0):
+            raise ValueError('xs_upstream must increase strictly')
+        Lu = float(-xs_up[0])           # the explicit edges define the inlet
     xs_dn = _geom_edges(a, Ld, nx_dn, ratio_out)
-    ys_lo = _geom_edges(-H, -a, ny_side, 1.0/ratio_out)
-    ys_hi = _geom_edges(a, H, ny_side, ratio_out)
+    # LATERAL EDGES, AND WHY THEY CAN BE GIVEN EXPLICITLY.  `_geom_edges`
+    # normalises its widths to span a0..a1 exactly, so raising H alone rescales
+    # EVERY division between a and H -- the wide mesh is then not a refinement
+    # of the narrow one, and a domain-size study run that way confounds the
+    # domain with the lateral resolution.  Behr et al. (1995) avoided this by
+    # using nested meshes that differ ONLY in how far the outermost elements
+    # reach; `ys_side` is how that is done here.  Pass the narrow mesh's own
+    # edges with extra ones appended (see `nested_lateral_edges`) and the two
+    # meshes share every node with |y| <= the narrow half-height.
+    if ys_side is None:
+        # NOTE the two separate calls rather than mirroring one of them: the
+        # mirror agrees only to 1 ulp, and every run recorded so far was made
+        # with these exact edges.  Reproducibility is worth the duplication.
+        ys_hi = _geom_edges(a, H, ny_side, ratio_out)
+        ys_lo = _geom_edges(-H, -a, ny_side, 1.0/ratio_out)
+    else:
+        ys_hi = np.asarray(ys_side, dtype=float)
+        if ys_hi.ndim != 1 or ys_hi.size < 2:
+            raise ValueError('ys_side must be a 1-D array of at least 2 edges')
+        if abs(ys_hi[0] - a) > 1e-12:
+            raise ValueError(f'ys_side must start at the square half-width a = {a}, '
+                             f'got {ys_hi[0]}')
+        if np.any(np.diff(ys_hi) <= 0):
+            raise ValueError('ys_side must increase strictly')
+        H = float(ys_hi[-1])            # the explicit edges define the box
+        ys_lo = -ys_hi[::-1]
 
     blocks = []
     for xe in (xs_up, xs_mid, xs_dn):

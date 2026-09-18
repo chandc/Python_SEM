@@ -84,24 +84,41 @@ RUNS = (('dt 0.10  no AC', 'scratch/_cyl_re100/final.npz'),
 
 
 def main():
-    print(f'{"run":16s} {"span":>13s} {"cyc":>4s} {"St (FFT)":>10s} '
-          f'{"St (cross)":>18s} {"diff":>8s} {"C_D peak / C_L":>15s}')
-    for tag, f in RUNS:
+    # `label=path` arguments override the built-in list, so a new run can be
+    # analysed without editing this file.  The domain study needs that: its runs
+    # are not part of the dt sweep this script was written for.
+    runs = RUNS
+    if len(sys.argv) > 1:
+        # rsplit, not split: labels carry '=' themselves ("H=40 dt0.1"), and
+        # the path is always the LAST field.
+        runs = tuple((a.rsplit('=', 1) if '=' in a else (os.path.basename(
+            os.path.dirname(a)), a)) for a in sys.argv[1:])
+    print(f'{"run":22s} {"span":>13s} {"cyc":>4s} {"St (FFT)":>10s} '
+          f'{"St (cross)":>18s} {"diff":>8s} {"2f_D/f_L":>9s} '
+          f'{"mean C_D":>9s} {"C_L rms":>8s}')
+    for tag, f in runs:
         if not os.path.exists(f):
-            print(f'{tag:16s} {"(not yet)":>13s}')
+            print(f'{tag:22s} {"(not yet)":>13s}')
             continue
         h = np.asarray(np.load(f, allow_pickle=True)['hist'], float)
         t, cd, cl = h[:, 0], h[:, 1], h[:, 2]
         i0 = saturated(t, cl)
         t, cd, cl = t[i0:], cd[i0:], cl[i0:]
         if len(t) < 64:
-            print(f'{tag:16s} {"too short":>13s}')
+            print(f'{tag:22s} {"too short":>13s}')
             continue
         sf, _, _ = st_fft(t, cl)
         sc, sd, n = st_cross(t, cl)
         fd, _, _ = st_fft(t, cd)
-        print(f'{tag:16s} {t[0]:6.1f}-{t[-1]:6.1f} {n:4d} {sf:10.4f} '
-              f'{sc:10.4f} +-{sd:.4f} {sf-sc:+8.4f} {fd/sf:15.3f}')
+        # MEAN C_D OVER WHOLE CYCLES.  A partial cycle at the end biases the
+        # mean by roughly the C_D fluctuation amplitude times the fraction left
+        # over -- order 0.3 % here, which is the size of the effect the domain
+        # study is trying to measure, so it cannot be left in.
+        npd = int((t[-1] - t[0])*sf)
+        keep = t <= t[0] + npd/sf + 1e-12 if npd >= 1 else np.ones_like(t, bool)
+        print(f'{tag:22s} {t[0]:6.1f}-{t[-1]:6.1f} {n:4d} {sf:10.4f} '
+              f'{sc:10.4f} +-{sd:.4f} {sf-sc:+8.4f} {fd/sf:9.3f} '
+              f'{cd[keep].mean():9.4f} {cl[keep].std():8.4f}')
     print('\n  the last column must be 2.000: C_D is forced at twice the shedding')
     print('  frequency, which is physics and not a property of the estimator')
 

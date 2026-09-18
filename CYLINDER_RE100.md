@@ -304,3 +304,68 @@ target, not the raw literature number, or the box should be widened.  Widening i
 cleaner fix: H = 60 (Xu = 30) would put us inside the range every study above accepts
 and reduce the blockage shift to ~0.8 % in St.  This is a domain change, not a solver
 change -- the dt and N convergence already established carries over.
+
+## The lateral domain test, and what it refutes (2026-09-18)
+
+The section above predicted that widening the box would recover most of the
+Strouhal offset.  **It does not.**  Two runs on NESTED meshes -- identical N, dt,
+AC setting, seed, near-field mesh and streamwise divisions, differing only in
+how far the lateral boundary sits -- give:
+
+| | H_full = 20 | H_full = 40 | measured change | Qu's fit predicted |
+|---|---|---|---|---|
+| St (FFT)   | 0.1687 | 0.1682 | **-0.0004** | -0.0028 |
+| St (cross) | 0.1687 +- 0.0001 | 0.1683 +- 0.0001 | -0.0004 | |
+| mean C_D   | 1.3936 | 1.3884 | **-0.0053** | -0.0340 |
+| C_L rms    | 0.2550 | 0.2690 | **+0.0140** | -0.0085 |
+
+N = 6, dt = 0.1, +AC, both seeded from `_cyl_N6dt0.05ac/final.npz` at t = 230 and
+run to t = 330; statistics over t >= 260, 11 cycles, whole cycles only.  Stable
+to +-0.0001 in St over window starts of 250, 260 and 270, and the C_D spectrum
+peaks at 2.000x the C_L spectrum in every case, so these are clean limit cycles
+and not an estimator artefact.
+
+The lateral effect is real but **7x smaller in St and 6x smaller in C_D than the
+blockage fit predicted**, and C_L rms moves the WRONG WAY.
+
+### Why -- the boundary was barely binding
+
+Measured in the wide run at the position where the narrow run's symmetry
+condition used to sit:
+
+| at y = +-10, constraint removed | |
+|---|---|
+| max abs(v) | 0.0100 |
+| peak abs(v) in the wake | 0.678 |
+| max abs(omega) | 0.0037 |
+| volume-weighted abs(v) beyond abs(y) = 10 | 4.6 % |
+
+The old boundary was suppressing a transverse velocity of 1 % of free stream.
+A constraint that small cannot produce a 2 % error in St, and the measured
+response is the right size for the violation that was actually occurring.
+
+### What it costs the blockage story
+
+Our own measured lateral sensitivity is dSt/d(D/H) = 0.016, against Qu's 0.113.
+Extrapolating OUR slope to zero blockage:
+
+    St  -> 0.1678   (literature consensus 0.1645 +- 0.0008)
+    C_D -> 1.383    (literature consensus 1.323 +- 0.007)
+
+So lateral blockage accounts for about 0.0008 of a 0.0042 Strouhal discrepancy
+-- **under 20 % of it** -- and almost none of the C_D discrepancy.  Qu's fit
+reproducing our St to 0.03 % was a coincidence: four points spanning D/H =
+0.005-0.017 pushed out to 0.05, landing on our number by luck.  Both the
+retraction in section 4 and its un-retraction were premature; this run is the
+first direct measurement, and it supersedes both.
+
+Residual still unexplained: St +2.0 %, C_D +4.5 %.
+
+### Next suspect
+
+`Xu = 10`, the one parameter no sweep has varied, against Posdziech &
+Grundmann's recommended `Xu > 20`.  An upstream boundary imposing uniform u = 1
+close to the body constrains the stagnation streamline and would raise BOTH St
+and C_D, which is the signature we still have.  Testing it needs the same nested
+treatment applied to the streamwise edges -- `nested_lateral_edges` does not
+cover it.  `Xd = 25` with the Dong condition is the suspect after that.

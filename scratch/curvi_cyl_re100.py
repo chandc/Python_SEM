@@ -81,6 +81,49 @@ ap.add_argument('--ac', action='store_true',
 ap.add_argument('--kfrac', type=float, default=0.5,
                 help='kappa_p as a fraction of a_mass (0.5 is the rule)')
 ap.add_argument('--N', type=int, default=8, help='polynomial order')
+# LATERAL DOMAIN.  Qu et al. (2013) cases D1-D4 make all three global
+# quantities linear in the blockage ratio D/H with R^2 >= 0.996, and
+# extrapolating that fit to our D/H = 0.05 reproduces our St to 0.03 % -- so the
+# 2 % Strouhal offset is blockage, not discretisation (CYLINDER_RE100.md sec 4).
+# Testing that means widening the box AND NOTHING ELSE, which is why this goes
+# through `nested_lateral_edges`: raising H and ny_side naively would rescale
+# every interior lateral division as well, confounding the domain with the
+# lateral resolution.  Behr et al. (1995) used nested meshes for this reason.
+ap.add_argument('--hfull', type=float, default=20.0,
+                help='full lateral extent (default 20, the original box)')
+ap.add_argument('--ny-extra', type=int, default=2, dest='ny_extra',
+                help='elements appended beyond the reference half-height')
+# UPSTREAM EXTENT.  The lateral test (H_full 20 -> 40) moved St by 0.0004
+# against a predicted 0.0028, so lateral blockage explains under 20 % of the
+# offset from the literature and the box is adequate sideways.  Xu is the last
+# domain parameter no sweep has varied: ours is 10, against Posdziech &
+# Grundmann's recommended minimum of 20.  An inlet imposing uniform u = 1 that
+# close pins the stagnation streamline where it should still be adjusting,
+# which raises BOTH St and C_D -- the signature that survives the lateral fix.
+ap.add_argument('--lu', type=float, default=10.0,
+                help='upstream extent Xu (default 10, the original box)')
+ap.add_argument('--nx-extra', type=int, default=2, dest='nx_extra',
+                help='elements prepended beyond the reference inlet')
+# NEWTON SUB-ITERATIONS.  The default (3 with AC, 2 without) is NOT a
+# convergence criterion: newton_factor = 0.0 makes the ratio test unreachable
+# and newton_tol = 1e-11 is never met, so the cap is simply what runs.  Measured
+# on this case, the two regimes are completely different:
+#   AC ON  -- the Jacobian carries +kappa_p that the residual does not (apply_L
+#             is also the operator on the increment; _drop_pseudo removes the
+#             term from the residual because its reference is the current
+#             iterate).  That is a damped fixed point, not Newton: increments
+#             fall 4e-1, 1.2e-2, 9.1e-3, then contract by a flat 0.87 per
+#             iteration.  Reaching 1e-6 would take ~85 sub-iterations.
+#   AC OFF -- the Jacobian is consistent and it is real Newton: 1.1e+1, 3.5e-1,
+#             3.3e-4, 1.6e-4, 5.1e-7, converging to 3.5e-10 by the seventh.
+# AC also buys a 5x better conditioned linear system (16 PCG iterations against
+# 85), which is the trade it exists to make.  At dt = 0.1, a_mass = 4.74 sits
+# below GARTLING_VALIDATION.md's bounded threshold of 6.05, so AC is not needed
+# for stability here and running without it gives a genuinely CONVERGED
+# reference -- which no AC run can provide at any affordable iteration count.
+ap.add_argument('--newton', type=int, default=0,
+                help='Newton sub-iterations per step (0 = the old default, '
+                     '3 with --ac and 2 without)')
 A = ap.parse_args()
 
 
@@ -112,11 +155,60 @@ def forces(U, wn, nu):
     return 2.0*fx, 2.0*fy
 
 
+
+def _transfer_to_wider(Us, m):
+    """Copy a narrow-box field onto the nested wide mesh; free stream elsewhere.
+
+    Matching is on ROUNDED PHYSICAL COORDINATES, the same key
+    `compute_global_indices` uses, so a node either matches exactly or is
+    genuinely new.  Anything else -- nearest neighbour, interpolation -- would
+    hide a mesh that is not actually nested, and a silently non-nested transfer
+    is exactly the failure this experiment cannot afford.
+    """
+    ms = curvi.build_cylinder_box(N=Us.shape[1] - 1)          # the seed's mesh
+    if ms.nelem != Us.shape[0]:
+        raise ValueError(f'seed has {Us.shape[0]} elements, the default box has '
+                         f'{ms.nelem}; the seed is not from the reference mesh')
+    key = lambda X, Y: np.round(np.stack([X.ravel(), Y.ravel()], 1), 9)
+    src = {tuple(r): i for i, r in enumerate(key(ms.X, ms.Y))}
+    Uf = Us.reshape(-1, Us.shape[-1])
+
+    U = np.zeros((m.nelem, m.nterm, m.nterm, 4))
+    U[..., 0] = 1.0                                            # free stream
+    Ud = U.reshape(-1, 4)
+    hit = 0
+    for i, r in enumerate(key(m.X, m.Y)):
+        j = src.get(tuple(r))
+        if j is not None:
+            Ud[i] = Uf[j]
+            hit += 1
+    got = len({tuple(r) for r in key(ms.X, ms.Y)} &
+              {tuple(r) for r in key(m.X, m.Y)})
+    if got != len(src):
+        raise ValueError(f'the meshes are NOT nested: {len(src) - got} of '
+                         f'{len(src)} seed nodes have no match in the wide mesh')
+    print(f'transferred the seed onto the wider box: {hit:,} of {Ud.shape[0]:,} '
+          f'nodes copied exactly, {Ud.shape[0] - hit:,} filled with free stream',
+          flush=True)
+    return U
+
+
 def main():
     lssem2d.set_backend('numpy')
     os.makedirs(A.out, exist_ok=True)
     nu = 1.0/A.re
-    m = curvi.build_cylinder_box(N=A.N)
+    kw = {}
+    if abs(A.hfull - 20.0) > 1e-12:
+        kw['ys_side'] = curvi.nested_lateral_edges(A.hfull/2.0, A.ny_extra)
+        print(f'lateral domain widened: H_full = {A.hfull:g} '
+              f'(+{A.ny_extra} nested elements per side), lateral edges '
+              f'{np.round(kw["ys_side"], 4).tolist()}', flush=True)
+    if abs(A.lu - 10.0) > 1e-12:
+        kw['xs_upstream'] = curvi.nested_upstream_edges(A.lu, A.nx_extra)
+        print(f'upstream domain extended: Xu = {A.lu:g} '
+              f'(+{A.nx_extra} nested elements), upstream edges '
+              f'{np.round(kw["xs_upstream"], 4).tolist()}', flush=True)
+    m = curvi.build_cylinder_box(N=A.N, **kw)
     m.compute_global_indices()
     D = diff_matrix(m.N)
     n = m.nterm
@@ -191,6 +283,16 @@ def main():
             U = np.einsum('ai,eijf,bj->eabf', T, U, T)
             print(f'p-interpolated the seed from N = {Np} to N = {m.N}',
                   flush=True)
+        if U.shape[0] != m.nelem:
+            # TRANSFER ONTO A WIDER BOX.  The meshes are NESTED by construction
+            # (`nested_lateral_edges`), so every node of the narrow mesh exists
+            # in the wide one at the same coordinates and the transfer is an
+            # exact copy -- no interpolation, no accuracy lost in the wake.  The
+            # strips that only the wide mesh has are filled with free stream,
+            # which is what the flow is doing out there: at |y| = 10 the
+            # disturbance is already down to the level the symmetry condition
+            # was pretending it had reached.
+            U = _transfer_to_wider(U, m)
         h = [U, U.copy()]
         t = float(z['t'])
         hist = []                      # force history starts fresh at the new dt
@@ -220,7 +322,7 @@ def main():
     t0 = _time.perf_counter()
     nstep = int(round((A.tend - t)/A.dt))
     for i in range(nstep):
-        S.step_bdf(st, h, time=t + A.dt, max_newton=(3 if A.ac else 2), newton_tol=1e-11,
+        S.step_bdf(st, h, time=t + A.dt, max_newton=(A.newton or (3 if A.ac else 2)), newton_tol=1e-11,
                    newton_factor=0.0, custom_inlet=inlet, pin_p=False,
                    cgsfac=A.cgsfac, cg_tol=1e-12, cg_max_iter=4000,
                    line_search=False)
