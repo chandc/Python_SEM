@@ -1,4 +1,6 @@
 import numpy as np
+import math
+
 from .lssem import apply_L, apply_LT, ls_pseudo, ls_pseudo_p
 from .assembly import gather_scatter
 from .bc import apply_mask, apply_bc
@@ -425,6 +427,46 @@ def newton_step(state, U, su_history, M_inv, multiplicity_weight, time=0.0, f_kn
 
     return U_new, dU, cg_iters
 
+
+def _warn_due(n):
+    """True on a 1, 2, 5, 10, 20, 50, ... schedule, so a scheme that NEVER
+    converges reports at a decreasing rate instead of one line per step."""
+    if n <= 0:
+        return False
+    d = 10**int(math.log10(n))
+    return n in (d, 2*d, 5*d)
+
+
+def _newton_report(state, nit, max_newton, du, du0, prev, tol, factor):
+    """Announce sub-iterations that hit the cap without meeting the tolerance.
+
+    SILENCE HERE IS HOW AN UN-CONVERGED SCHEME PASSES FOR A CONVERGED ONE.  The
+    cylinder runs took 3 sub-iterations with newton_factor = 0.0 -- which makes
+    the ratio test unreachable -- and newton_tol = 1e-11, which is never met, so
+    the cap was the only thing that ever stopped the loop and nothing said so.
+    With artificial compressibility the contraction was measured at a flat 0.863
+    per iteration, needing several hundred iterations to reach 1e-6; without it
+    the same solver converges to 3e-10 in seven.  The difference is invisible
+    from the output unless it is printed.
+
+    The observed ratio is reported alongside the increment because it is what
+    distinguishes "nearly there" from "will never get there": a ratio near 1
+    means the cap is not the binding constraint and raising it will not help.
+    """
+    state._newton_fail = getattr(state, '_newton_fail', 0) + 1
+    n = state._newton_fail
+    if not _warn_due(n):
+        return
+    ratio = (du/prev) if (prev and prev > 0) else float('nan')
+    need = (math.log(tol/du)/math.log(ratio)) if 0.0 < ratio < 1.0 and du > tol \
+        else float('inf')
+    print(f'  [newton] did NOT converge: {nit}/{max_newton} sub-iterations, '
+          f'|dU| = {du:.3e} > tol {tol:.1e} (first {du0:.3e}, ratio {ratio:.3f}'
+          + (f', ~{need:.0f} more needed at this rate)' if math.isfinite(need)
+             else ', not contracting)')
+          + f'  [occurrence {n}]', flush=True)
+
+
 def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_factor=0.1, f_known=None, custom_inlet=None, custom_lid=None, exact_solution=None, pin_p=False, cg_max_iter=5000, cgsfac=0.0, cg_tol=1e-6, verbose=False, line_search=False, ls_memory=None):
     """
     Advances one time step using BDF1 or BDF2.
@@ -510,19 +552,33 @@ def step_bdf(state, U_history, time=0.0, max_newton=5, newton_tol=1e-6, newton_f
         ls_memory = 1 if max_newton > 1 else 10
 
     du_norm_0 = None
-    
+    du_norm = float('inf')
+    prev_norm = None
+    converged = False
+
     for i in range(max_newton):
         U, dU, cg_iters = newton_step(state, U, su_history, None, state.multiplicity_weight, time=time, f_known=f_known, custom_inlet=custom_inlet, custom_lid=custom_lid, exact_solution=exact_solution, pin_p=pin_p, cg_max_iter=cg_max_iter, cgsfac=cgsfac, cg_tol=cg_tol, line_search=line_search, ls_memory=ls_memory)
-        
+
+        prev_norm = du_norm if du_norm_0 is not None else None
         du_norm = np.max(np.abs(dU))
         if du_norm_0 is None:
             du_norm_0 = du_norm
-            
+
         if verbose:
             print(f"  Newton {i}: change = {du_norm:.2e}, PCG iters = {cg_iters}")
-            
+
         if du_norm < newton_tol or (du_norm_0 > 0 and du_norm / du_norm_0 <= newton_factor):
+            converged = True
             break
+
+    # The loop exits on the CAP as readily as on the tolerance, and the two mean
+    # opposite things.  Record both so a caller can summarise, and report the
+    # failures on a throttled schedule.
+    state._newton_calls = getattr(state, '_newton_calls', 0) + 1
+    state._newton_last = float(du_norm)
+    if not converged:
+        _newton_report(state, i + 1, max_newton, float(du_norm),
+                       float(du_norm_0), prev_norm, newton_tol, newton_factor)
             
     # BDF history handoff (mutate in-place)
     U_history.insert(0, U)

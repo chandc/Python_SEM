@@ -124,6 +124,16 @@ ap.add_argument('--nx-extra', type=int, default=2, dest='nx_extra',
 ap.add_argument('--newton', type=int, default=0,
                 help='Newton sub-iterations per step (0 = the old default, '
                      '3 with --ac and 2 without)')
+# THE TOLERANCE IS AN INPUT, and it has to be, because the pair (tol, factor)
+# decides whether the loop can stop early at all.  newton_factor = 0.0 makes the
+# relative test `du/du0 <= factor` unreachable, so with the historical defaults
+# the cap was the ONLY exit and the run never said so.  step_bdf now reports
+# every capped step on a throttled schedule and the driver prints a summary.
+ap.add_argument('--newton-tol', type=float, default=1e-11, dest='newton_tol',
+                help='absolute |dU| below which a step is converged')
+ap.add_argument('--newton-factor', type=float, default=0.0, dest='newton_factor',
+                help='relative |dU|/|dU_1| that also counts as converged '
+                     '(0 disables the test, which is the historical behaviour)')
 A = ap.parse_args()
 
 
@@ -319,11 +329,15 @@ def main():
           f'({int(round((A.tend-t)/A.dt))} steps)')
     print(f'{m.nelem} elements, N = {m.N}, {ndof:,} dof; Dong outflow, '
           f'symmetry top/bottom\n')
+    nwt = A.newton or (3 if A.ac else 2)
+    print(f'Newton: up to {nwt} sub-iterations, tol |dU| < {A.newton_tol:g}'
+          + (f' or |dU|/|dU_1| <= {A.newton_factor:g}' if A.newton_factor > 0
+             else ' (relative test disabled)'), flush=True)
     t0 = _time.perf_counter()
     nstep = int(round((A.tend - t)/A.dt))
     for i in range(nstep):
-        S.step_bdf(st, h, time=t + A.dt, max_newton=(A.newton or (3 if A.ac else 2)), newton_tol=1e-11,
-                   newton_factor=0.0, custom_inlet=inlet, pin_p=False,
+        S.step_bdf(st, h, time=t + A.dt, max_newton=nwt, newton_tol=A.newton_tol,
+                   newton_factor=A.newton_factor, custom_inlet=inlet, pin_p=False,
                    cgsfac=A.cgsfac, cg_tol=1e-12, cg_max_iter=4000,
                    line_search=False)
         t += A.dt
@@ -341,6 +355,18 @@ def main():
         if _time.perf_counter() - t0 > A.hours*3600:
             print(f'\n  wall budget {A.hours} h reached at t = {t:.2f}', flush=True)
             break
+    # A CAPPED STEP IS NOT A CONVERGED STEP, and the distinction has to survive
+    # to the end of the log or it will be forgotten by the time anyone reads the
+    # Strouhal number off the same file.
+    nf = getattr(st, '_newton_fail', 0)
+    nc = getattr(st, '_newton_calls', 0)
+    if nf:
+        print(f'\nNEWTON SUMMARY: {nf:,} of {nc:,} steps ({nf/max(nc, 1):.1%}) hit '
+              f'the {nwt}-sub-iteration cap WITHOUT reaching |dU| < '
+              f'{A.newton_tol:g}; last |dU| = {getattr(st, "_newton_last", 0.0):.3e}')
+    else:
+        print(f'\nNEWTON SUMMARY: all {nc:,} steps converged to '
+              f'|dU| < {A.newton_tol:g}')
     print(f'\nstopped at t = {t:.3f} after {(_time.perf_counter()-t0)/3600:.2f} h')
     np.savez(os.path.join(A.out, 'final.npz'), U0=h[0], U1=h[1], t=t,
              hist=np.array(hist), X=m.X, Y=m.Y, re=A.re, dt=A.dt)
