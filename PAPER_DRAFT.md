@@ -217,6 +217,75 @@ setting in which the method was validated in most of the literature, because at
 the moderate steps used for steady-state marching the distinction below does not
 appear.
 
+### 2.1 The scope of the claim, and how far the balanced weighting reaches
+
+**The exponent is forced, not chosen.** Dividing the momentum row by
+$w_{\rm mom}$ puts the BDF bracket over $\Delta t\,w_{\rm mom}/w_{\rm mass}$, so
+the step the scheme actually takes is
+$$\Delta t_{\rm eff}=\Delta t\,\frac{w_{\rm mom}}{w_{\rm mass}} .$$
+A time-accurate step therefore requires $w_{\rm mass}=w_{\rm mom}\equiv w$, and
+the balance condition $ma=\mathrm{fac}_1$ then reads $w^2/\Delta t=1$. Hence
+$w=\sqrt{\Delta t}$ is the *unique* time-accurate member of the family, not one
+choice among several. The apparent alternative $w_{\rm mass}=\Delta t$,
+$w_{\rm mom}=1$ also gives $ma=\mathrm{fac}_1$, and with $a_{\rm mass}$ held at
+$\mathrm{fac}_1$ for every $\Delta t$ it looks like the better bargain; but it
+sets $\Delta t_{\rm eff}=1$, so the nominal step is decorative and the scheme
+takes unit steps whatever the input says.
+
+**The two weightings fail at small $\Delta t$ for opposite reasons**, and it is
+worth separating them because only one is the subject of this paper. Under the
+conventional weighting $a_{\rm flux}=\Delta t\to0$: the pressure appears only in
+the momentum rows, so the pressure block of $L^{\!\top}L$ scales as
+$a_{\rm flux}^2$, the operator develops a near-null space in $p$, and the exact
+solution stops being the unique minimiser — the mechanism of Sections 3–6.
+Under the balanced weighting the pressure keeps its weight and it is
+$a_{\rm mass}=\mathrm{fac}_1/\sqrt{\Delta t}$ that grows without bound instead.
+Trading an unbounded $a_{\rm mass}$ for a vanishing $a_{\rm flux}$ is the whole
+of the transaction, and its terms are set by how large $a_{\rm mass}$ may be.
+
+**The claim is about implicit convection.** With convection treated explicitly
+each implicit stage is a Stokes projection, there is no fixed point to
+degenerate toward, and the conventional weighting is the correct choice — this
+is the exception documented in Section 10, and it is why a direct simulation
+reaches $\Delta t=8\times10^{-4}$ on the conventional weighting without
+difficulty. Small steps *per se* are not the problem the balanced weighting
+solves; small steps **with the nonlinear term inside the implicit solve** are.
+
+**How far that reaches.** Gartling's outflow problem bounds the usable
+$a_{\rm mass}$: over a 34-run sweep, $a_{\rm mass}\le6.05$ remained bounded and
+$a_{\rm mass}\ge12.1$ diverged, with no crossover. With
+$a_{\rm mass}=\mathrm{fac}_1/\sqrt{\Delta t}$ and $\mathrm{fac}_1=3/2$ that
+bound is
+$$\Delta t\;\ge\;\Big(\tfrac{3/2}{6.05}\Big)^{2}\;=\;6.1\times10^{-2}.$$
+The cylinder of Section 6 brackets it where Gartling put it: at
+$\Delta t=0.1$ ($a_{\rm mass}=4.74$) the run is clean over sixteen shedding
+cycles, while at $\Delta t=0.05$ ($a_{\rm mass}=6.71$) it diverges at $t=157$,
+the lift departing while $|\mathbf u|_{\max}$ is still $1.32$ — the pressure
+going first, as an under-weighted pressure block does. At $Re=100$ the shedding
+period is $5.95$, so $\Delta t=0.06$ is ninety-nine steps per cycle. The
+balanced weighting reaches the steps that implicit-convection problems actually
+require, with roughly an order of magnitude to spare.
+
+**Below that we make no claim.** At the direct-simulation step
+$\Delta t=8\times10^{-4}$ the balanced weighting would ask for
+$a_{\rm mass}=53$, far outside the measured bound; reaching it needs an
+artificial-compressibility term on the continuity row, which is an iterated
+penalty in the sense of Uzawa and whose sub-iteration we measure to contract at
+a fixed $0.863$ — so it is not converged at any affordable count, and the
+scheme is then not the one analysed here. We therefore state the reach of the
+balanced weighting as $\Delta t\gtrsim6\times10^{-2}$ for implicit convection
+and treat smaller steps as demonstrations of the mechanism rather than as
+supported practice.
+
+Two caveats on that bound. It is *necessary but not sufficient*: we have
+measured a cylinder configuration with a lengthened inlet that diverges without
+the artificial-compressibility term at $a_{\rm mass}=4.74$, comfortably inside
+the bound, by a mechanism the $a_{\rm mass}$ argument does not describe. And it
+may not *apply* everywhere: Gartling's sweep is an outflow problem, and a
+streamwise-periodic domain has no outflow boundary, so the limit that sets
+$6.05$ may simply be absent there. Neither caveat is resolved here.
+
+
 ## 3. The fixed point
 
 **Proposition 1 (the fixed point of the step map).** *Let $U^\ast$ satisfy
