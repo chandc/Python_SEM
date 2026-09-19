@@ -597,6 +597,59 @@ conventional failure, and it confirms that $ma=O(1)$ is a two-sided requirement.
 
 ---
 
+### 6.5 Forces on a body: verifying the integral before believing the number
+
+The benchmarks above are norms of the solution. A body force is not: it is a
+surface integral of a *derived* quantity over a curved boundary, and in the
+velocity--vorticity--pressure formulation the viscous part is evaluated from
+the solved $\omega$ rather than from a velocity gradient. That is a short
+calculation with several independent ways to be wrong, and a drag coefficient
+that is 2 % high looks the same whichever of them is responsible. We therefore
+verify the integral separately from the flow.
+
+On the cylinder the traction is $-p\,\mathbf n+\nu\omega\,\mathbf t$, valid
+because $\mathbf u=\mathbf 0$ on the wall kills the tangential-derivative terms;
+that condition is enforced exactly, $\max|\mathbf u|=0$ on the integration
+nodes. Four checks:
+
+**The quadrature.** The arc weights integrate the circumference to
+$3.1415926536$ against $\pi D$, error $0.0\times10^{0}$. More usefully,
+$\oint\mathbf n\,\mathrm ds=(-9.0,-8.3)\times10^{-17}$: a closed body in a
+uniform pressure field feels no force, so this exercises the normals and the
+weights *together*, and an error in either survives a correct circumference but
+not this.
+
+**The split against published values.** This is the test with teeth. A wrong
+constant, a wrong normal, or a wrong viscous formula distorts the *ratio* of
+pressure to friction drag; a flow-level error scales both parts together.
+
+| | $C_{Dp}$ | $C_{Df}$ | friction share |
+|---|---|---|---|
+| present | 1.0073 | 0.3443 | **25.5 %** |
+| Qu et al. (2013) | 0.984 | 0.335 | 25.4 % |
+| Park et al. (1998) | 0.99 | 0.34 | 25.6 % |
+
+Both components sit about 2 % high in the same proportion, and the share falls
+between the two published values.
+
+**An independent evaluation.** Recomputing the viscous traction as
+$\nu(\nabla\mathbf u+\nabla\mathbf u^{\!\top})\cdot\mathbf n$ from the velocity
+field -- sharing no code and no variable with the $\omega$-form -- gives
+friction $C_D$ of $0.34427$ against $0.34432$, a difference of
+$4.8\times10^{-5}$, or $0.014\,\%$.
+
+That residual is worth naming rather than dismissing: it is the least-squares
+slack in $\omega-\nabla\times\mathbf u$, which this formulation enforces weakly
+and not exactly, and it is the first direct measurement of how well the
+vorticity definition holds *at the wall*, where it matters most for drag. At
+$1.4\times10^{-4}$ relative it is far below the discrepancies the rest of this
+section is concerned with -- which is the point of measuring it.
+
+The conclusion the verification licenses is narrow but necessary: whatever
+remains between our forces and the published ones is in the flow, not in the
+post-processing.
+
+
 ## 7. The same parameter in the operator
 
 Sections 3–6 read $c=\mathrm{fac}_1/\Delta t$ as a property of the *fixed point*.

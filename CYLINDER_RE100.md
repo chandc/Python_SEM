@@ -369,3 +369,67 @@ close to the body constrains the stagnation streamline and would raise BOTH St
 and C_D, which is the signature we still have.  Testing it needs the same nested
 treatment applied to the streamwise edges -- `nested_lateral_edges` does not
 cover it.  `Xd = 25` with the Dong condition is the suspect after that.
+
+## Audit of the force integral (2026-09-19)
+
+Reproduce with `uv run python scratch/audit_forces.py`.
+
+C_D and C_L are the headline numbers of this entire study and had never been
+checked independently.  Four tests, chosen so that a different class of error
+fails each one.  All four pass; the force integral is correct and the residual
+discrepancy with the literature is in the FLOW, not in the post-processing.
+
+### 1. Geometry of the wall quadrature
+
+| check | value | exact |
+|---|---|---|
+| wall edges found | 16 | 16 |
+| circumference `sum(ds)` | 3.1415926536 | pi*D = 3.1415926536, err **0.0e+00** |
+| closure `sum(n_x ds)` | -9.0e-17 | 0 |
+| closure `sum(n_y ds)` | -8.3e-17 | 0 |
+
+The closure integrals are the sharp test.  A closed body in a uniform pressure
+field feels no net force, so `sum(n ds) = 0` exercises the normals and the arc
+weights TOGETHER -- an error in either survives a correct circumference but not
+this.  Both are at machine zero.
+
+### 2. No-slip on the integration nodes
+
+max|u| = max|v| = **0.0e+00** exactly.  This matters because the production code
+uses the omega-form of the viscous traction, `nu*omega*t`, which is only valid
+where the velocity vanishes on the wall: it drops tangential-derivative terms
+that are zero only under exact no-slip.
+
+### 3. The pressure / friction split
+
+|  | C_Dp | C_Df | friction share |
+|---|---|---|---|
+| **ours** (H = 80, Xu = 30, Xd = 50, N = 8) | **1.0073** | **0.3443** | **25.5 %** |
+| Qu et al. (2013), case D9 | 0.984 | 0.335 | 25.4 % |
+| Park et al. (1998) | 0.99 | 0.34 | 25.6 % |
+
+THIS IS THE TEST WITH TEETH.  A wrong constant, a wrong normal, or a wrong
+viscous formula distorts the RATIO of pressure to friction drag.  A flow-level
+error -- blockage, resolution, time step -- scales both parts together.  Ours
+are both about 2 % high in the SAME proportion, and the friction share lands
+between the two published values.  That is the signature of a flow effect and
+not of a coding error, and it is what rules out the one explanation that would
+have invalidated the whole domain ladder.
+
+### 4. An independent viscous traction
+
+The production path integrates `nu*omega*t` using the SOLVED vorticity.  The
+audit recomputes the same quantity as `nu*(grad u + grad u^T).n` by
+differentiating the velocity field -- no shared code, no shared variable:
+
+| | omega-form | gradient-form | difference |
+|---|---|---|---|
+| friction C_D | +0.34432 | +0.34427 | 4.8e-05 |
+| friction C_L | +0.04452 | +0.04421 | 3.1e-04 |
+| total C_D | 1.35165 | 1.35161 | 4.0e-05 |
+
+Agreement to 0.014 % of the friction.  The residual is NOT error: it is the
+least-squares slack in `omega - curl u`, which this formulation enforces weakly
+rather than exactly.  It is also the first direct measurement we have of how
+well the vorticity definition is satisfied AT THE WALL, where it matters most
+for drag: 1.4e-04 relative.
