@@ -347,6 +347,60 @@ def nested_upstream_edges(Lu_new, n_extra, a=1.5, Lu=10.0, nx_up=4,
     return np.concatenate([_geom_edges(-Lu_new, -Lu, n_extra, 1.0/ratio_out)[:-1],
                            base])
 
+
+def nested_downstream_edges(Ld_new, n_extra, a=1.5, Ld=25.0, nx_dn=8,
+                            ratio_out=1.45):
+    """Downstream edges for a LONGER wake that keeps the reference divisions.
+
+    The streamwise-outlet counterpart of `nested_lateral_edges` and
+    `nested_upstream_edges`, and for the same reason: `_geom_edges` normalises
+    its widths to span its endpoints, so raising Ld and nx_dn together would
+    rescale every division between a and Ld and re-mesh the wake -- confounding
+    the outlet distance with the wake resolution that sets the shedding.
+    """
+    base = _geom_edges(a, Ld, nx_dn, ratio_out)
+    if Ld_new <= Ld:
+        raise ValueError(f'Ld_new = {Ld_new} must exceed the reference Ld = {Ld}')
+    if n_extra < 1:
+        raise ValueError('n_extra must be at least 1')
+    return np.concatenate([base, _geom_edges(Ld, Ld_new, n_extra, ratio_out)[1:]])
+
+
+def chained_lateral_edges(H_new, n_per_double=2, a=1.5, H=10.0, ny_side=4,
+                          ratio_out=1.45):
+    """A LADDER of lateral edges in which every rung contains the previous one.
+
+    `nested_lateral_edges` nests each rung on the REFERENCE box, which is enough
+    for a single comparison but not for a ladder: H = 40 built as 2 elements
+    from 10 to 20 and H = 80 built as 4 elements from 10 to 40 do not share
+    their interior divisions, so consecutive rungs differ in lateral RESOLUTION
+    as well as extent -- exactly the confound the nesting exists to remove
+    (measured: only 78 % of H=40's nodes survive into such an H=80).
+
+    Chaining instead doubles repeatedly, appending `n_per_double` elements each
+    time, so rung k+1 is rung k plus elements strictly outside it:
+
+        H=20   1.5 2.62 4.24 6.59 10
+        H=40   ...                10 14.08 20
+        H=80   ...                      20 28.16 40
+        H=160  ...                            40 56.33 80
+
+    Verified 100 % node retention from each rung to the next, which also makes
+    the seed transfer between rungs an exact copy rather than an interpolation.
+    Posdziech & Grundmann's protocol (J. Fluids Struct. 23:479-499) wants the
+    lateral height to be the ONLY thing that varies across the set; this is what
+    makes that true for a mesh built from geometric element spacing.
+    """
+    e = _geom_edges(a, H, ny_side, ratio_out)
+    h = float(H)
+    if H_new < H - 1e-12:
+        raise ValueError(f'H_new = {H_new} is below the reference {H}')
+    while h < H_new - 1e-12:
+        h2 = min(2.0*h, H_new)
+        e = np.concatenate([e, _geom_edges(h, h2, n_per_double, ratio_out)[1:]])
+        h = h2
+    return e
+
 def _rect_block(xe, ye, N):
     """Elements of a rectangular block from edge arrays.  Returns X, Y, and the
     (nx, ny) shape so the caller can locate boundary elements."""
@@ -374,7 +428,8 @@ def _square_at(theta, a):
 def build_cylinder_box(r_cyl=0.5, a=1.5, Lu=10.0, Ld=25.0, H=10.0,
                        E_r=4, E_s=4, nx_up=4, nx_dn=8, ny_side=4, N=8,
                        stretch=1.6, ratio_out=1.45,
-                       bcs=(1, 3, 6, 5), ys_side=None, xs_upstream=None):
+                       bcs=(1, 3, 6, 5), ys_side=None, xs_upstream=None,
+                       xs_downstream=None):
     """O-ring on the body inside a RECTANGULAR box: curved where it must be,
     axis-aligned where the boundary conditions live.
 
@@ -469,7 +524,22 @@ def build_cylinder_box(r_cyl=0.5, a=1.5, Lu=10.0, Ld=25.0, H=10.0,
         if np.any(np.diff(xs_up) <= 0):
             raise ValueError('xs_upstream must increase strictly')
         Lu = float(-xs_up[0])           # the explicit edges define the inlet
-    xs_dn = _geom_edges(a, Ld, nx_dn, ratio_out)
+    # DOWNSTREAM EDGES, same nesting argument as the other two directions.
+    # Posdziech & Grundmann's domain protocol fixes the streamwise bounds far
+    # away (L_in >= 30D, L_out >= 50D) so that variations in the measured
+    # quantities depend SOLELY on the lateral height H; reaching those bounds
+    # without disturbing the wake resolution needs the same nested treatment.
+    if xs_downstream is None:
+        xs_dn = _geom_edges(a, Ld, nx_dn, ratio_out)
+    else:
+        xs_dn = np.asarray(xs_downstream, dtype=float)
+        if xs_dn.ndim != 1 or xs_dn.size < 2:
+            raise ValueError('xs_downstream must be a 1-D array of at least 2 edges')
+        if abs(xs_dn[0] - a) > 1e-12:
+            raise ValueError(f'xs_downstream must start at a = {a}, got {xs_dn[0]}')
+        if np.any(np.diff(xs_dn) <= 0):
+            raise ValueError('xs_downstream must increase strictly')
+        Ld = float(xs_dn[-1])            # the explicit edges define the outlet
     # LATERAL EDGES, AND WHY THEY CAN BE GIVEN EXPLICITLY.  `_geom_edges`
     # normalises its widths to span a0..a1 exactly, so raising H alone rescales
     # EVERY division between a and H -- the wide mesh is then not a refinement

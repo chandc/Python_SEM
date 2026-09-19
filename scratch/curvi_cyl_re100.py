@@ -104,6 +104,16 @@ ap.add_argument('--lu', type=float, default=10.0,
                 help='upstream extent Xu (default 10, the original box)')
 ap.add_argument('--nx-extra', type=int, default=2, dest='nx_extra',
                 help='elements prepended beyond the reference inlet')
+# DOWNSTREAM EXTENT.  Posdziech & Grundmann fix L_out >= 50D (and L_in >= 30D)
+# so that variations in the measured quantities depend SOLELY on the lateral
+# height H.  Our reference Xd = 25 is half that, and the upstream truncation we
+# measured (Xu 10 -> 20 moves St by -0.0012) is three times the lateral signal
+# being extracted -- so their extrapolation cannot be applied until both
+# streamwise bounds are moved out.
+ap.add_argument('--ld', type=float, default=25.0,
+                help='downstream extent Xd (default 25, the original box)')
+ap.add_argument('--nx-dn-extra', type=int, default=3, dest='nx_dn_extra',
+                help='elements appended beyond the reference outlet')
 # NEWTON SUB-ITERATIONS.  The default (3 with AC, 2 without) is NOT a
 # convergence criterion: newton_factor = 0.0 makes the ratio test unreachable
 # and newton_tol = 1e-11 is never met, so the cap is simply what runs.  Measured
@@ -209,10 +219,19 @@ def main():
     nu = 1.0/A.re
     kw = {}
     if abs(A.hfull - 20.0) > 1e-12:
-        kw['ys_side'] = curvi.nested_lateral_edges(A.hfull/2.0, A.ny_extra)
+        # CHAINED, not nested-on-the-reference: a ladder needs every rung to
+        # contain the previous one, or consecutive rungs differ in lateral
+        # resolution as well as extent.  Identical to the old construction at
+        # H_full = 40 (one doubling), so that run is unaffected.
+        kw['ys_side'] = curvi.chained_lateral_edges(A.hfull/2.0, A.ny_extra)
         print(f'lateral domain widened: H_full = {A.hfull:g} '
-              f'(+{A.ny_extra} nested elements per side), lateral edges '
+              f'(chained, +{A.ny_extra} elements per doubling), lateral edges '
               f'{np.round(kw["ys_side"], 4).tolist()}', flush=True)
+    if abs(A.ld - 25.0) > 1e-12:
+        kw['xs_downstream'] = curvi.nested_downstream_edges(A.ld, A.nx_dn_extra)
+        print(f'downstream domain extended: Xd = {A.ld:g} '
+              f'(+{A.nx_dn_extra} nested elements), downstream edges '
+              f'{np.round(kw["xs_downstream"], 4).tolist()}', flush=True)
     if abs(A.lu - 10.0) > 1e-12:
         kw['xs_upstream'] = curvi.nested_upstream_edges(A.lu, A.nx_extra)
         print(f'upstream domain extended: Xu = {A.lu:g} '
