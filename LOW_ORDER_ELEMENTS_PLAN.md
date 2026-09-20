@@ -232,3 +232,131 @@ contains no element), the AC term, BDF2, and the ADN result that the Riesz map
 is block-triangular in the original variables.  `compute_global_indices` hashes
 physical coordinates rather than assuming structure, so even the merge layer
 would work for any conforming mesh.
+
+---
+
+# Tollgates
+
+One gate per build step, then one per physics claim.  **Each criterion is a
+number and each gate can fail.**  A gate that cannot fail is not a gate; where
+a quantity is expected to be poor (the divergence), the gate requires it to be
+REPORTED and to converge, not to be small.
+
+Nothing proceeds past a red gate.  The ordering matters: G2 and G4 between them
+can detect almost every error the later gates would see, and they cost minutes
+rather than hours.
+
+## G1 -- `mesh.py`: the mesh is what the file says it is
+
+| test | criterion |
+|---|---|
+| node and element counts vs the gmsh header | exact |
+| `sum` of element areas vs the analytic domain area (unit square; annulus `pi(R^2-r^2)`) | relative error `< 1e-12` (straight-sided elements make this exact) |
+| signed area / Jacobian of every element | **all strictly positive** -- no inverted or degenerate element |
+| edge incidence | every interior edge shared by exactly 2 elements, every boundary edge by exactly 1 |
+| Euler characteristic `V - E + F` | 1 for a simply connected domain, 0 for the annulus -- exact integers |
+| each boundary-tagged edge lies on its geometric boundary | distance `< 1e-12` |
+
+The Euler check is cheap and catches the dangling-node and duplicate-node
+failures that an area check passes -- the same class of error that produced a
+hydrodynamically SLIT cylinder mesh earlier in this project and was caught only
+by counting unmerged nodes.
+
+## G2 -- `element_p1.py`: the closed form IS the integral
+
+| test | criterion |
+|---|---|
+| barycentric identity `2A a!b!c!/(a+b+c+2)!` vs `sympy` symbolic integration, random triangle, all `a+b+c <= 3` | agreement `< 1e-14` relative |
+| partition of unity: `sum phi_i = 1`, `sum grad phi_i = 0` | `< 1e-15` |
+| gradients vs finite difference of the interpolant | `< 1e-9` |
+| **the 12x12 element `L^T L` vs degree-10 Dunavant quadrature of the same integrand** | `< 1e-13` relative, worst entry |
+| symmetry of `L^T L` | `< 1e-15` |
+| eigenvalues of `L^T L` on one element | **exactly one zero (the pressure constant), next smallest `> 1e-8 * lambda_max`** |
+
+The last row is the hourglassing test, and it is the reason this route was
+chosen.  With exact integration it should pass by construction; if a second
+near-zero mode appears, something in the row definitions is wrong, and it is
+far cheaper to find here than in a diverging simulation.
+
+## G3 -- `element_q1.py`: the Gauss path is calibrated
+
+| test | criterion |
+|---|---|
+| **parallelogram: 2x2 Gauss vs the closed form** | identical, `< 1e-14` |
+| general quad: 2x2 vs 4x4 vs 6x6 Gauss, worst entry | 2x2 reported as the quadrature error; `|2x2 - 6x6| / |6x6| < 1e-2` |
+| FEM patch test: a linear field reproduced exactly on a distorted patch | `< 1e-12` |
+| symmetry, and the eigenvalue test as G2 | as G2 |
+
+The parallelogram row is the important one: it is the only case where both
+paths are exact, so it validates the Gauss machinery against ground truth
+before it is used where no ground truth exists.
+
+## G4 -- `assemble.py`: the strongest single test in the plan
+
+| test | criterion |
+|---|---|
+| global `L^T L` symmetric | `< 1e-14` |
+| null space before boundary conditions | exactly one vector, the pressure constant |
+| after Dirichlet elimination | Cholesky succeeds; no zero pivot |
+| **exactly-representable solution: build `U_exact` from a LINEAR velocity and pressure field, assemble `L^T L` and `L^T f` from the matching forcing, and evaluate the residual** | `\|\|L^T L U_exact - L^T f\|\|_inf < 1e-12` |
+| one-element mesh: global matrix equals the element matrix | `< 1e-15` |
+
+The exactly-representable test is worth more than the rest of the gate
+combined.  A linear field is in the P1 space, so the discrete solution must
+equal it to round-off -- and the test exercises the element matrices, the
+scatter, the boundary conditions and the forcing simultaneously.  Any indexing
+error, sign error or missing term fails it.  This is the analogue of the
+Poiseuille check the spectral code relies on.
+
+## G5 -- `solve.py`
+
+| test | criterion |
+|---|---|
+| sparse Cholesky vs dense `numpy.linalg.solve`, small mesh | `< 1e-12` relative |
+| CG + AMG vs direct, medium mesh | agreement to the requested CG tolerance |
+| AMG iteration count under uniform refinement, 4 levels of `h` | **growth slower than `O(1/h)`** -- ideally flat |
+| symmetry exploited: Cholesky without pivoting completes | no failure |
+
+## G6 -- `timestep.py`: the same scheme, not a similar one
+
+| test | criterion |
+|---|---|
+| **`a_mass`, `a_flux`, `kappa_p` imported from `lssem2d.lssem.ls_coeffs`** vs locally computed | **bit-identical** over `dt` in {0.2, 0.1, 0.05, 0.0125} and all three weightings |
+| temporal order: manufactured unsteady solution, `dt` halved four times | observed order `2.0 +- 0.1` for BDF2 |
+| steady limit: march to steady state vs a direct steady solve | `< 1e-10` |
+| `dt_eff = dt` under balanced weighting | verified symbolically, not assumed |
+
+Row 1 is not a formality.  The weighting is the paper's thesis; if the
+low-order code re-derives the coefficients it is testing a different scheme,
+and the failure would be silent.
+
+## V1--V6 -- the physics gates
+
+| gate | test | criterion |
+|---|---|---|
+| **V1** | manufactured solution, h-refinement, P1 and Q1 | `L2(u)` second order, `2.0 +- 0.15`; gradient first order |
+| **V2** | global eigenvalue check on a real mesh, not one element | one zero mode; no spurious mode below `1e-6 * lambda_max` |
+| **V3** | pointwise `max\|div u\|` vs `h`, and vs the spectral code at MATCHED dof | must CONVERGE under refinement at the expected rate; the value is **reported, not judged** |
+| **V4** | lid-driven cavity Re = 1000 vs Ghia, three meshes | second-order convergence, and finest-mesh RMS vs Ghia `< 5e-2` (the spectral code reaches 1.47e-2 at N = 10) |
+| **V5** | cylinder Re = 100, triangular mesh, automatic mesher | `St` within `+-0.005` of the spectral value at comparable resolution; `C_D/C_L` harmonic ratio `2.000 +- 0.02` |
+| **V6** | the divergence scaling claim: `max\|div u\|` at matched dof for P1, Q1, N = 2, 4, 8 | a monotone trend with a fitted rate, reported with its uncertainty |
+
+**V6 is the deliverable.**  V1--V5 establish that the code is correct; V6 is the
+result the exercise exists to produce, and the one the paper cannot currently
+state.  It should be planned as a figure from the outset rather than extracted
+afterwards.
+
+## Measurement discipline, learned the hard way
+
+Applies to V4--V6 and carried over from the cylinder study:
+
+* **Two independent estimators** for any headline quantity, sharing no code.
+* **A physics-based validity check** where one exists -- the `C_D`/`C_L`
+  harmonic ratio must be 2.000; it belongs to the flow, not to the estimator.
+* **Noise floors measured, not assumed**: resample sub-windows of a completed
+  run to get the per-sample scatter, and check the lag-1 autocorrelation before
+  scaling it by `1/sqrt(n)`.
+* **Report differences split across halves of the record.**  A difference that
+  does not reproduce between the first and second half is not a measurement.
+  This is what exposed a `C_L rms` significance that had been overstated
+  roughly fourfold.
