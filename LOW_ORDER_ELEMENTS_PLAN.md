@@ -219,3 +219,113 @@ currently have and which bounds the claims in DIVERGENCE_CONSEQUENCES.md.
 
 Recording that here so that if it happens it is a finding rather than a
 disappointment.
+
+---
+
+# Part C -- triangular elements
+
+A different question from Parts A and B, and it splits cleanly in two: the
+FORMULATION transfers almost unchanged, and the IMPLEMENTATION barely transfers
+at all.
+
+## C1. What transfers unchanged
+
+Nothing in the FOSLS formulation refers to the element.  Specifically:
+
+* the velocity-vorticity-pressure first-order system and its eight residual
+  rows;
+* the least-squares functional and both weights.  `a_mass = w_mass*fac1/dt` and
+  `a_flux = w_mom` are scalar coefficients on ROWS of the functional; the
+  derivation of `w = sqrt(dt)` follows from `dt_eff = dt*w_mom/w_mass` and
+  `a_mass*a_flux = fac1`, and no element appears anywhere in it (paper 2.1);
+* the artificial-compressibility term `kappa_p (p - p_prev)`, likewise a row
+  coefficient;
+* the BDF2 time discretisation;
+* the ADN analysis in ADN_FOSLS.md -- that the Riesz map is block-TRIANGULAR in
+  the original variables and that the near-null pair `(u, curl u)` must not be
+  treated as independent blocks.  That is a statement about the operator, not
+  about the mesh, and it constrains any triangular preconditioner the same way.
+
+So the paper's *weighting* thesis would carry to triangles as written.  Its
+*preconditioner* thesis would not, for the reason in C2.
+
+## C2. What breaks, and how deeply
+
+**The tensor product, everywhere.**  Every derivative in this code is a 1D
+matrix applied along one axis -- `np.matmul(A, D.T)`, `einsum('ai,eij->eaj')`.
+Counted: 12 such patterns in `operators.py`, 11 in `curvi.py`, 8 in
+`precond.py`, 3 in `solver.py`, 2 in `obc.py`.  A triangle admits no such
+factorisation: derivatives become DENSE `(n_p x n_p)` matrices per element.
+
+Cost consequence, per element per field:
+
+| | 2D at N = 8 | 3D at N = 8 |
+|---|---|---|
+| tensor product, `d*N^(d+1)` | ~1,460 | ~2,200 |
+| dense simplex, `n_p^2` | ~2,000 | ~27,000 |
+
+Tolerable in 2D, punishing in 3D -- which matters because the paper's
+affordability argument is a tensor-product argument.
+
+**Collocation, and with it the diagonal mass matrix.**  GLL gives nodes that
+are simultaneously a good interpolation set and a quadrature rule; that
+coincidence is what makes a spectral element method cheap, and it has no
+triangular analogue at high order.  On simplices the nodal set and the cubature
+rule must differ, so the mass matrix is consistent rather than diagonal.  This
+is the same decoupling Part A needs for Q1 -- so **A1 is a prerequisite for C**,
+and doing A1 first buys most of the infrastructure.
+
+**Fast diagonalisation** (`lssem3d/fastdiag.py`) is purely tensor-product and
+has no simplex counterpart.
+
+**Static condensation** survives in principle -- interior, edge and vertex dofs
+all exist on a triangular patch -- but the index pattern `loc_int[1:N, 1:N]` is
+tensor-product and must be rewritten against a simplex node numbering.
+
+**The mesh layer** is the one pleasant surprise: `compute_global_indices`
+hashes physical coordinates rather than assuming structure, so it merges any
+conforming collection of elements unchanged.  `build_cylinder_box` produces
+quads and would need a triangular counterpart or an external mesher.
+
+## C3. Basis and quadrature choices
+
+| choice | note |
+|---|---|
+| **nodal, Warp & Blend points** (Hesthaven & Warburton) | well-conditioned interpolation to high order; the standard choice for nodal DG on simplices |
+| **modal, Dubiner / Koornwinder** | orthogonal on the reference triangle, good conditioning, but the orthogonality is lost under a non-affine map |
+| **P1 / P2** | if the motive is low order, this is the honest one and it composes with Part A |
+
+Quadrature on simplices is **tabulated, not constructed** -- there is no Gauss
+formula to call.  Dunavant, Xiao-Gimbutas or Witherden-Vincent tables are
+needed, and the point count for degree `2N` grows faster than the tensor-product
+`(N+1)^2`.
+
+## C4. Why one would do it, and the honest recommendation
+
+The real motive is **automatic meshing of complex geometry**.  Quad meshing is
+hard and was done by hand here (`build_cylinder_box` is a bespoke nine-block
+construction with an O-ring); triangular meshing is automatic.  If the target is
+geometries this project cannot currently mesh, triangles are the answer and
+nothing else is.
+
+But note what it costs against the alternatives:
+
+| | breaks tensor product | new quadrature | new preconditioner | new mesher |
+|---|---|---|---|---|
+| Part A, bilinear 2D | no | yes | no | no |
+| Part B, trilinear 3D | no | no | yes | yes |
+| **Part C, triangles** | **yes** | **yes** | **yes** | **yes** |
+
+**Recommendation.**  If the goal is to test how the formulation behaves at low
+order, do Part A -- it answers the same question for a fraction of the work and
+keeps every performance argument intact.  If the goal is complex geometry, Part
+C is unavoidable, but do A1 first: decoupling basis from quadrature is a
+prerequisite for triangles anyway, and it is far easier to get right on a
+tensor-product element where the answer can be checked bit-for-bit against the
+current code.
+
+One framing point for the paper.  FOSLS was developed largely ON simplices
+(Cai, Manteuffel & McCormick), so FOSLS-on-triangles is the better-established
+combination; what is novel here is the high-order tensor-product implementation,
+the weighting, and the patch preconditioner.  Moving to triangles would discard
+two of those three.
