@@ -144,6 +144,19 @@ ap.add_argument('--newton-tol', type=float, default=1e-11, dest='newton_tol',
 ap.add_argument('--newton-factor', type=float, default=0.0, dest='newton_factor',
                 help='relative |dU|/|dU_1| that also counts as converged '
                      '(0 disables the test, which is the historical behaviour)')
+# THE WEIGHTING, which every cylinder run so far has taken on faith.  w = sqrt(dt)
+# was hardcoded from the first version of this driver, so the whole study -- dt
+# sweep, N sweep, domain ladder, both controls -- validates the solver without
+# ever testing the weighting itself.  At dt = 0.1 the two choices are
+#   balanced   a_mass = 4.74, a_flux = 0.316   pressure block ~ a_flux^2 = 0.100
+#   legacy     a_mass = 1.50, a_flux = 0.100   pressure block ~ a_flux^2 = 0.010
+# Pressure appears ONLY in the momentum rows, so conventional weighting gives it
+# ten times less weight here.  That is the mechanism of the paper's sections 3-6,
+# and the cylinder is a sharper test of it than the cavity: unsteady, curved
+# body, outflow boundary, and a drag coefficient that is 75 % pressure.
+ap.add_argument('--weighting', choices=('balanced', 'legacy', 'unit'),
+                default='balanced',
+                help='balanced w=sqrt(dt) (default), legacy w=None, or unit w=1')
 A = ap.parse_args()
 
 
@@ -241,8 +254,10 @@ def main():
     m.compute_global_indices()
     D = diff_matrix(m.N)
     n = m.nterm
-    w = np.sqrt(A.dt)
+    w = {'balanced': np.sqrt(A.dt), 'legacy': None, 'unit': 1.0}[A.weighting]
     st = SolverState(m, D, nu=nu, dt=A.dt, fac1=1.0, w_mom=w, w_mass=w)
+    print(f'weighting: {A.weighting} (w_mom = w_mass = '
+          f'{"None" if w is None else f"{w:.4f}"})', flush=True)
     if A.ac:
         # AC's reference is the previous SUB-ITERATE, not the previous time
         # level, and solver._drop_pseudo removes kappa_p*p from the residual, so

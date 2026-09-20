@@ -650,6 +650,48 @@ remains between our forces and the published ones is in the flow, not in the
 post-processing.
 
 
+### 6.6 An unsteady test with a curved body and an outflow
+
+The benchmarks of Sections 6.1--6.3 are a closed cavity, a temporal growth rate,
+and a corner singularity. None of them has the combination the weighting is most
+exposed to in practice: an unsteady flow, a curved no-slip body, an outflow
+boundary, and a reported quantity that is mostly *pressure*. The circular
+cylinder at $Re=100$ has all four, and its drag coefficient is 75 % pressure
+(Section 6.5), which makes it a sharper probe of the pressure block than a
+velocity norm.
+
+At $\Delta t=0.1$ the two weightings differ as
+
+| | $a_{\rm mass}$ | $a_{\rm flux}$ | pressure block $\sim a_{\rm flux}^2$ |
+|---|---|---|---|
+| balanced | 4.743 | 0.316 | 0.100 |
+| conventional | 1.500 | 0.100 | **0.010** |
+
+a factor of ten in the weight carried by the only rows in which the pressure
+appears. The Poiseuille measurement of Section 5 puts 98 % velocity error at
+$a_{\rm flux}=0.05$; this is the same regime.
+
+The mechanism of Sections 3--6 makes a prediction here that is specific enough
+to be wrong. It says the *pressure* block degenerates, not the operator as a
+whole, so the failure should be selective: $C_D$ corrupted, because it is
+predominantly a pressure integral; the Strouhal number comparatively intact,
+because the shedding frequency is set by the absolute instability of the
+recirculation region and the constraint rows $\nabla\!\cdot\mathbf u$ and
+$\omega-\nabla\times\mathbf u$ are precisely the ones that keep their weight;
+and a mesh-scale mode visible in $p$ and not in $\mathbf u$. If instead every
+quantity degrades together the mechanism is mis-stated and the fault lies with
+$a_{\rm mass}$ or with conditioning; if nothing degrades, then
+$a_{\rm flux}=0.1$ is simply not small enough to matter at this Reynolds number,
+which bounds the claim rather than supporting it.
+
+*[Result pending: one run at $H=80$, $X_u=30$, $X_d=50$, $N=8$, $\Delta t=0.1$,
+differing from the converged ladder rung only in the weighting. The comparison
+is balanced-plus-AC against conventional-plus-AC, since the artificial
+compressibility term cannot be removed in this domain; $\kappa_p=a_{\rm mass}/2$
+follows $a_{\rm mass}$ down by construction, which is noted rather than
+corrected.]*
+
+
 ## 7. The same parameter in the operator
 
 Sections 3–6 read $c=\mathrm{fac}_1/\Delta t$ as a property of the *fixed point*.

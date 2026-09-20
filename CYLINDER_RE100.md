@@ -433,3 +433,73 @@ least-squares slack in `omega - curl u`, which this formulation enforces weakly
 rather than exactly.  It is also the first direct measurement we have of how
 well the vorticity definition is satisfied AT THE WALL, where it matters most
 for drag: 1.4e-04 relative.
+
+## The conventional-weighting control: design and prediction, stated in advance (2026-09-19)
+
+**This prediction is recorded BEFORE the run.** It is specific enough to fail,
+and the point of writing it down first is that it then means something when it
+does not.
+
+### Why the cylinder study needs this
+
+`w = sqrt(dt)` has been hardcoded in `curvi_cyl_re100.py` since its first
+commit, with no flag to change it.  So the entire cylinder study -- the dt
+sweep, the N sweep, the domain ladder, the AC and dt controls -- validates the
+SOLVER while never testing the WEIGHTING, which is the paper's thesis.  The
+cylinder currently contributes credibility, not evidence.
+
+### The arithmetic
+
+At dt = 0.1, with `a_mass = w_mass*fac1/dt` and `a_flux = w_mom`:
+
+| weighting | a_mass | a_flux | a_mass*a_flux | pressure block ~ a_flux^2 |
+|---|---|---|---|---|
+| balanced (all runs to date) | 4.7434 | 0.3162 | 1.5000 (= fac1) | **0.1000** |
+| conventional (legacy) | 1.5000 | 0.1000 | 0.1500 | **0.0100** |
+| unit | 15.000 | 1.0000 | 15.000 | 1.0000 |
+
+Pressure appears ONLY in the momentum rows, so the pressure block of L^T L
+scales as a_flux^2.  Conventional weighting gives it **ten times less weight**
+at this step.  The draft's Poiseuille measurement -- where the exact solution is
+representable, so error has nowhere to hide -- reports 98 % velocity error at
+a_flux = 0.05.  We would be at 0.1: the same regime, twice as far from the
+cliff.
+
+### Prediction
+
+1. **C_D badly wrong.**  It is 75 % pressure (C_Dp = 1.007 of C_D = 1.352,
+   measured in the force audit), and pressure is the under-weighted field.  This
+   should be the loudest signal.
+2. **St much less affected.**  The shedding frequency is set by the absolute
+   instability in the recirculation zone, a velocity-field property, and the
+   constraint rows (div u, omega - curl u) are the ones KEEPING their weight.
+3. **A mesh-scale mode in p**, which is the mechanism of sections 3-6: L^T L
+   develops a near-null space in pressure and the exact solution stops being the
+   unique minimiser.
+
+### What would falsify it
+
+If everything degrades together, or nothing degrades, the mechanism as stated is
+wrong.  A uniform degradation would point at a_mass or at conditioning rather
+than at the pressure block specifically; no degradation at all would mean
+a_flux = 0.1 is simply not small enough to matter at this Reynolds number, which
+would itself bound the claim usefully.
+
+### Design
+
+One run, changing ONLY the weighting:
+
+    --weighting legacy --hfull 80 --lu 30 --ld 50 --N 8 --dt 0.1 --ac
+    --restart-from scratch/_cyl_pg_H80/final.npz
+
+Same mesh, same seed, same domain, same AC setting, same 11-cycle window as the
+H = 80 ladder rung it is compared against (St 0.1642, C_D 1.3444, C_L rms
+0.2477).  Cost ~4.7 h.
+
+NOTE the AC coefficient moves with the weighting, because kappa_p = a_mass/2 and
+a_mass falls from 4.74 to 1.50.  That is the correct behaviour -- kappa_p tracks
+a_mass by construction -- but it means this run is not a pure single-variable
+change unless AC is also disabled, and AC cannot be disabled in this domain
+(it diverges at extended Xu).  The comparison is therefore
+"balanced + AC" against "conventional + AC", which is the pair that matters in
+practice.
