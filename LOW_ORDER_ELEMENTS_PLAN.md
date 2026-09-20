@@ -23,6 +23,19 @@ and can simply be left out.
 This also makes triangles no harder than quadrilaterals, which the retrofit
 route could not (tensor-product derivatives have no simplex analogue).
 
+## 0.1 Decided 2026-09-20
+
+| question | answer | consequence |
+|---|---|---|
+| objective | **complex geometry via automatic meshing** | triangles are the real target, not a by-product; gmsh/meshio becomes a dependency at that stage; the divergence scaling (V6) still comes out and is kept as a secondary result |
+| first increment | **time-dependent from the start** | BDF2 and G6 are in increment 1, not deferred.  The debugging surface is larger, which makes G4 -- the exactly-representable test -- more important, because it isolates assembly errors from time-integration errors |
+| first element | **Q1 on affine quads** | closed form applies, and running the identical geometry as the spectral code (cavity, channel) gives a matched-dof comparison against ground truth before moving to P1 triangles where none exists |
+
+Build order: Q1 affine with BDF2 on internally generated structured meshes,
+validated against the spectral code; then P1 triangles; then gmsh and a
+geometry the current code cannot mesh.  `scipy`, `sympy` and `pyamg` are
+already available; `meshio`/`gmsh` are added at the triangle stage, not before.
+
 ## 1. What "closed form" means here
 
 It means the element matrix entries are **explicit algebraic expressions in the
