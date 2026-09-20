@@ -350,9 +350,50 @@ and the failure would be silent.
 | **V1** | manufactured solution, h-refinement, P1 and Q1 | `L2(u)` second order, `2.0 +- 0.15`; gradient first order |
 | **V2** | global eigenvalue check on a real mesh, not one element | one zero mode; no spurious mode below `1e-6 * lambda_max` |
 | **V3** | pointwise `max\|div u\|` vs `h`, and vs the spectral code at MATCHED dof | must CONVERGE under refinement at the expected rate; the value is **reported, not judged** |
-| **V4** | lid-driven cavity Re = 1000 vs Ghia, three meshes | second-order convergence, and finest-mesh RMS vs Ghia `< 5e-2` (the spectral code reaches 1.47e-2 at N = 10) |
+| **V4a** | **REGULARISED** cavity, lid `u = 16 x^2 (1-x)^2`, J against h | J must DECREASE monotonically; the rate is reported |
+| **V4b** | standard discontinuous-lid cavity vs Ghia | centreline profiles and `umin`/`vmin` as a physics sanity check -- explicitly NOT a convergence test, for the reason below |
 | **V5** | cylinder Re = 100, triangular mesh, automatic mesher | `St` within `+-0.005` of the spectral value at comparable resolution; `C_D/C_L` harmonic ratio `2.000 +- 0.02` |
 | **V6** | the divergence scaling claim: `max\|div u\|` at matched dof for P1, Q1, N = 2, 4, 8 | a monotone trend with a fitted rate, reported with its uncertainty |
+
+### Why V4 had to be split (measured 2026-09-20)
+
+The standard lid-driven cavity is not a valid test of FOSLS convergence, and
+the functional says so out loud.  At Re = 100 with Q1, Newton converged to
+|dU| < 1e-9 on every mesh:
+
+| lid | n = 8 | n = 16 | n = 32 | rate |
+|---|---|---|---|---|
+| discontinuous | 3.132e-01 | 3.472e-01 | 3.864e-01 | **-0.15** |
+| regularised `16x^2(1-x)^2` | 1.594e-01 | 6.405e-02 | 2.736e-02 | **+1.3** |
+
+The lid velocity is discontinuous at the two top corners, so the exact solution
+is not in H^1 there -- and the FOSLS functional measures exactly that norm, so
+refining resolves more of an unbounded quantity and J GROWS.  With a lid that
+vanishes at both corners the solution is in H^1, the theory applies, and J
+falls.
+
+The criterion originally written for V4 therefore asked for convergence on a
+problem whose functional does not converge.  This is the same phenomenon as
+paper section 6.3, "Where the claim stops: boundary singularities", measured
+from the other side -- there through the solution, here through the functional.
+
+AND IT IS THE A POSTERIORI PROPERTY EARNING ITS KEEP.  Nothing about the
+iteration looked wrong: Newton converged to |dU| = 8e-9 at every mesh and
+Reynolds number, and `umin` moved TOWARD Ghia under refinement (-0.194 ->
+-0.205 at Re = 100, -0.218 -> -0.331 at Re = 1000).  Only J revealed that the
+iteration was converging to a minimiser which does not approach the continuous
+solution.  That is what the Cai-Manteuffel-McCormick equivalence buys in
+practice, and it cost one extra line of code.
+
+### A note on Newton's convergence rate
+
+Newton converges LINEARLY here -- |dU| falling by a steady factor ~0.5 over 25
+iterations, not quadratically.  That is correct, not a defect: `L^T L` is the
+GAUSS-Newton Hessian, which drops the term involving second derivatives of L,
+and Gauss-Newton degrades to linear convergence precisely when the residual at
+the solution is large.  Here J = 0.37 at the minimiser, so it is.
+`lssem2d.solver.newton_step` is the same Gauss-Newton and behaves the same way,
+which is worth knowing before anyone reports it as a bug.
 
 **V6 is the deliverable.**  V1--V5 establish that the code is correct; V6 is the
 result the exercise exists to produce, and the one the paper cannot currently
