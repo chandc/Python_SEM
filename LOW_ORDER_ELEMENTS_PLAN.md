@@ -353,6 +353,9 @@ and the failure would be silent.
 | **V4a** | **REGULARISED** cavity, lid `u = 16 x^2 (1-x)^2`, J against h | J must DECREASE monotonically; the rate is reported |
 | **V4b** | standard discontinuous-lid cavity vs Ghia | centreline profiles and `umin`/`vmin` as a physics sanity check -- explicitly NOT a convergence test, for the reason below |
 | **V5** | cylinder Re = 100, triangular mesh, automatic mesher | `St` within `+-0.005` of the spectral value at comparable resolution; `C_D/C_L` harmonic ratio `2.000 +- 0.02` |
+| **V1s** | **STOKES** MMS, h-refinement, both L2 and H1, compared against the Q1 INTERPOLANT of the exact solution | H1 must match the interpolant rate (optimal); L2 is reported -- it is NOT expected to reach h^2 under no-slip |
+| **V1t** | **BDF2 temporal order**, spatial error identically zero by using a linear-in-space exact solution, started exactly from t0 - dt | observed order `2.00 +- 0.15` for every weighting |
+| **V5os** | **ORR-SOMMERFELD** growth rate, plane channel, against the analytic eigenvalue (paper sec 6.2 does this at Re = 7500 spectrally) | growth rate within 5 % at the finest affordable mesh, and CONVERGING under h- and dt-refinement at second order |
 | **V6** | the divergence scaling claim: `max\|div u\|` at matched dof for P1, Q1, N = 2, 4, 8 | a monotone trend with a fitted rate, reported with its uncertainty |
 
 ### Why V4 had to be split (measured 2026-09-20)
@@ -384,6 +387,39 @@ Reynolds number, and `umin` moved TOWARD Ghia under refinement (-0.194 ->
 iteration was converging to a minimiser which does not approach the continuous
 solution.  That is what the Cai-Manteuffel-McCormick equivalence buys in
 practice, and it cost one extra line of code.
+
+### Two notes on verifying the orders (measured 2026-09-20)
+
+**Spatial and temporal order must be separated, or neither is measured.**  The
+temporal gate V1t uses a solution that is LINEAR IN SPACE -- u = (1+2x-3y)g(t),
+v = (4-5x-2y)g(t), omega = -2g(t), p = (0.7+1.3x-0.4y)h(t) -- so every field and
+every forcing term lies exactly in the Q1 space, the spatial error is
+identically zero, and the mesh size is irrelevant.  Without that, a dt-study
+measures the SUM of two errors: second order at coarse dt, then a stall at the
+spatial floor, which reads as an order that degrades.  Measured with it, BDF2
+gives 2.02, 2.01, 2.00 and a fitted 2.010.
+
+**The exactly-representable test cannot distinguish the weightings, and should
+not be expected to.**  Balanced and legacy give 1.6850e-03 and 1.6838e-03 at
+the same dt -- identical to three digits.  That is correct: both drive the
+residual to zero at the same minimiser, and the weighting only changes the
+answer when the residual CANNOT be driven to zero.  V1t verifies BDF2's order;
+it says nothing about the paper's thesis, and a test of that needs a case with
+an irreducible residual.
+
+### A near-miss worth recording
+
+The first run of V1t showed legacy weighting DIVERGING as dt was refined --
+errors of 1.5e2, 6.8e2, 4.8e4, 6.2e5 for dt from 0.08 to 0.01.  That is exactly
+what a dramatic confirmation of the small-dt thesis would look like, and it was
+entirely my bug: `ls_coeffs`'s table gives the history coefficient as **1** for
+legacy, not `w_mass/dt`, because legacy does not pre-multiply the row by 1/dt
+(which is why a_flux = dt there).  Using w_mass/dt made the history term dt
+times too large.  Corrected, legacy gives 2.009 -- second order, like balanced.
+
+The lesson is narrow and practical: a result that confirms the hypothesis
+spectacularly deserves the same scrutiny as one that contradicts it, and the
+first place to look is the code path that only that case exercises.
 
 ### A note on Newton's convergence rate
 
