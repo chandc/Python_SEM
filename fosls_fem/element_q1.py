@@ -186,3 +186,78 @@ def element_matrix_affine(xy, flin, coef, rhs=None):
                          'use element_matrix (2x2 Gauss) for a general quad')
     gp, gw = gauss_rule(5)          # deliberately finer than the default 3x3
     return element_matrix(xy, flin, coef, rhs, gauss=gp, gw=gw)
+
+
+def element_newton(xy, Ue, coef, fe=None, gauss=_GP, gw=_GW):
+    """One Newton step's element contribution: the Jacobian normal equations
+    and the residual right-hand side.
+
+    NEWTON, not Picard, and the distinction is in `_B` already: it assembles
+    the full Frechet derivative of (u.grad)u,
+
+        conv_x(dU) = fu du_x + fv du_y + du fu_x + dv fu_y ,
+
+    which is the Jacobian when (fu, fv) is the current iterate.  That matches
+    `lssem2d.solver.newton_step` exactly, and using Picard here would be a
+    different scheme from the one the paper analyses.
+
+    THE HALF-VELOCITY TRICK, taken from the spectral code.  The same `_B` also
+    yields the TRUE nonlinear residual when evaluated at fu = u/2, fv = v/2,
+    because the symmetric form then gives
+
+        (u/2) u_x + (v/2) u_y + u (u_x/2) + v (u_y/2) = u u_x + v u_y .
+
+    So one routine serves both purposes and the residual cannot drift out of
+    step with the Jacobian -- which is the usual way a Newton implementation
+    goes quietly wrong.
+
+    Returns (A_e, b_e) with A_e dU = b_e the element contribution to the step.
+    """
+    xy = np.asarray(xy, float)
+    Ue = np.asarray(Ue, float).reshape(NN, NF)
+    vel = Ue[:, :2]
+    A = np.zeros((NN*NF, NN*NF)); b = np.zeros(NN*NF)
+    for (xi, eta), w in zip(gauss, gw):
+        N, dNdx, dNdy, detJ = geometry(xy, xi, eta)
+        jw = w*detJ
+
+        # residual: _B at HALF the current velocity, applied to the iterate
+        h = 0.5*vel
+        fu, fv = N @ h[:, 0], N @ h[:, 1]
+        Bh = _B(N, dNdx, dNdy, fu, fv, dNdx @ h[:, 0], dNdy @ h[:, 0],
+                dNdx @ h[:, 1], dNdy @ h[:, 1], coef)
+        R = Bh @ Ue.ravel()
+        if fe is not None:
+            R = R - (N @ np.asarray(fe, float).reshape(NN, NF))
+
+        # Jacobian: _B at the FULL current velocity
+        fu, fv = N @ vel[:, 0], N @ vel[:, 1]
+        Bj = _B(N, dNdx, dNdy, fu, fv, dNdx @ vel[:, 0], dNdy @ vel[:, 0],
+                dNdx @ vel[:, 1], dNdy @ vel[:, 1], coef)
+        A += jw*(Bj.T @ Bj)
+        b -= jw*(Bj.T @ R)
+    return A, b
+
+
+def element_residual(xy, Ue, coef, fe=None, gauss=_GP, gw=_GW):
+    """The FOSLS functional contribution of one element, int |L(U) - f|^2.
+
+    Summed over the mesh this is J(U_h) itself, which under the
+    Cai-Manteuffel-McCormick equivalence is a sharp a posteriori error
+    estimator -- the functional IS the error, up to the equivalence constants.
+    Cheap to compute and worth reporting alongside any convergence study.
+    """
+    xy = np.asarray(xy, float)
+    Ue = np.asarray(Ue, float).reshape(NN, NF)
+    h = 0.5*Ue[:, :2]
+    J = 0.0
+    for (xi, eta), w in zip(gauss, gw):
+        N, dNdx, dNdy, detJ = geometry(xy, xi, eta)
+        fu, fv = N @ h[:, 0], N @ h[:, 1]
+        B = _B(N, dNdx, dNdy, fu, fv, dNdx @ h[:, 0], dNdy @ h[:, 0],
+               dNdx @ h[:, 1], dNdy @ h[:, 1], coef)
+        R = B @ Ue.ravel()
+        if fe is not None:
+            R = R - (N @ np.asarray(fe, float).reshape(NN, NF))
+        J += w*detJ*float(R @ R)
+    return J

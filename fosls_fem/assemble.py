@@ -14,7 +14,7 @@ symmetry exactly.
 import numpy as np
 import scipy.sparse as sp
 
-from .element_q1 import element_matrix, NF, NN
+from .element_q1 import element_matrix, element_newton, element_residual, NF, NN
 
 
 def assemble(mesh, flin, coef, rhs=None, element=element_matrix, **kw):
@@ -68,3 +68,41 @@ def apply_dirichlet(A, b, fixed, values):
     A.eliminate_zeros()
     b[fixed] = values
     return A.tocsr(), b
+
+
+def assemble_newton(mesh, U, coef, f=None):
+    """Global Newton step: (J^T J) dU = -J^T R, with R the TRUE nonlinear residual.
+
+    `element_newton` builds both from one routine, so the residual and the
+    Jacobian cannot drift out of step -- the usual failure mode of a hand-rolled
+    Newton.  Returns (A, b) with A dU = b.
+    """
+    nd = mesh.ndof
+    rows, cols, vals = [], [], []
+    b = np.zeros(nd)
+    U = np.asarray(U, float)
+    f = None if f is None else np.asarray(f, float)
+    for q in mesh.quads:
+        g = (NF*q[:, None] + np.arange(NF)[None, :]).ravel()
+        Ae, be = element_newton(mesh.xy[q], U[g], coef,
+                                None if f is None else f[q])
+        rows.append(np.repeat(g, len(g)))
+        cols.append(np.tile(g, len(g)))
+        vals.append(Ae.ravel())
+        b[g] += be
+    A = sp.coo_matrix((np.concatenate(vals),
+                       (np.concatenate(rows), np.concatenate(cols))),
+                      shape=(nd, nd)).tocsr()
+    return A, b
+
+
+def functional(mesh, U, coef, f=None):
+    """J(U_h) = sum over elements of int |L(U) - f|^2, the FOSLS functional."""
+    U = np.asarray(U, float)
+    f = None if f is None else np.asarray(f, float)
+    tot = 0.0
+    for q in mesh.quads:
+        g = (NF*q[:, None] + np.arange(NF)[None, :]).ravel()
+        tot += element_residual(mesh.xy[q], U[g], coef,
+                                None if f is None else f[q])
+    return tot
