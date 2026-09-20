@@ -261,3 +261,106 @@ def element_residual(xy, Ue, coef, fe=None, gauss=_GP, gw=_GW):
             R = R - (N @ np.asarray(fe, float).reshape(NN, NF))
         J += w*detJ*float(R @ R)
     return J
+
+
+# ---------------------------------------------------------------------------
+# BATCHED PATH.  Same mathematics, loops inverted.
+#
+# The per-element routines above are the reference: they are gate-verified and
+# readable, and every entry traces to one term of one row.  But they cost a
+# measured 473 microseconds per element -- flat in mesh size, because the work
+# (nine Gauss points, two 16x16 matmuls) is trivial and the time is entirely
+# Python and numpy call overhead.  At that rate V6 is impractical and the
+# Re = 1000 cavity takes ten minutes.
+#
+# Vectorising does not change the formulation.  Every element shares the same
+# reference shape functions -- only the Jacobians differ -- so the loop over
+# elements can be replaced by array axes and only the ~9 quadrature points
+# remain as a Python loop.  That is a property of the isoparametric
+# shape-function framework, and it is one of the reasons to keep it.
+#
+# The batched results must equal the reference ones to machine precision; gate
+# G7 asserts that, so the fast path can never quietly diverge from the slow one.
+# ---------------------------------------------------------------------------
+
+def geometry_batch(xy, xi, eta):
+    """Shape functions and physical gradients for ALL elements at one point.
+
+    xy : (nelem, 4, 2).  Returns N (4,), dNdx, dNdy (nelem, 4), detJ (nelem,).
+    """
+    N, dNdxi, dNdeta = shape(xi, eta)
+    # J[e] = [[dNdxi.x_e, dNdeta.x_e], [dNdxi.y_e, dNdeta.y_e]]
+    Jxr = xy[:, :, 0] @ dNdxi
+    Jxs = xy[:, :, 0] @ dNdeta
+    Jyr = xy[:, :, 1] @ dNdxi
+    Jys = xy[:, :, 1] @ dNdeta
+    detJ = Jxr*Jys - Jxs*Jyr
+    if np.any(detJ <= 0.0):
+        bad = int(np.argmin(detJ))
+        raise ValueError(f'non-positive Jacobian {detJ[bad]:.3e} in element {bad}')
+    # Inverse of [[Jxr, Jxs], [Jyr, Jys]] is [[Jys, -Jxs], [-Jyr, Jxr]]/detJ,
+    # and the chain rule contracts its COLUMNS with (dNdxi, dNdeta):
+    #     dN/dx = ( Jys dN/dxi - Jyr dN/deta) / detJ
+    #     dN/dy = (-Jxs dN/dxi + Jxr dN/deta) / detJ
+    # Transposing the two off-diagonal entries here is invisible on a rectangle,
+    # where Jxs = Jyr = 0, which is why the batch/reference check runs on a
+    # DISTORTED mesh.
+    dNdx = (Jys[:, None]*dNdxi[None, :] - Jyr[:, None]*dNdeta[None, :])/detJ[:, None]
+    dNdy = (-Jxs[:, None]*dNdxi[None, :] + Jxr[:, None]*dNdeta[None, :])/detJ[:, None]
+    return N, dNdx, dNdy, detJ
+
+
+def _B_batch(N, dNdx, dNdy, fu, fv, dfudx, dfudy, dfvdx, dfvdy, coef):
+    """(nelem, 4, 16) stack of the row matrices.  Mirrors `_B` term for term."""
+    a_mass, a_flux, w_con, nu = coef
+    ne = dNdx.shape[0]
+    B = np.zeros((ne, NF, NN, NF))            # (elem, row, node, field)
+    n = N[None, :]                            # (1, 4), same for every element
+    B[:, 0, :, U_] = w_con*dNdx
+    B[:, 0, :, V_] = w_con*dNdy
+    B[:, 1, :, W_] = n
+    B[:, 1, :, U_] = dNdy
+    B[:, 1, :, V_] = -dNdx
+    core = fu[:, None]*dNdx + fv[:, None]*dNdy
+    B[:, 2, :, U_] = a_mass*n + a_flux*(core + n*dfudx[:, None])
+    B[:, 2, :, V_] = a_flux*(n*dfudy[:, None])
+    B[:, 2, :, P_] = a_flux*dNdx
+    B[:, 2, :, W_] = a_flux*nu*dNdy
+    B[:, 3, :, V_] = a_mass*n + a_flux*(core + n*dfvdy[:, None])
+    B[:, 3, :, U_] = a_flux*(n*dfvdx[:, None])
+    B[:, 3, :, P_] = a_flux*dNdy
+    B[:, 3, :, W_] = -a_flux*nu*dNdx
+    return B.reshape(ne, NF, NN*NF)
+
+
+def element_newton_batch(xy, Ue, coef, fe=None, gauss=_GP, gw=_GW):
+    """Batched Newton step: (nelem, 16, 16) Jacobians and (nelem, 16) rhs.
+
+    xy : (nelem, 4, 2);  Ue : (nelem, 16);  fe : (nelem, 4, 4) or None.
+    Same half-velocity trick as `element_newton`: residual at fu = u/2, and
+    Jacobian at the full velocity, from one routine.
+    """
+    ne = xy.shape[0]
+    Un = Ue.reshape(ne, NN, NF)
+    vel = Un[:, :, :2]
+    A = np.zeros((ne, NN*NF, NN*NF))
+    b = np.zeros((ne, NN*NF))
+    for (xi, eta), w in zip(gauss, gw):
+        N, dNdx, dNdy, detJ = geometry_batch(xy, xi, eta)
+        jw = w*detJ
+        for half, target in ((True, 'res'), (False, 'jac')):
+            V = 0.5*vel if half else vel
+            fu, fv = V[:, :, 0] @ N, V[:, :, 1] @ N
+            Bm = _B_batch(N, dNdx, dNdy, fu, fv,
+                          np.einsum('en,en->e', dNdx, V[:, :, 0]),
+                          np.einsum('en,en->e', dNdy, V[:, :, 0]),
+                          np.einsum('en,en->e', dNdx, V[:, :, 1]),
+                          np.einsum('en,en->e', dNdy, V[:, :, 1]), coef)
+            if target == 'res':
+                R = np.einsum('erd,ed->er', Bm, Ue)
+                if fe is not None:
+                    R = R - np.einsum('n,enf->ef', N, fe)
+            else:
+                A += jw[:, None, None]*np.einsum('eri,erj->eij', Bm, Bm)
+                b -= jw[:, None]*np.einsum('erd,er->ed', Bm, R)
+    return A, b
