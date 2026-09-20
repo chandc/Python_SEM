@@ -58,6 +58,37 @@ introduce a null space: modes the quadrature cannot see cost nothing in the
 functional.  That is the least-squares form of hourglassing, and it is the
 principal risk of the whole exercise.
 
+### 2.1 The error is invisible in geometric checks -- do not look for it there
+
+Measured, 5 BDF steps on the cylinder mesh at N = 1, 2, 4:
+
+| N | 5 steps | quadrature area | exact | error | dof | \|u\|max after 5 steps |
+|---|---|---|---|---|---|---|
+| 1 | OK | 699.235 | 699.215 | **0.003 %** | 1,104 | **1.0000** |
+| 2 | OK | 699.215 | 699.215 | 0.000 % | 4,128 | 1.4619 |
+| 4 | OK | 699.215 | 699.215 | 0.000 % | 15,936 | 1.6090 |
+
+Two things to take from this, and the first corrects a natural assumption.
+
+**The area is essentially exact at N = 1**, because the mesh is mostly
+straight-sided blocks on which the Jacobian is CONSTANT -- and any rule with
+`sum(w) = 2` integrates a constant exactly.  The 0.003 % residual comes only
+from the curved O-ring, where J varies.  So the degree-2 problem of Section 2
+**does not show up in any geometric diagnostic**: it lives in the OPERATOR,
+where the integrand is a product of two first derivatives, and that is degree 2
+even on a straight-sided element with constant J.  A0 must therefore be an
+operator-level or solution-level test.  Checking areas, volumes or metric
+identities will pass and prove nothing.
+
+**N = 1 also runs, and is grossly under-resolved on this mesh.**  Five steps
+complete without error, but `|u|max` is still exactly 1.0000 -- the free-stream
+initial value -- while N = 2 reaches 1.4619 and N = 4 reaches 1.6090.  The flow
+has not begun to accelerate around the body.  With 16 azimuthal by 4 radial Q1
+elements there is nothing to resolve a Re = 100 boundary layer with, so this
+says nothing about the quadrature; it says the cylinder at 240 elements is the
+wrong vehicle for A0.  Use a case whose exact solution is representable on a
+coarse mesh instead.
+
 ## 3. Part A -- bilinear (2D Q1)
 
 ### A0. Measure the damage before building anything (half a day)
